@@ -2,7 +2,7 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/seu-org/idp-with-ai-backend/internal/api/middleware"
+	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 )
 
 func RegisterRoutes(router *gin.Engine) {

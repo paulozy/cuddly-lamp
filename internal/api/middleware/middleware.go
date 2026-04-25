@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/seu-org/idp-with-ai-backend/internal/utils"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 func Logger() gin.HandlerFunc {

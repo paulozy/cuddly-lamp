@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/seu-org/idp-with-ai-backend/internal/api"
-	"github.com/seu-org/idp-with-ai-backend/internal/config"
-	"github.com/seu-org/idp-with-ai-backend/internal/utils"
+	"github.com/paulozy/idp-with-ai-backend/internal/api"
+	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 func main() {
@@ -35,6 +36,14 @@ func main() {
 	}
 
 	gin.SetMode(ginMode)
+
+	db, err := storage.New(&cfg.Database)
+	if err != nil {
+		utils.Fatal("Failed to initialize database", "error", err)
+	}
+	defer db.Close()
+
+	utils.Info("Database initialized successfully")
 
 	router := gin.Default()
 	api.RegisterRoutes(router)
