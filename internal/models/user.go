@@ -23,10 +23,10 @@ type User struct {
 
 	PasswordHash string `gorm:"type:text" json:"-"`
 
-	GitHubID    string `gorm:"type:varchar(255);index" json:"github_id,omitempty"`
-	GitLabID    string `gorm:"type:varchar(255);index" json:"gitlab_id,omitempty"`
-	GithubToken string `gorm:"type:text" json:"-"`
-	GitlabToken string `gorm:"type:text" json:"-"`
+	GitHubID    string `gorm:"column:github_id;type:varchar(255);index" json:"github_id,omitempty"`
+	GitLabID    string `gorm:"column:gitlab_id;type:varchar(255);index" json:"gitlab_id,omitempty"`
+	GithubToken string `gorm:"column:github_token;type:text" json:"-"`
+	GitlabToken string `gorm:"column:gitlab_token;type:text" json:"-"`
 
 	IsActive bool      `gorm:"default:true" json:"is_active"`
 	LastSeen time.Time `json:"last_seen,omitempty"`
