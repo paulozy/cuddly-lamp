@@ -37,9 +37,10 @@ type DatabaseConfig struct {
 }
 
 type RedisConfig struct {
-	Host string
-	Port int
-	DB   int
+	Host     string
+	Port     int
+	DB       int
+	Password string
 }
 
 type APIConfig struct {
@@ -74,9 +75,10 @@ func Load() *Config {
 		},
 		Database: newDatabaseConfig(),
 		Redis: RedisConfig{
-			Host: getEnv("REDIS_HOST", "localhost"),
-			Port: getEnvInt("REDIS_PORT", 6379),
-			DB:   getEnvInt("REDIS_DB", 0),
+			Host:     getEnv("REDIS_HOST", "localhost"),
+			Port:     getEnvInt("REDIS_PORT", 6379),
+			DB:       getEnvInt("REDIS_DB", 0),
+			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 		API: APIConfig{
 			AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),

@@ -12,7 +12,9 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
@@ -47,6 +49,31 @@ func main() {
 	defer db.Close()
 
 	utils.Info("Database initialized successfully")
+
+	rdbClient, err := redisstore.New(&cfg.Redis)
+	if err != nil {
+		utils.Warn("Redis unavailable, running without cache/queue", "error", err)
+		rdbClient = redisstore.NewNoop()
+	}
+	defer rdbClient.Close()
+
+	cache := redisstore.NewRedisCache(rdbClient)
+	_ = cache // injected into services as features need it
+
+	var enqueuer jobs.Enqueuer
+	if rdbClient.Client() != nil {
+		enqueuer = jobs.NewAsynqEnqueuer(&cfg.Redis)
+		worker := jobs.NewWorker(&cfg.Redis)
+		go func() {
+			if err := worker.Run(); err != nil {
+				utils.Error("Job worker stopped", "error", err)
+			}
+		}()
+		defer worker.Shutdown()
+	} else {
+		enqueuer = jobs.NewNoopEnqueuer()
+	}
+	_ = enqueuer // injected into services as features need it
 
 	router := gin.Default()
 	api.RegisterRoutes(&api.RegisterRoutesParams{
