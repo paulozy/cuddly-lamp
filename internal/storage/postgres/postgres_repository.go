@@ -46,17 +46,6 @@ func (pr *PostgresRepository) GetUserByEmail(ctx context.Context, email string) 
 	return &user, nil
 }
 
-func (pr *PostgresRepository) GetUserByGitHubID(ctx context.Context, githubID string) (*models.User, error) {
-	var user models.User
-	if err := pr.db.WithContext(ctx).First(&user, "github_id = ?", githubID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get user by github id: %w", err)
-	}
-	return &user, nil
-}
-
 func (pr *PostgresRepository) CreateUser(ctx context.Context, user *models.User) error {
 	if !user.IsValid() {
 		return errors.New("invalid user data")
@@ -426,5 +415,32 @@ func (pr *PostgresRepository) UpdateTokenLastUsed(ctx context.Context, jti strin
 		return fmt.Errorf("update token last used: %w", err)
 	}
 
+	return nil
+}
+
+// ============ OAuth Operations ============
+
+func (pr *PostgresRepository) GetOAuthConnection(ctx context.Context, provider, providerUserID string) (*models.OAuthConnection, error) {
+	var conn models.OAuthConnection
+	if err := pr.db.WithContext(ctx).
+		Where("provider = ? AND provider_user_id = ?", provider, providerUserID).
+		First(&conn).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get oauth connection: %w", err)
+	}
+	return &conn, nil
+}
+
+func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *models.OAuthConnection) error {
+	if err := pr.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_user_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"user_id", "access_token", "updated_at"}),
+		}).
+		Create(conn).Error; err != nil {
+		return fmt.Errorf("upsert oauth connection: %w", err)
+	}
 	return nil
 }

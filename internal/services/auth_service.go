@@ -2,14 +2,19 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
+	"github.com/paulozy/idp-with-ai-backend/internal/oauth"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"golang.org/x/crypto/argon2"
 )
@@ -21,6 +26,7 @@ type AuthService struct {
 	jwtAudience string
 	accessTTL   time.Duration
 	refreshTTL  time.Duration
+	providers   map[string]oauth.OAuthProvider
 }
 
 func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience string, accessTTL, refreshTTL time.Duration) *AuthService {
@@ -31,6 +37,7 @@ func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience s
 		jwtAudience: jwtAudience,
 		accessTTL:   accessTTL,
 		refreshTTL:  refreshTTL,
+		providers:   make(map[string]oauth.OAuthProvider),
 	}
 }
 
@@ -250,4 +257,173 @@ func containsDigit(s string) bool {
 		}
 	}
 	return false
+}
+
+// ============================================
+// OAUTH
+// ============================================
+
+func (s *AuthService) RegisterProvider(provider oauth.OAuthProvider) {
+	s.providers[provider.Name()] = provider
+}
+
+func (s *AuthService) GetOAuthAuthURL(provider, state string) string {
+	p, ok := s.providers[provider]
+	if !ok {
+		return ""
+	}
+	return p.GetAuthURL(state)
+}
+
+func (s *AuthService) GenerateOAuthState() (string, error) {
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	payload := map[string]interface{}{
+		"nonce": base64.RawURLEncoding.EncodeToString(nonce),
+		"exp":   time.Now().Add(10 * time.Minute).Unix(),
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
+
+	h := hmac.New(sha256.New, []byte(s.jwtSecret))
+	h.Write([]byte(payloadB64))
+	signature := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+
+	return payloadB64 + "." + signature, nil
+}
+
+func (s *AuthService) VerifyOAuthState(state string) error {
+	parts := len(state)
+	if parts < 100 {
+		return fmt.Errorf("invalid state format")
+	}
+
+	idx := len(state) - len(state)
+	for i := len(state) - 1; i >= 0; i-- {
+		if state[i] == '.' {
+			idx = i
+			break
+		}
+	}
+
+	if idx == 0 {
+		return fmt.Errorf("invalid state format: no signature")
+	}
+
+	payloadB64 := state[:idx]
+	signatureB64 := state[idx+1:]
+
+	h := hmac.New(sha256.New, []byte(s.jwtSecret))
+	h.Write([]byte(payloadB64))
+	expectedSignature := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+
+	if !hmac.Equal([]byte(signatureB64), []byte(expectedSignature)) {
+		return fmt.Errorf("invalid state signature")
+	}
+
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode payload: %w", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		return fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+
+	expVal, ok := payload["exp"].(float64)
+	if !ok {
+		return fmt.Errorf("invalid exp in payload")
+	}
+
+	if time.Now().Unix() > int64(expVal) {
+		return fmt.Errorf("state has expired")
+	}
+
+	return nil
+}
+
+func (s *AuthService) LoginWithOAuth(ctx context.Context, provider, code, state string) (*models.TokenResponse, error) {
+	if err := s.VerifyOAuthState(state); err != nil {
+		return nil, fmt.Errorf("invalid oauth state: %w", err)
+	}
+
+	oauthProvider, ok := s.providers[provider]
+	if !ok {
+		return nil, fmt.Errorf("unknown oauth provider: %s", provider)
+	}
+
+	userInfo, err := oauthProvider.ExchangeCode(ctx, code)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange oauth code: %w", err)
+	}
+
+	conn, err := s.repo.GetOAuthConnection(ctx, provider, userInfo.ProviderUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get oauth connection: %w", err)
+	}
+
+	var user *models.User
+	if conn != nil {
+		user, err = s.repo.GetUser(ctx, conn.UserID.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user: %w", err)
+		}
+		if user == nil {
+			return nil, fmt.Errorf("oauth connection points to non-existent user")
+		}
+	} else {
+		user, err = s.repo.GetUserByEmail(ctx, userInfo.Email)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check email: %w", err)
+		}
+
+		if user == nil {
+			user = &models.User{
+				ID:       uuid.New().String(),
+				Email:    userInfo.Email,
+				FullName: userInfo.Name,
+				Role:     models.RoleDeveloper,
+				IsActive: true,
+				Avatar:   "",
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+
+			if err := s.repo.CreateUser(ctx, user); err != nil {
+				return nil, fmt.Errorf("failed to create user: %w", err)
+			}
+		}
+
+		parsedUserID, err := uuid.Parse(user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse user id: %w", err)
+		}
+
+		conn = &models.OAuthConnection{
+			UserID:         parsedUserID,
+			Provider:       provider,
+			ProviderUserID: userInfo.ProviderUserID,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
+		}
+	}
+
+	if err := s.repo.UpsertOAuthConnection(ctx, conn); err != nil {
+		return nil, fmt.Errorf("failed to upsert oauth connection: %w", err)
+	}
+
+	if !user.IsActive {
+		return nil, fmt.Errorf("account is inactive")
+	}
+
+	return s.generateToken(ctx, user)
 }

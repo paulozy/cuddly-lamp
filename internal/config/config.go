@@ -12,6 +12,7 @@ type Config struct {
 	Database DatabaseConfig
 	Redis    RedisConfig
 	API      APIConfig
+	OAuth    OAuthConfig
 	Log      LogConfig
 }
 
@@ -50,6 +51,16 @@ type LogConfig struct {
 	Level string
 }
 
+type OAuthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	CallbackURL  string
+}
+
+type OAuthConfig struct {
+	Providers map[string]OAuthProviderConfig
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -70,6 +81,20 @@ func Load() *Config {
 		API: APIConfig{
 			AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),
 			GithubToken:     getEnv("GITHUB_TOKEN", ""),
+		},
+		OAuth: OAuthConfig{
+			Providers: map[string]OAuthProviderConfig{
+				"github": {
+					ClientID:     getEnv("GITHUB_CLIENT_ID", ""),
+					ClientSecret: getEnv("GITHUB_CLIENT_SECRET", ""),
+					CallbackURL:  getEnv("GITHUB_CALLBACK_URL", ""),
+				},
+				"gitlab": {
+					ClientID:     getEnv("GITLAB_CLIENT_ID", ""),
+					ClientSecret: getEnv("GITLAB_CLIENT_SECRET", ""),
+					CallbackURL:  getEnv("GITLAB_CALLBACK_URL", ""),
+				},
+			},
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

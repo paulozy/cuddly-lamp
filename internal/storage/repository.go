@@ -10,7 +10,6 @@ type Repository interface {
 	// User operations
 	GetUser(ctx context.Context, id string) (*models.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
-	GetUserByGitHubID(ctx context.Context, githubID string) (*models.User, error)
 	CreateUser(ctx context.Context, user *models.User) error
 	UpdateUser(ctx context.Context, user *models.User) error
 	ListUsers(ctx context.Context, limit, offset int) ([]models.User, error)
@@ -50,6 +49,10 @@ type Repository interface {
 	GetTokenByJTI(ctx context.Context, jti string) (*models.Token, error)
 	RevokeToken(ctx context.Context, jti string, reason string) error
 	UpdateTokenLastUsed(ctx context.Context, jti string) error
+
+	// OAuth operations
+	GetOAuthConnection(ctx context.Context, provider, providerUserID string) (*models.OAuthConnection, error)
+	UpsertOAuthConnection(ctx context.Context, conn *models.OAuthConnection) error
 }
 
 type RepositoryFilter struct {

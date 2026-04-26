@@ -109,3 +109,52 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		Role:     claims.Role,
 	})
 }
+
+func (h *AuthHandler) OAuthLogin(c *gin.Context) {
+	provider := c.Param("provider")
+
+	state, err := h.authService.GenerateOAuthState()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:            "oauth_error",
+			ErrorDescription: "failed to generate state: " + err.Error(),
+		})
+		return
+	}
+
+	authURL := h.authService.GetOAuthAuthURL(provider, state)
+	if authURL == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_provider",
+			ErrorDescription: "unknown oauth provider: " + provider,
+		})
+		return
+	}
+
+	c.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+func (h *AuthHandler) OAuthCallback(c *gin.Context) {
+	provider := c.Param("provider")
+	code := c.Query("code")
+	state := c.Query("state")
+
+	if code == "" || state == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "missing code or state parameter",
+		})
+		return
+	}
+
+	tokenResponse, err := h.authService.LoginWithOAuth(c.Request.Context(), provider, code, state)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "oauth_authentication_failed",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, tokenResponse)
+}
