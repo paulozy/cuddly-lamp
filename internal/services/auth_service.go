@@ -90,6 +90,12 @@ func (s *AuthService) generateToken(ctx context.Context, user *models.User) (*mo
 	now := time.Now()
 	expiresAt := now.Add(s.accessTTL)
 
+	println("DEBUG generateToken:")
+	println("  now:       ", now.UTC().String())
+	println("  expiresAt: ", expiresAt.UTC().String())
+	println("  TTL:       ", s.accessTTL.String())
+	println("  diff:      ", expiresAt.Sub(now).String())
+
 	claims := models.TokenClaims{
 		UserID:   user.ID,
 		Email:    user.Email,
@@ -160,6 +166,13 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*m
 		// Use UTC explicitly on both sides to avoid timezone issues
 		nowUTC := time.Now().UTC()
 		expiresAtUTC := tokenRecord.ExpiresAt.UTC()
+		createdAtUTC := tokenRecord.CreatedAt.UTC()
+
+		println("DEBUG ValidateToken:")
+		println("  created_at:", createdAtUTC.String())
+		println("  expires_at:", expiresAtUTC.String())
+		println("  now:       ", nowUTC.String())
+		println("  diff (expires - created):", expiresAtUTC.Sub(createdAtUTC).String())
 
 		if tokenRecord.IsRevoked || nowUTC.After(expiresAtUTC) {
 			return nil, fmt.Errorf("token is revoked or expired (is_revoked: %v, expired: %v, now: %v, expires_at: %v)",
