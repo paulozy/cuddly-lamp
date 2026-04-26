@@ -113,18 +113,24 @@ idp-backend/
 │   │   ├── middleware/      # Logger, error handler, auth
 │   │   └── routes.go        # Route registration
 │   ├── config/              # Configuração
-│   ├── storage/             # Database (migrations, queries)
+│   ├── models/              # Data models
+│   │   ├── user.go          # User model com OAuth
+│   │   ├── repository.go    # Repository model (GitHub, GitLab, etc)
+│   │   ├── webhook.go       # Webhook model para eventos
+│   │   └── code_analysis.go # Code analysis com métricas e issues
+│   ├── storage/
+│   │   └── postgres/        # PostgreSQL repository (CRUD operations)
+│   │       └── postgres_repository.go
 │   ├── services/            # Business logic (a implementar)
-│   ├── models/              # Data models (a implementar)
-│   ├── integrations/        # External APIs (GitHub, Docker, etc)
+│   ├── integrations/        # External APIs (GitHub, Docker, Claude, etc)
 │   └── utils/               # Logger, helpers
 ├── pkg/                     # Código reutilizável (a implementar)
 ├── migrations/              # SQL migrations
-│   └── 001_init_schema.sql
+│   └── 001-init-schema.sql  # Schema com 8 tabelas + triggers
 ├── tests/                   # Testes (a implementar)
 ├── docs/                    # Documentação
 ├── Makefile                 # Comandos de desenvolvimento
-├── docker-compose.yml       # Dev environment
+├── docker-compose.yml       # Dev environment (PostgreSQL + Redis)
 ├── .env.example             # Variáveis de ambiente template
 ├── go.mod                   # Go module file
 └── README.md                # Este arquivo
@@ -194,14 +200,55 @@ docker-compose logs postgres
 docker-compose exec postgres psql -U postgres -d idp_dev -c "\dt"
 ```
 
-## 📖 Próximos Passos
+## 📊 Models & Database
 
-- [ ] Criar models (Repository, User, Webhook)
-- [ ] Implementar handlers do Code Hub
-- [ ] Integração com GitHub API
-- [ ] Redis setup (cache, job queue)
+### Models implementados
+- **User** - Usuários com OAuth (GitHub, GitLab)
+- **Repository** - Repositórios com tracking de análises
+- **Webhook** - Webhooks com retry logic e status de processamento
+- **CodeAnalysis** - Análises de código com issues, métricas e embeddings
+- **CodeEmbedding** - Embeddings vetoriais para busca semântica (pgvector)
+
+### Database
+- **8 tabelas principais** com indexes otimizados
+- **JSONB** para dados flexíveis (metadata, issues, métricas)
+- **pgvector** para semantic search
+- **Soft deletes** (deleted_at column)
+- **Triggers** para audit (updated_at automático)
+- **Cascading deletes** para integridade referencial
+
+### Repository Operations
+Implementadas operações CRUD para todas as entidades:
+```go
+// Users
+GetUser, GetUserByEmail, GetUserByGitHubID, CreateUser, UpdateUser, ListUsers
+
+// Repositories  
+GetRepository, GetRepositoryByURL, CreateRepository, UpdateRepository, 
+ListRepositories, DeleteRepository, SearchRepositories
+
+// Webhooks
+GetWebhook, GetWebhookByDeliveryID, CreateWebhook, UpdateWebhook,
+ListPendingWebhooks, ListFailedWebhooks
+
+// Code Analysis
+GetCodeAnalysis, CreateCodeAnalysis, UpdateCodeAnalysis, ListAnalyses,
+GetLatestAnalysis, GetRepositoriesNeedingAnalysis
+
+// Code Embeddings
+CreateCodeEmbedding, SearchEmbeddings, DeleteEmbeddingsByRepository
+```
+
+## 🎯 Próximos Passos
+
+- [ ] Implementar handlers HTTP (Code Hub, Repository management)
+- [ ] Services layer (lógica de negócio)
+- [ ] Integração com GitHub API (webhooks, repositórios)
+- [ ] Claude AI integration para análises
 - [ ] WebSocket para real-time updates
-- [ ] AI integration (Claude API)
+- [ ] Job queue (para análises assíncronas)
+- [ ] Testes unitários e integração
+- [ ] API documentation (Swagger)
 
 ## 🤝 Contribuindo
 
@@ -217,5 +264,5 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🚀 MVP Phase  
+**Status**: 🚀 Database & Models Phase (Core schema implemented)  
 **Última atualização**: April 25, 2026
