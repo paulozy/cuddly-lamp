@@ -1,8 +1,38 @@
-# IDP Backend (Internal Developer Platform com IA)
+# IDP Backend - Identity Provider with AI Integration
 
-Plataforma unificada de desenvolvimento inteligente com Code Hub, Infra Hub, Architecture Hub, Deployment Hub, Observability Hub e Knowledge Base.
+Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
 
-## 📋 Pré-requisitos
+## ✨ Features Implemented
+
+### Authentication & Authorization
+- ✅ Email/Password registration & login (Argon2 hashing)
+- ✅ JWT tokens with revocation tracking (JTI per token)
+- ✅ OAuth 2.0 Authorization Code Flow (GitHub, GitLab infrastructure ready)
+- ✅ Stateless HMAC-signed CSRF state tokens
+- ✅ Account linking (OAuth to existing email users)
+- ✅ Role-based access control (admin, maintainer, developer, viewer)
+- ✅ Token refresh & logout endpoints
+
+### Database & Migrations
+- ✅ PostgreSQL 14+ with pgvector extension
+- ✅ 3 SQL migrations (schema, auth, oauth_connections)
+- ✅ OAuth connections table (provider + provider_user_id uniqueness)
+- ✅ Soft deletes (deleted_at timestamps)
+- ✅ Audit triggers (created_at, updated_at automation)
+
+### API Routes
+- ✅ Public routes: login, register, OAuth (GitHub/GitLab)
+- ✅ Protected routes: /users/me, logout
+- ✅ Health check endpoint
+
+### Code Quality
+- ✅ Structured logging (zap)
+- ✅ .env file loading (godotenv)
+- ✅ Error handling & CORS middleware
+- ✅ API versioning (/api/v1)
+- ✅ CLAUDE.md project guide
+
+## 📋 Prerequisites
 
 - Go 1.21+
 - Docker & Docker Compose
@@ -10,58 +40,48 @@ Plataforma unificada de desenvolvimento inteligente com Code Hub, Infra Hub, Arc
 
 ## 🚀 Quick Start
 
-### 1. Clone o repositório
-```bash
-git clone https://github.com/seu-org/idp-backend.git
-cd idp-backend
-```
-
-### 2. Configure variáveis de ambiente
+### 1. Setup environment
 ```bash
 cp .env.example .env
+# Fill in GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL
 ```
 
-### 3. Inicie dependências (PostgreSQL, Redis)
+### 2. Start services (PostgreSQL, Redis)
 ```bash
 make docker-up
 ```
 
-Aguarde alguns segundos para health checks completarem:
-```bash
-docker-compose ps
-# Deve mostrar:
-# postgres  ✓ (healthy)
-# redis     ✓ (healthy)
-```
-
-### 4. Instale dependências Go
-```bash
-go mod download
-go mod tidy
-```
-
-### 5. Rode o servidor
+### 3. Run server
 ```bash
 make dev
 ```
 
-Você deve ver:
-```
-INFO    Starting IDP Backend    {"env": "development", "port": "8080"}
-INFO    Connecting to database  {"host": "postgres", "dbname": "idp_dev"}
-INFO    Database connection established
-INFO    Running migrations      {"path": "migrations"}
-INFO    Executing migration     {"file": "001_init_schema.sql"}
-INFO    Migration completed     {"file": "001_init_schema.sql"}
-INFO    Migrations completed successfully
-INFO    Database ready
-INFO    HTTP server listening   {"addr": ":3000"}
-```
+The server will:
+- Load `.env` variables
+- Run migrations (001, 002, 003)
+- Register OAuth providers (GitHub if configured)
+- Start HTTP server on port 3000
 
-### 6. Teste o servidor
+### 4. Test the server
 ```bash
-curl http://localhost:3000/health
-# Resposta: {"status":"ok","service":"IDP Backend"}
+# Health check
+curl http://localhost:3000/api/v1/health
+
+# Register with email/password
+curl -X POST http://localhost:3000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "full_name": "Test User",
+    "password": "Password123"
+  }'
+
+# Get current user (requires JWT token from register/login)
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:3000/api/v1/users/me
+
+# OAuth: redirect to GitHub (if configured)
+curl -L http://localhost:3000/api/v1/auth/github
 ```
 
 ## 📚 Documentação
@@ -101,39 +121,90 @@ make mod-tidy         # Atualiza go.mod/go.sum
 make clean            # Remove build artifacts
 ```
 
-## 📁 Estrutura de Pastas
+## 🔐 Setting Up GitHub OAuth
+
+1. Create GitHub OAuth App:
+   - Go to https://github.com/settings/developers → OAuth Apps → New OAuth App
+   - Application name: `IDP Backend Local`
+   - Homepage URL: `http://localhost:3000`
+   - Authorization callback URL: `http://localhost:3000/api/v1/auth/github/callback`
+
+2. Copy Client ID and Client Secret
+
+3. Add to `.env`:
+   ```bash
+   GITHUB_CLIENT_ID=<your-client-id>
+   GITHUB_CLIENT_SECRET=<your-client-secret>
+   GITHUB_CALLBACK_URL=http://localhost:3000/api/v1/auth/github/callback
+   ```
+
+4. Restart server (`make dev`)
+
+5. Test OAuth:
+   ```bash
+   # User clicks: http://localhost:3000/api/v1/auth/github
+   # Redirects to GitHub login
+   # GitHub redirects back to callback with token
+   # Returns: TokenResponse with JWT and user info
+   ```
+
+## 📁 Project Structure
 
 ```
-idp-backend/
-├── cmd/server/              # Entry point
-│   └── main.go
+backend/
+├── cmd/server/
+│   └── main.go                    # Entry point (loads .env, starts HTTP server)
 ├── internal/
-│   ├── api/                 # HTTP handlers e rotas
-│   │   ├── handlers/        # Feature handlers (code, infra, etc)
-│   │   ├── middleware/      # Logger, error handler, auth
-│   │   └── routes.go        # Route registration
-│   ├── config/              # Configuração
-│   ├── models/              # Data models
-│   │   ├── user.go          # User model com OAuth
-│   │   ├── repository.go    # Repository model (GitHub, GitLab, etc)
-│   │   ├── webhook.go       # Webhook model para eventos
-│   │   └── code_analysis.go # Code analysis com métricas e issues
+│   ├── api/
+│   │   ├── handlers/
+│   │   │   └── auth.go            # Login, register, OAuth, logout, /users/me
+│   │   ├── middleware/
+│   │   │   ├── auth.go            # JWT verification, context storage
+│   │   │   ├── logger.go          # Request logging
+│   │   │   ├── error_handler.go   # Global error handling
+│   │   │   ├── optional_auth.go   # Optional auth (no 401 on missing token)
+│   │   │   └── rbac.go            # Role-based access control
+│   │   ├── factories/
+│   │   │   └── make_auth_handler.go  # DI: auth service + providers
+│   │   └── routes.go              # Route registration (/api/v1/*)
+│   ├── oauth/                     # Multi-provider OAuth 2.0
+│   │   ├── provider.go            # OAuthProvider interface
+│   │   ├── github.go              # GitHub implementation
+│   │   └── gitlab.go              # GitLab implementation
+│   ├── services/
+│   │   └── auth_service.go        # JWT, password hashing (Argon2), OAuth
+│   ├── models/
+│   │   ├── user.go                # User with roles
+│   │   ├── oauth_connection.go    # OAuth connections (provider links)
+│   │   ├── token.go               # JWT token records
+│   │   ├── repository.go          # Git repositories
+│   │   ├── webhook.go             # Incoming webhooks
+│   │   ├── code_analysis.go       # Code analysis results
+│   │   ├── code_embedding.go      # Vector embeddings (pgvector)
+│   │   └── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
+│   ├── config/
+│   │   └── config.go              # Config struct + env loading
 │   ├── storage/
-│   │   └── postgres/        # PostgreSQL repository (CRUD operations)
-│   │       └── postgres_repository.go
-│   ├── services/            # Business logic (a implementar)
-│   ├── integrations/        # External APIs (GitHub, Docker, Claude, etc)
-│   └── utils/               # Logger, helpers
-├── pkg/                     # Código reutilizável (a implementar)
-├── migrations/              # SQL migrations
-│   └── 001-init-schema.sql  # Schema com 8 tabelas + triggers
-├── tests/                   # Testes (a implementar)
-├── docs/                    # Documentação
-├── Makefile                 # Comandos de desenvolvimento
-├── docker-compose.yml       # Dev environment (PostgreSQL + Redis)
-├── .env.example             # Variáveis de ambiente template
-├── go.mod                   # Go module file
-└── README.md                # Este arquivo
+│   │   ├── repository.go          # Repository interface
+│   │   ├── postgres/
+│   │   │   └── postgres_repository.go  # GORM implementation
+│   │   ├── migrations.go          # SQL migration runner (pgx/v5 compatible)
+│   │   └── storage.go             # Database initialization
+│   └── utils/
+│       ├── logger.go              # Structured logging (zap)
+│       └── auth.go                # Token extraction, context helpers
+├── migrations/
+│   ├── 001-init-schema.sql        # Users, repos, webhooks, analysis, embeddings
+│   ├── 002-add-auth-tables.sql    # Tokens, password_hash
+│   └── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
+├── .env.example                   # Environment variables template
+├── .env                           # Local env vars (git-ignored)
+├── docker-compose.yml             # Dev: PostgreSQL + Redis
+├── CLAUDE.md                      # Project guidelines & conventions
+├── go.mod                         # Go module file
+├── go.sum                         # Dependency hashes
+├── Makefile                       # Commands: dev, build, test, lint
+└── README.md                      # This file
 ```
 
 ## 🗄️ Database
@@ -239,16 +310,48 @@ GetLatestAnalysis, GetRepositoriesNeedingAnalysis
 CreateCodeEmbedding, SearchEmbeddings, DeleteEmbeddingsByRepository
 ```
 
-## 🎯 Próximos Passos
+## ⚙️ Important Implementation Details
 
-- [ ] Implementar handlers HTTP (Code Hub, Repository management)
-- [ ] Services layer (lógica de negócio)
-- [ ] Integração com GitHub API (webhooks, repositórios)
-- [ ] Claude AI integration para análises
-- [ ] WebSocket para real-time updates
-- [ ] Job queue (para análises assíncronas)
-- [ ] Testes unitários e integração
-- [ ] API documentation (Swagger)
+### Timezone Handling
+- **Always use UTC**: `time.Now().UTC()` before storing timestamps
+- PostgreSQL `TIMESTAMP` columns have no timezone — explicit UTC prevents offset bugs
+- Validation compares both sides in UTC: `time.Now().UTC().After(record.ExpiresAt.UTC())`
+
+### Password Hashing (Argon2)
+```
+Argon2 IDKey: 2 time iterations, 64MB memory, 4 parallelism, 32-byte hash
+16-byte random salt per password (no global boost secret)
+Format: <hex-salt>$<hex-hash>
+```
+
+### OAuth State (CSRF Protection)
+```
+Stateless signed state token (no Redis needed):
+- Payload: base64url(json{"nonce":"<random>","exp":<unix>})
+- Signature: base64url(HMAC-SHA256(payload, jwtSecret))
+- Format: <payload>.<signature>
+- Expiry: 10 minutes
+```
+
+### pgx/v5 Migration Quirk
+- pgx/v5 does NOT support multiple SQL statements in `db.Exec()`
+- Solution: Use underlying `*sql.DB` from `db.DB()` to run full migration files
+- Migration runner uses `sqlDB.Exec(fileContent)` not `gorm.DB.Exec()`
+
+### .env Loading
+- Use `godotenv.Load()` in `main.go` before `config.Load()`
+- Go does NOT load .env automatically
+
+## 🎯 Next Steps
+
+- [ ] Add repository management endpoints
+- [ ] Implement webhook handlers (GitHub/GitLab)
+- [ ] Code analysis API + Claude integration
+- [ ] Semantic search with pgvector embeddings
+- [ ] Refresh token flow
+- [ ] Rate limiting & request throttling
+- [ ] Comprehensive unit & integration tests
+- [ ] API documentation (Swagger/OpenAPI)
 
 ## 🤝 Contribuindo
 

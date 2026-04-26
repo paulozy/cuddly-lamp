@@ -55,9 +55,14 @@ func executeMigration(db *gorm.DB, filePath string) error {
 		return fmt.Errorf("read migration file %s: %w", fileName, err)
 	}
 
-	sqlContent := string(content)
+	// pgx/v5 does not support multiple statements in a single Exec call.
+	// Use the underlying *sql.DB to run the full file at once.
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("get sql.DB for migration %s: %w", fileName, err)
+	}
 
-	if err := db.Exec(sqlContent).Error; err != nil {
+	if _, err := sqlDB.Exec(string(content)); err != nil {
 		return fmt.Errorf("execute migration %s: %w", fileName, err)
 	}
 

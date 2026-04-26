@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
@@ -16,6 +17,8 @@ import (
 )
 
 func main() {
+	godotenv.Load()
+
 	cfg := config.Load()
 
 	if err := utils.InitLogger(cfg.Log.Level); err != nil {
