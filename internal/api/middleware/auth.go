@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
@@ -22,9 +23,10 @@ func AuthMiddleware(authService *services.AuthService) gin.HandlerFunc {
 
 		claims, err := authService.ValidateToken(c.Request.Context(), token)
 		if err != nil {
+			fmt.Printf("Token validation error: %v\n", err)
 			c.JSON(401, gin.H{
 				"error":   "unauthorized",
-				"message": "invalid or expired token",
+				"message": fmt.Sprintf("invalid or expired token: %v", err),
 			})
 			c.Abort()
 			return
