@@ -87,7 +87,34 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
+	var req models.LogoutRequest
+	if err := c.ShouldBindJSON(&req); err == nil && req.RefreshToken != "" {
+		_ = h.authService.RevokeRefreshTokenFamily(c.Request.Context(), req.RefreshToken)
+	}
+
 	c.JSON(http.StatusNoContent, nil)
+}
+
+func (h *AuthHandler) RefreshTokens(c *gin.Context) {
+	var req models.RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	resp, err := h.authService.RefreshTokens(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "invalid_grant",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *AuthHandler) GetCurrentUser(c *gin.Context) {

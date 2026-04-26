@@ -41,6 +41,12 @@ func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience s
 	}
 }
 
+var (
+	ErrInvalidToken = fmt.Errorf("invalid token")
+	ErrTokenExpired = fmt.Errorf("token expired")
+	ErrTokenRevoked = fmt.Errorf("token revoked")
+)
+
 func (s *AuthService) LoginWithEmail(ctx context.Context, email, password string) (*models.TokenResponse, error) {
 	user, err := s.repo.GetUserByEmail(ctx, email)
 	if user == nil || err != nil {
@@ -55,7 +61,7 @@ func (s *AuthService) LoginWithEmail(ctx context.Context, email, password string
 		return nil, fmt.Errorf("account is inactive")
 	}
 
-	return s.generateToken(ctx, user)
+	return s.generateTokenPair(ctx, user)
 }
 
 func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, password string) (*models.TokenResponse, error) {
@@ -88,12 +94,43 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, pa
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	return s.generateToken(ctx, user)
+	return s.generateTokenPair(ctx, user)
 }
 
-func (s *AuthService) generateToken(ctx context.Context, user *models.User) (*models.TokenResponse, error) {
-	jti := uuid.New().String()
+func (s *AuthService) generateTokenPair(ctx context.Context, user *models.User) (*models.TokenResponse, error) {
+	return s.generateTokenPairWithFamily(ctx, user, uuid.New(), nil)
+}
 
+func (s *AuthService) generateTokenPairWithFamily(ctx context.Context, user *models.User, familyID uuid.UUID, parentJTI *string) (*models.TokenResponse, error) {
+	signedToken, accessRecord, err := s.generateAccessToken(ctx, user, familyID)
+	if err != nil {
+		return nil, err
+	}
+
+	rawRefresh, err := s.generateRefreshToken(ctx, uuid.MustParse(user.ID), familyID, parentJTI)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = accessRecord
+
+	return &models.TokenResponse{
+		AccessToken:      signedToken,
+		TokenType:        "Bearer",
+		ExpiresIn:        int64(s.accessTTL.Seconds()),
+		RefreshToken:     rawRefresh,
+		RefreshExpiresIn: int64(s.refreshTTL.Seconds()),
+		User: models.UserInfo{
+			ID:       user.ID,
+			Email:    user.Email,
+			FullName: user.FullName,
+			Role:     user.Role,
+		},
+	}, nil
+}
+
+func (s *AuthService) generateAccessToken(ctx context.Context, user *models.User, familyID uuid.UUID) (string, *models.Token, error) {
+	jti := uuid.New().String()
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.accessTTL)
 
@@ -115,35 +152,100 @@ func (s *AuthService) generateToken(ctx context.Context, user *models.User) (*mo
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signedToken, err := token.SignedString([]byte(s.jwtSecret))
 	if err != nil {
-		return nil, fmt.Errorf("failed to sign token: %w", err)
+		return "", nil, fmt.Errorf("failed to sign token: %w", err)
 	}
 
+	fid := familyID
 	tokenRecord := &models.Token{
 		ID:        uuid.New(),
 		UserID:    uuid.MustParse(user.ID),
 		JTI:       jti,
 		TokenHash: hashToken(signedToken),
 		Type:      "access",
+		FamilyID:  &fid,
 		IsRevoked: false,
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
 	}
 
 	if err := s.repo.CreateToken(ctx, tokenRecord); err != nil {
-		return nil, fmt.Errorf("failed to store token: %w", err)
+		return "", nil, fmt.Errorf("failed to store access token: %w", err)
 	}
 
-	return &models.TokenResponse{
-		AccessToken: signedToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(s.accessTTL.Seconds()),
-		User: models.UserInfo{
-			ID:       user.ID,
-			Email:    user.Email,
-			FullName: user.FullName,
-			Role:     user.Role,
-		},
-	}, nil
+	return signedToken, tokenRecord, nil
+}
+
+func (s *AuthService) generateRefreshToken(ctx context.Context, userID uuid.UUID, familyID uuid.UUID, parentJTI *string) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+	rawToken := base64.RawURLEncoding.EncodeToString(raw)
+
+	now := time.Now().UTC()
+	fid := familyID
+	tokenRecord := &models.Token{
+		ID:        uuid.New(),
+		UserID:    userID,
+		JTI:       uuid.New().String(),
+		TokenHash: hashToken(rawToken),
+		Type:      "refresh",
+		FamilyID:  &fid,
+		ParentJTI: parentJTI,
+		IsRevoked: false,
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.refreshTTL),
+	}
+
+	if err := s.repo.CreateToken(ctx, tokenRecord); err != nil {
+		return "", fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	return rawToken, nil
+}
+
+func (s *AuthService) RefreshTokens(ctx context.Context, rawRefreshToken string) (*models.TokenResponse, error) {
+	tokenHash := hashToken(rawRefreshToken)
+
+	tokenRecord, err := s.repo.GetTokenByHash(ctx, tokenHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve token: %w", err)
+	}
+	if tokenRecord == nil {
+		return nil, ErrInvalidToken
+	}
+	if tokenRecord.Type != "refresh" {
+		return nil, ErrInvalidToken
+	}
+
+	if tokenRecord.IsRevoked {
+		if tokenRecord.FamilyID != nil {
+			_ = s.repo.RevokeTokenFamily(ctx, *tokenRecord.FamilyID, "reuse_detected")
+		}
+		return nil, ErrTokenRevoked
+	}
+
+	if time.Now().UTC().After(tokenRecord.ExpiresAt.UTC()) {
+		return nil, ErrTokenExpired
+	}
+
+	if err := s.repo.RevokeToken(ctx, tokenRecord.JTI, "rotated"); err != nil {
+		return nil, fmt.Errorf("failed to rotate token: %w", err)
+	}
+
+	user, err := s.repo.GetUser(ctx, tokenRecord.UserID.String())
+	if err != nil || user == nil {
+		return nil, fmt.Errorf("failed to retrieve user: %w", err)
+	}
+
+	var familyID uuid.UUID
+	if tokenRecord.FamilyID != nil {
+		familyID = *tokenRecord.FamilyID
+	} else {
+		familyID = uuid.New()
+	}
+
+	return s.generateTokenPairWithFamily(ctx, user, familyID, &tokenRecord.JTI)
 }
 
 func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*models.TokenClaims, error) {
@@ -164,6 +266,10 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*m
 
 	// If token not found in DB, it's a new token - allow it (for backward compatibility with argon2 migration)
 	if tokenRecord != nil {
+		if tokenRecord.Type != "access" {
+			return nil, fmt.Errorf("token type not allowed as bearer credential")
+		}
+
 		// Use UTC explicitly on both sides to avoid timezone issues
 		nowUTC := time.Now().UTC()
 		expiresAtUTC := tokenRecord.ExpiresAt.UTC()
@@ -189,6 +295,18 @@ func (s *AuthService) RevokeToken(ctx context.Context, tokenString string) error
 	}
 
 	return s.repo.RevokeToken(ctx, claims.JTI, "revoked by user")
+}
+
+func (s *AuthService) RevokeRefreshTokenFamily(ctx context.Context, rawRefreshToken string) error {
+	tokenHash := hashToken(rawRefreshToken)
+	tokenRecord, err := s.repo.GetTokenByHash(ctx, tokenHash)
+	if err != nil || tokenRecord == nil {
+		return nil // best-effort: if not found, nothing to revoke
+	}
+	if tokenRecord.FamilyID == nil {
+		return s.repo.RevokeToken(ctx, tokenRecord.JTI, "logged out")
+	}
+	return s.repo.RevokeTokenFamily(ctx, *tokenRecord.FamilyID, "logged out")
 }
 
 // ============================================
@@ -425,5 +543,5 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, provider, code, state 
 		return nil, fmt.Errorf("account is inactive")
 	}
 
-	return s.generateToken(ctx, user)
+	return s.generateTokenPair(ctx, user)
 }

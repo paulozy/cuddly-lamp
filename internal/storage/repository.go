@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 )
 
@@ -47,7 +48,9 @@ type Repository interface {
 	// Token operations
 	CreateToken(ctx context.Context, token *models.Token) error
 	GetTokenByJTI(ctx context.Context, jti string) (*models.Token, error)
+	GetTokenByHash(ctx context.Context, tokenHash string) (*models.Token, error)
 	RevokeToken(ctx context.Context, jti string, reason string) error
+	RevokeTokenFamily(ctx context.Context, familyID uuid.UUID, reason string) error
 	UpdateTokenLastUsed(ctx context.Context, jti string) error
 
 	// OAuth operations

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"gorm.io/gorm"
@@ -391,6 +392,30 @@ func (pr *PostgresRepository) GetTokenByJTI(ctx context.Context, jti string) (*m
 		return nil, fmt.Errorf("get token by jti: %w", err)
 	}
 	return &token, nil
+}
+
+func (pr *PostgresRepository) GetTokenByHash(ctx context.Context, tokenHash string) (*models.Token, error) {
+	var token models.Token
+	if err := pr.db.WithContext(ctx).First(&token, "token_hash = ?", tokenHash).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get token by hash: %w", err)
+	}
+	return &token, nil
+}
+
+func (pr *PostgresRepository) RevokeTokenFamily(ctx context.Context, familyID uuid.UUID, reason string) error {
+	now := time.Now().UTC()
+	return pr.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return tx.Model(&models.Token{}).
+			Where("family_id = ? AND is_revoked = false", familyID).
+			Updates(map[string]interface{}{
+				"is_revoked":    true,
+				"revoked_at":    now,
+				"revoke_reason": reason,
+			}).Error
+	})
 }
 
 func (pr *PostgresRepository) RevokeToken(ctx context.Context, jti string, reason string) error {

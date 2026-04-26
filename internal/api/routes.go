@@ -43,6 +43,7 @@ func setupAPIRoutes(
 		public.GET("/health", healthCheck)
 		public.POST("/auth/login", authHandler.LoginWithEmail)
 		public.POST("/auth/register", authHandler.RegisterWithEmail)
+		public.POST("/auth/refresh", authHandler.RefreshTokens)
 		public.GET("/auth/:provider", authHandler.OAuthLogin)
 		public.GET("/auth/:provider/callback", authHandler.OAuthCallback)
 	}
