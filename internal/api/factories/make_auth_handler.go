@@ -18,9 +18,6 @@ func MakeAuthConfig(
 	repo storage.Repository,
 	config *config.Config,
 ) *AuthHandlerConfigResponse {
-	println("DEBUG: AccessTokenTTL =", config.Server.AccessTokenTTL.String())
-	println("DEBUG: RefreshTokenTTL =", config.Server.RefreshTokenTTL.String())
-
 	authService := services.NewAuthService(
 		repo,
 		config.Server.JWTSecret,
