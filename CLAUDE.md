@@ -9,7 +9,8 @@ Backend of an Identity Provider (IDP) platform that integrates AI for code analy
 - **Language**: Go 1.21+
 - **Framework**: Gin (HTTP routing & middleware)
 - **Database**: PostgreSQL 14+ with pgvector extension
-- **Cache**: Redis (optional, for session caching)
+- **Cache**: Redis (optional) via `go-redis/v9` — `internal/storage/redis/`
+- **Job Queue**: `asynq` (Redis-backed) — `internal/jobs/`
 - **Testing**: Go test (standard library)
 - **Deploy**: Docker Compose (local dev), Docker (production-ready)
 - **ORM**: GORM v2
@@ -28,8 +29,10 @@ internal/
 │   └── factories/        # Dependency injection setup
 ├── models/               # GORM models (User, Repository, Token, etc.)
 ├── services/             # Business logic (AuthService, etc.)
-├── storage/              
-│   └── postgres/         # PostgreSQL repository implementation
+├── storage/
+│   ├── postgres/         # PostgreSQL repository implementation
+│   └── redis/            # Redis client, Cache interface, key builders
+├── jobs/                 # Background job queue (asynq) — Enqueuer, Worker, task types
 ├── config/               # Configuration loading from .env
 └── utils/                # Logging, helpers
 ```
@@ -65,18 +68,18 @@ internal/
 
 ## Current Focus
 
-1. **Authentication & JWT**: Email/password registration, login, token validation (recently fixed timezone handling)
-2. **OAuth Integration**: GitHub/GitLab OAuth flows (in progress)
-3. **Code Analysis**: Repository scanning, semantic code search with embeddings
-4. **AI Integration**: Claude integration for code analysis insights
+1. **Authentication & JWT**: Complete — email/password, JWT access tokens, refresh token rotation (RFC 9700), OAuth (GitHub/GitLab)
+2. **Infrastructure**: Complete — Redis cache layer + asynq job queue wired in `main.go` with no-op fallbacks
+3. **Next: Repository management**: CRUD endpoints, webhook handlers, code analysis pipeline
+4. **AI Integration**: Claude integration for code analysis (blocked on repository + webhook endpoints)
 
 ## Known Issues & Constraints
 
-- **No tests yet**: Test suite needs to be written for all services
-- **Debug statements removed**: Recent changes removed debug logging from token generation
-- **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go
+- **Partial test coverage**: `internal/services` and `internal/storage/redis` have tests; `internal/storage/postgres` (integration) and handlers have none yet
 - **Token validation**: Allows tokens not found in DB for backward compatibility (tokens created before DB migration)
 - **Soft deletes**: Using `*time.Time` for DeletedAt (nullable), not `gorm.DeletedAt`
+- **Worker in-process**: asynq worker runs in the same binary as the HTTP server; split to `cmd/worker/` when independent scaling is needed
+- **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
 
 ## Database Notes
 
@@ -89,7 +92,7 @@ internal/
 
 `.env` variables (see `.env.example`):
 - `DB_*`: PostgreSQL connection
-- `REDIS_*`: Redis connection
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`: Redis (optional — app starts without it)
 - `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`: JWT configuration
 - `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`: Token expiration (in minutes)
 - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys

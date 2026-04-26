@@ -29,6 +29,13 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Protected routes: /users/me, logout
 - ✅ Health check endpoint
 
+### Infrastructure
+- ✅ Redis client (go-redis/v9) with connection pool and graceful no-op fallback
+- ✅ Cache layer — `Cache` interface with `ErrCacheMiss`, centralised key builders
+- ✅ Job queue — `Enqueuer` interface backed by `asynq` (retries, cron, dead-letter, priority queues)
+- ✅ Background worker — priority queues (critical/default/low), graceful shutdown
+- ✅ Server boots without Redis — cache + queue degrade silently to no-op
+
 ### Code Quality
 - ✅ Structured logging (zap)
 - ✅ .env file loading (godotenv)
@@ -198,8 +205,17 @@ backend/
 │   │   ├── repository.go          # Repository interface
 │   │   ├── postgres/
 │   │   │   └── postgres_repository.go  # GORM implementation
+│   │   ├── redis/
+│   │   │   ├── redis.go           # RedisClient interface + impl + no-op
+│   │   │   ├── cache.go           # Cache interface (Get/Set/Del/Exists + ErrCacheMiss)
+│   │   │   └── keys.go            # Centralised key builders (TokenKey, UserKey, ...)
 │   │   ├── migrations.go          # SQL migration runner with schema_migrations tracking
 │   │   └── storage.go             # Database initialization
+│   ├── jobs/
+│   │   ├── queue.go               # Enqueuer interface + asynq impl + no-op
+│   │   ├── worker.go              # asynq worker server (priority queues, graceful shutdown)
+│   │   └── tasks/
+│   │       └── types.go           # Task type constants (repo:analyze, webhook:process, ...)
 │   └── utils/
 │       ├── logger.go              # Structured logging (zap)
 │       └── auth.go                # Token extraction, context helpers
@@ -247,7 +263,7 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **PORT** - Porta do servidor (default: 3000)
 - **ENV** - Ambiente (development/production)
 - **DB_HOST, DB_USER, DB_PASSWORD, DB_NAME** - PostgreSQL
-- **REDIS_HOST, REDIS_PORT** - Redis
+- **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
 - **ANTHROPIC_API_KEY** - Claude API key
 - **GITHUB_TOKEN** - GitHub access token
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -363,6 +379,24 @@ Storage:
 - Runner skips files already in the table — safe to restart at any time
 - Baseline mode: if `users` exists but `schema_migrations` is empty, all current files are seeded as applied (handles upgrades from pre-tracking deployments)
 
+### Redis & Job Queue
+```
+Cache layer (internal/storage/redis):
+  Cache interface — Get/Set/Del/Exists with ErrCacheMiss sentinel
+  Key builders — TokenKey(jti), UserKey(id), SessionKey(id)
+  No-op fallback — NewNoop() / NewNoopCache() used when Redis is offline
+
+Job queue (internal/jobs):
+  Enqueuer interface — Enqueue / EnqueueIn with asynq.Option pass-through
+  asynq backend — retries, scheduling, dead-letter, asynqmon UI
+  Priority queues: critical (weight 6) > default (3) > low (1)
+  Worker runs in-process; register handlers with worker.Register(taskType, fn)
+  No-op fallback — NewNoopEnqueuer() logs and discards jobs silently
+
+Task type constants (internal/jobs/tasks):
+  TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings
+```
+
 ### pgx/v5 Migration Quirk
 - pgx/v5 does NOT support multiple SQL statements in `db.Exec()`
 - Solution: Use underlying `*sql.DB` from `db.DB()` to run full migration files
@@ -374,10 +408,10 @@ Storage:
 
 ## 🎯 Next Steps
 
-- [ ] Add repository management endpoints
-- [ ] Implement webhook handlers (GitHub/GitLab)
-- [ ] Code analysis API + Claude integration
-- [ ] Semantic search with pgvector embeddings
+- [ ] Repository management endpoints (CRUD + list)
+- [ ] Webhook handlers (GitHub/GitLab) — wire `TypeProcessWebhook` job
+- [ ] Code analysis API + Claude integration — wire `TypeAnalyzeRepo` job
+- [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
 - [ ] Integration tests for migration runner (requires test DB)
 - [ ] API documentation (Swagger/OpenAPI)
@@ -396,5 +430,5 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🔐 Auth Phase Complete (JWT + Refresh Tokens + OAuth + Migration Tracking)  
+**Status**: 🏗️ Infrastructure Phase Complete (Auth + Redis Cache + Job Queue)  
 **Última atualização**: April 26, 2026
