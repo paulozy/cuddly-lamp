@@ -190,8 +190,8 @@ func hashToken(token string) string {
 }
 
 func validatePasswordStrength(password string) error {
-	if len(password) < 12 {
-		return fmt.Errorf("password must be at least 12 characters")
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
 	}
 
 	if !containsUppercase(password) {
@@ -200,10 +200,6 @@ func validatePasswordStrength(password string) error {
 
 	if !containsDigit(password) {
 		return fmt.Errorf("password must contain at least one digit")
-	}
-
-	if len(password) < 8 {
-		return fmt.Errorf("password must be at least 8 characters")
 	}
 
 	return nil
