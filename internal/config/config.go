@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -15,8 +16,13 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port string
-	Env  string
+	Port            string
+	Env             string
+	JWTSecret       string
+	JWTIssuer       string
+	JWTAudience     string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
 }
 
 type DatabaseConfig struct {
@@ -47,8 +53,13 @@ type LogConfig struct {
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: getEnv("PORT", "3000"),
-			Env:  getEnv("ENV", "development"),
+			Port:            getEnv("PORT", "3000"),
+			Env:             getEnv("ENV", "development"),
+			JWTSecret:       getEnv("JWT_SECRET", "supersecretkey"),
+			JWTIssuer:       getEnv("JWT_ISSUER", "idp-backend"),
+			JWTAudience:     getEnv("JWT_AUDIENCE", "idp-users"),
+			AccessTokenTTL:  time.Duration(getEnvInt("ACCESS_TOKEN_TTL", 15)) * time.Minute,     // in minutes
+			RefreshTokenTTL: time.Duration(getEnvInt("REFRESH_TOKEN_TTL", 10080)) * time.Minute, // in minutes (7 days)
 		},
 		Database: newDatabaseConfig(),
 		Redis: RedisConfig{

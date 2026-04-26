@@ -7,50 +7,10 @@ import (
 	"time"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
+	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-// RepositoryStorage defines the interface for repository operations
-type RepositoryStorage interface {
-	// User operations
-	GetUser(ctx context.Context, id string) (*models.User, error)
-	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
-	GetUserByGitHubID(ctx context.Context, githubID string) (*models.User, error)
-	CreateUser(ctx context.Context, user *models.User) error
-	UpdateUser(ctx context.Context, user *models.User) error
-	ListUsers(ctx context.Context, limit, offset int) ([]models.User, error)
-
-	// Repository operations
-	GetRepository(ctx context.Context, id string) (*models.Repository, error)
-	GetRepositoryByURL(ctx context.Context, url string) (*models.Repository, error)
-	CreateRepository(ctx context.Context, repo *models.Repository) error
-	UpdateRepository(ctx context.Context, repo *models.Repository) error
-	ListRepositories(ctx context.Context, filter *RepositoryFilter) ([]models.Repository, int64, error)
-	DeleteRepository(ctx context.Context, id string) error
-	SearchRepositories(ctx context.Context, query string, limit, offset int) ([]models.Repository, error)
-
-	// Webhook operations
-	GetWebhook(ctx context.Context, id string) (*models.Webhook, error)
-	GetWebhookByDeliveryID(ctx context.Context, deliveryID string) (*models.Webhook, error)
-	CreateWebhook(ctx context.Context, webhook *models.Webhook) error
-	UpdateWebhook(ctx context.Context, webhook *models.Webhook) error
-	ListPendingWebhooks(ctx context.Context, limit int) ([]models.Webhook, error)
-	ListFailedWebhooks(ctx context.Context, limit, offset int) ([]models.Webhook, error)
-
-	// Code Analysis operations
-	GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error)
-	CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
-	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
-	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
-
-	// Code Embedding operations
-	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
-	SearchEmbeddings(ctx context.Context, repoID string, vector []float32, limit int) ([]models.CodeEmbedding, error)
-	DeleteEmbeddingsByRepository(ctx context.Context, repoID string) error
-}
 
 // PostgresRepository implements RepositoryStorage using GORM
 type PostgresRepository struct {
@@ -58,19 +18,8 @@ type PostgresRepository struct {
 }
 
 // NewPostgresRepository creates a new PostgreSQL repository
-func NewPostgresRepository(db *gorm.DB) RepositoryStorage {
+func NewPostgresRepository(db *gorm.DB) storage.Repository {
 	return &PostgresRepository{db: db}
-}
-
-// RepositoryFilter defines filtering options for repository listing
-type RepositoryFilter struct {
-	OwnerUserID    string
-	Type           models.RepositoryType
-	IsPublic       bool
-	AnalysisStatus string
-	SearchQuery    string
-	Limit          int
-	Offset         int
 }
 
 // ============ User Operations ============
@@ -191,7 +140,7 @@ func (pr *PostgresRepository) UpdateRepository(ctx context.Context, repo *models
 	return nil
 }
 
-func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *RepositoryFilter) ([]models.Repository, int64, error) {
+func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *storage.RepositoryFilter) ([]models.Repository, int64, error) {
 	var repos []models.Repository
 	var total int64
 
@@ -432,5 +381,50 @@ func (pr *PostgresRepository) DeleteEmbeddingsByRepository(ctx context.Context, 
 		Delete(&models.CodeEmbedding{}, "repository_id = ?", repoID).Error; err != nil {
 		return fmt.Errorf("delete embeddings by repository: %w", err)
 	}
+	return nil
+}
+
+// ============ Token Operations ============
+
+func (pr *PostgresRepository) CreateToken(ctx context.Context, token *models.Token) error {
+	if err := pr.db.WithContext(ctx).Create(token).Error; err != nil {
+		return fmt.Errorf("create token: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) GetTokenByJTI(ctx context.Context, jti string) (*models.Token, error) {
+	var token models.Token
+	if err := pr.db.WithContext(ctx).First(&token, "jti = ?", jti).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get token by jti: %w", err)
+	}
+	return &token, nil
+}
+
+func (pr *PostgresRepository) RevokeToken(ctx context.Context, jti string, reason string) error {
+	if err := pr.db.WithContext(ctx).
+		Model(&models.Token{}).
+		Where("jti = ?", jti).
+		Updates(map[string]interface{}{
+			"is_revoked":     true,
+			"revoked_at":     time.Now(),
+			"revoked_reason": reason,
+		}).Error; err != nil {
+		return fmt.Errorf("revoke token: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) UpdateTokenLastUsed(ctx context.Context, jti string) error {
+	if err := pr.db.WithContext(ctx).
+		Model(&models.Token{}).
+		Where("jti = ?", jti).
+		Update("last_used_at", time.Now()).Error; err != nil {
+		return fmt.Errorf("update token last used: %w", err)
+	}
+
 	return nil
 }

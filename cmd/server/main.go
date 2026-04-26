@@ -46,7 +46,11 @@ func main() {
 	utils.Info("Database initialized successfully")
 
 	router := gin.Default()
-	api.RegisterRoutes(router)
+	api.RegisterRoutes(&api.RegisterRoutesParams{
+		DB:     db.GetDB(),
+		Config: cfg,
+		Router: router,
+	})
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Server.Port,

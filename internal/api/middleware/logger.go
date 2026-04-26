@@ -1,0 +1,28 @@
+package middleware
+
+import (
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
+)
+
+func Logger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+
+		duration := time.Since(start)
+		method := c.Request.Method
+		path := c.Request.URL.Path
+		status := c.Writer.Status()
+
+		utils.Info(
+			"HTTP Request",
+			"method", method,
+			"path", path,
+			"status", status,
+			"duration_ms", duration.Milliseconds(),
+		)
+	}
+}

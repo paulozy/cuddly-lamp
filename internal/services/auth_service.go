@@ -11,28 +11,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
-	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/argon2"
 )
 
 type AuthService struct {
-	repo                  storage.Repository
-	jwtSecret             string
-	jwtIssuer             string
-	jwtAudience           string
-	passwordBoosterSecret string
-	accessTTL             time.Duration
-	refreshTTL            time.Duration
+	repo        storage.Repository
+	jwtSecret   string
+	jwtIssuer   string
+	jwtAudience string
+	accessTTL   time.Duration
+	refreshTTL  time.Duration
 }
 
-func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience, passwordBoosterSecret string, accessTTL, refreshTTL time.Duration) *AuthService {
+func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience string, accessTTL, refreshTTL time.Duration) *AuthService {
 	return &AuthService{
-		repo:                  repo,
-		jwtSecret:             jwtSecret,
-		jwtIssuer:             jwtIssuer,
-		jwtAudience:           jwtAudience,
-		passwordBoosterSecret: passwordBoosterSecret,
-		accessTTL:             accessTTL,
-		refreshTTL:            refreshTTL,
+		repo:        repo,
+		jwtSecret:   jwtSecret,
+		jwtIssuer:   jwtIssuer,
+		jwtAudience: jwtAudience,
+		accessTTL:   accessTTL,
+		refreshTTL:  refreshTTL,
 	}
 }
 
@@ -42,8 +40,7 @@ func (s *AuthService) LoginWithEmail(ctx context.Context, email, password string
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	boosteredPassword := password + s.passwordBoosterSecret
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(boosteredPassword)); err != nil {
+	if !verifyPasswordHash(user.PasswordHash, password) {
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
@@ -64,8 +61,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, pa
 		return nil, fmt.Errorf("email already in use")
 	}
 
-	boosteredPassword := password + s.passwordBoosterSecret
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(boosteredPassword), 12)
+	passwordHash, err := hashPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
@@ -75,7 +71,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, pa
 		Email:        email,
 		FullName:     fullName,
 		Role:         models.RoleDeveloper,
-		PasswordHash: string(passwordHash),
+		PasswordHash: passwordHash,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -183,6 +179,31 @@ func (s *AuthService) RevokeToken(ctx context.Context, tokenString string) error
 // ============================================
 // HELPERS
 // ============================================
+
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	hash := argon2.IDKey([]byte(password), salt, 2, 65536, 4, 32)
+	return fmt.Sprintf("%x$%x", salt, hash), nil
+}
+
+func verifyPasswordHash(hash, password string) bool {
+	parts := len(hash)
+	if parts < 65 {
+		return false
+	}
+
+	// Parse salt and hash from stored format "salt$hash"
+	saltHex := hash[:32]
+	storedHashHex := hash[33:]
+
+	var salt [16]byte
+	fmt.Sscanf(saltHex, "%x", &salt)
+
+	computedHash := argon2.IDKey([]byte(password), salt[:], 2, 65536, 4, 32)
+	computedHashHex := fmt.Sprintf("%x", computedHash)
+
+	return computedHashHex == storedHashHex
+}
 
 func hashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
