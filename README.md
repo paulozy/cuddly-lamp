@@ -6,22 +6,26 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Authentication & Authorization
 - ✅ Email/Password registration & login (Argon2 hashing)
-- ✅ JWT tokens with revocation tracking (JTI per token)
+- ✅ JWT access tokens with revocation tracking (JTI per token)
+- ✅ Refresh token rotation (RFC 6749 §6 / RFC 9700 compliant)
+- ✅ Refresh token reuse detection with family revocation (anti-hijacking)
 - ✅ OAuth 2.0 Authorization Code Flow (GitHub, GitLab infrastructure ready)
 - ✅ Stateless HMAC-signed CSRF state tokens
 - ✅ Account linking (OAuth to existing email users)
 - ✅ Role-based access control (admin, maintainer, developer, viewer)
-- ✅ Token refresh & logout endpoints
+- ✅ Token logout (access + full refresh family revocation)
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 3 SQL migrations (schema, auth, oauth_connections)
+- ✅ 4 SQL migrations (schema, auth, oauth_connections, refresh token rotation)
+- ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
+- ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
 - ✅ Soft deletes (deleted_at timestamps)
 - ✅ Audit triggers (created_at, updated_at automation)
 
 ### API Routes
-- ✅ Public routes: login, register, OAuth (GitHub/GitLab)
+- ✅ Public routes: login, register, token refresh, OAuth (GitHub/GitLab)
 - ✅ Protected routes: /users/me, logout
 - ✅ Health check endpoint
 
@@ -58,7 +62,7 @@ make dev
 
 The server will:
 - Load `.env` variables
-- Run migrations (001, 002, 003)
+- Run pending migrations (skips already applied ones)
 - Register OAuth providers (GitHub if configured)
 - Start HTTP server on port 3000
 
@@ -77,8 +81,13 @@ curl -X POST http://localhost:3000/api/v1/auth/register \
   }'
 
 # Get current user (requires JWT token from register/login)
-curl -H "Authorization: Bearer <token>" \
+curl -H "Authorization: Bearer <access_token>" \
   http://localhost:3000/api/v1/users/me
+
+# Refresh access token using refresh token
+curl -X POST http://localhost:3000/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "<refresh_token>"}'
 
 # OAuth: redirect to GitHub (if configured)
 curl -L http://localhost:3000/api/v1/auth/github
@@ -172,7 +181,8 @@ backend/
 │   │   ├── github.go              # GitHub implementation
 │   │   └── gitlab.go              # GitLab implementation
 │   ├── services/
-│   │   └── auth_service.go        # JWT, password hashing (Argon2), OAuth
+│   │   ├── auth_service.go        # JWT, password hashing (Argon2), OAuth, refresh tokens
+│   │   └── auth_service_refresh_test.go  # Refresh token rotation tests
 │   ├── models/
 │   │   ├── user.go                # User with roles
 │   │   ├── oauth_connection.go    # OAuth connections (provider links)
@@ -188,7 +198,7 @@ backend/
 │   │   ├── repository.go          # Repository interface
 │   │   ├── postgres/
 │   │   │   └── postgres_repository.go  # GORM implementation
-│   │   ├── migrations.go          # SQL migration runner (pgx/v5 compatible)
+│   │   ├── migrations.go          # SQL migration runner with schema_migrations tracking
 │   │   └── storage.go             # Database initialization
 │   └── utils/
 │       ├── logger.go              # Structured logging (zap)
@@ -196,7 +206,8 @@ backend/
 ├── migrations/
 │   ├── 001-init-schema.sql        # Users, repos, webhooks, analysis, embeddings
 │   ├── 002-add-auth-tables.sql    # Tokens, password_hash
-│   └── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
+│   ├── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
+│   └── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
 ├── .env.example                   # Environment variables template
 ├── .env                           # Local env vars (git-ignored)
 ├── docker-compose.yml             # Dev: PostgreSQL + Redis
@@ -267,8 +278,9 @@ PORT=3000
 # Ver logs do PostgreSQL
 docker-compose logs postgres
 
-# Conectar e verificar tabelas
+# Conectar e verificar tabelas e migrations aplicadas
 docker-compose exec postgres psql -U postgres -d idp_dev -c "\dt"
+docker-compose exec postgres psql -U postgres -d idp_dev -c "SELECT * FROM schema_migrations ORDER BY applied_at;"
 ```
 
 ## 📊 Models & Database
@@ -333,6 +345,24 @@ Stateless signed state token (no Redis needed):
 - Expiry: 10 minutes
 ```
 
+### Refresh Token Security (RFC 9700)
+```
+Token flow:
+  login/register → { access_token (JWT, 15min), refresh_token (opaque, 7d) }
+  POST /auth/refresh → consumes old refresh token, issues new pair (rotation)
+  Reuse detection: replayed token → entire family revoked (anti-hijacking)
+
+Storage:
+  Refresh tokens stored as SHA-256(raw) — never cleartext
+  family_id links all rotations of the same session
+  parent_jti traces the rotation chain
+```
+
+### Migration Tracking
+- `schema_migrations` table records each applied filename + timestamp
+- Runner skips files already in the table — safe to restart at any time
+- Baseline mode: if `users` exists but `schema_migrations` is empty, all current files are seeded as applied (handles upgrades from pre-tracking deployments)
+
 ### pgx/v5 Migration Quirk
 - pgx/v5 does NOT support multiple SQL statements in `db.Exec()`
 - Solution: Use underlying `*sql.DB` from `db.DB()` to run full migration files
@@ -348,9 +378,8 @@ Stateless signed state token (no Redis needed):
 - [ ] Implement webhook handlers (GitHub/GitLab)
 - [ ] Code analysis API + Claude integration
 - [ ] Semantic search with pgvector embeddings
-- [ ] Refresh token flow
 - [ ] Rate limiting & request throttling
-- [ ] Comprehensive unit & integration tests
+- [ ] Integration tests for migration runner (requires test DB)
 - [ ] API documentation (Swagger/OpenAPI)
 
 ## 🤝 Contribuindo
@@ -367,5 +396,5 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🚀 Database & Models Phase (Core schema implemented)  
-**Última atualização**: April 25, 2026
+**Status**: 🔐 Auth Phase Complete (JWT + Refresh Tokens + OAuth + Migration Tracking)  
+**Última atualização**: April 26, 2026
