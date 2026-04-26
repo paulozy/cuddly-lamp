@@ -2,8 +2,6 @@ package models
 
 import (
 	"time"
-
-	"gorm.io/datatypes"
 )
 
 type UserRole string
@@ -23,6 +21,8 @@ type User struct {
 	Avatar   string   `gorm:"type:text" json:"avatar"`
 	Role     UserRole `gorm:"type:varchar(50);default:'developer'" json:"role"`
 
+	PasswordHash string `gorm:"type:text" json:"-"`
+
 	GitHubID    string `gorm:"type:varchar(255);index" json:"github_id,omitempty"`
 	GitLabID    string `gorm:"type:varchar(255);index" json:"gitlab_id,omitempty"`
 	GithubToken string `gorm:"type:text" json:"-"`
@@ -31,10 +31,11 @@ type User struct {
 	IsActive bool      `gorm:"default:true" json:"is_active"`
 	LastSeen time.Time `json:"last_seen,omitempty"`
 
-	CreatedAt time.Time                     `json:"created_at"`
-	UpdatedAt time.Time                     `json:"updated_at"`
-	DeletedAt datatypes.JSONQueryExpression `gorm:"index" json:"deleted_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
+	Tokens       []Token      `gorm:"foreignKey:UserID" json:"tokens,omitempty"`
 	Repositories []Repository `gorm:"many2many:user_repositories;" json:"repositories,omitempty"`
 }
 
@@ -62,4 +63,18 @@ func (u *User) HasPermission(requiredRole UserRole) bool {
 	requiredLevel := roleLevels[requiredRole]
 
 	return userLevel >= requiredLevel
+}
+
+func (u *User) CanAccessRepository(repo *Repository) bool {
+	if u.Role == RoleAdmin {
+		return true
+	}
+
+	for _, r := range u.Repositories {
+		if r.ID == repo.ID {
+			return true
+		}
+	}
+
+	return false
 }

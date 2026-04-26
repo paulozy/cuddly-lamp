@@ -143,9 +143,9 @@ type CodeAnalysis struct {
 
 	ErrorMessage string `gorm:"type:text" json:"error_message,omitempty"`
 	// Audit
-	CreatedAt time.Time                     `json:"created_at"`
-	UpdatedAt time.Time                     `json:"updated_at"`
-	DeletedAt datatypes.JSONQueryExpression `gorm:"index" json:"deleted_at,omitempty"` // soft delete
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
 	EmbeddingID string `gorm:"type:uuid" json:"embedding_id,omitempty"` // Link to code embedding if created
 }

@@ -78,9 +78,9 @@ type Repository struct {
 	SyncStatus   string    `gorm:"type:varchar(50);default:'idle'" json:"sync_status"` // idle, syncing, error
 	SyncError    string    `gorm:"type:text" json:"sync_error,omitempty"`
 
-	CreatedAt time.Time                     `json:"created_at"`
-	UpdatedAt time.Time                     `json:"updated_at"`
-	DeletedAt datatypes.JSONQueryExpression `gorm:"index" json:"deleted_at,omitempty"` // soft delete
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
 	// Relationships
 	Analyses     []CodeAnalysis         `gorm:"foreignKey:RepositoryID" json:"analyses,omitempty"`
