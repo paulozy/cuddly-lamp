@@ -409,9 +409,9 @@ func (pr *PostgresRepository) RevokeToken(ctx context.Context, jti string, reaso
 		Model(&models.Token{}).
 		Where("jti = ?", jti).
 		Updates(map[string]interface{}{
-			"is_revoked":     true,
-			"revoked_at":     time.Now(),
-			"revoked_reason": reason,
+			"is_revoked":    true,
+			"revoked_at":    time.Now(),
+			"revoke_reason": reason,
 		}).Error; err != nil {
 		return fmt.Errorf("revoke token: %w", err)
 	}

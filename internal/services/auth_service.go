@@ -157,8 +157,13 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*m
 
 	// If token not found in DB, it's a new token - allow it (for backward compatibility with argon2 migration)
 	if tokenRecord != nil {
-		if tokenRecord.IsRevoked || time.Now().After(tokenRecord.ExpiresAt) {
-			return nil, fmt.Errorf("token is revoked or expired")
+		// Use UTC explicitly on both sides to avoid timezone issues
+		nowUTC := time.Now().UTC()
+		expiresAtUTC := tokenRecord.ExpiresAt.UTC()
+
+		if tokenRecord.IsRevoked || nowUTC.After(expiresAtUTC) {
+			return nil, fmt.Errorf("token is revoked or expired (is_revoked: %v, expired: %v, now: %v, expires_at: %v)",
+				tokenRecord.IsRevoked, nowUTC.After(expiresAtUTC), nowUTC, expiresAtUTC)
 		}
 		s.repo.UpdateTokenLastUsed(ctx, claims.JTI)
 	}
