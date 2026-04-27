@@ -32,6 +32,11 @@ type Repository interface {
 	ListPendingWebhooks(ctx context.Context, limit int) ([]models.Webhook, error)
 	ListFailedWebhooks(ctx context.Context, limit, offset int) ([]models.Webhook, error)
 
+	// WebhookConfig operations
+	GetWebhookConfigByRepoID(ctx context.Context, repoID string) (*models.WebhookConfig, error)
+	CreateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
+	UpdateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
+
 	// Code Analysis operations
 	GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error)
 	CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error

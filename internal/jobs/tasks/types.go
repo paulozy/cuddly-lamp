@@ -3,7 +3,16 @@ package tasks
 // Task type constants used by both the enqueuer and the worker handler registry.
 // Add new constants here as features are implemented.
 const (
+	TypeSyncRepo           = "repo:sync"
 	TypeAnalyzeRepo        = "repo:analyze"
 	TypeProcessWebhook     = "webhook:process"
 	TypeGenerateEmbeddings = "embeddings:generate"
 )
+
+type SyncRepoPayload struct {
+	RepositoryID string `json:"repository_id"`
+}
+
+type WebhookProcessPayload struct {
+	WebhookID string `json:"webhook_id"`
+}

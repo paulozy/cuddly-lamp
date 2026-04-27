@@ -255,6 +255,33 @@ func (pr *PostgresRepository) ListFailedWebhooks(ctx context.Context, limit, off
 	return webhooks, nil
 }
 
+// ============ WebhookConfig Operations ============
+
+func (pr *PostgresRepository) GetWebhookConfigByRepoID(ctx context.Context, repoID string) (*models.WebhookConfig, error) {
+	var cfg models.WebhookConfig
+	if err := pr.db.WithContext(ctx).First(&cfg, "repository_id = ?", repoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get webhook config: %w", err)
+	}
+	return &cfg, nil
+}
+
+func (pr *PostgresRepository) CreateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error {
+	if err := pr.db.WithContext(ctx).Create(cfg).Error; err != nil {
+		return fmt.Errorf("create webhook config: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) UpdateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error {
+	if err := pr.db.WithContext(ctx).Save(cfg).Error; err != nil {
+		return fmt.Errorf("update webhook config: %w", err)
+	}
+	return nil
+}
+
 // ============ Code Analysis Operations ============
 
 func (pr *PostgresRepository) GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error) {
