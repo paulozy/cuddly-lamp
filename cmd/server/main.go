@@ -12,10 +12,15 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
+	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
+	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
+	"github.com/paulozy/idp-with-ai-backend/internal/workers"
 )
 
 func main() {
@@ -58,12 +63,22 @@ func main() {
 	defer rdbClient.Close()
 
 	cache := redisstore.NewRedisCache(rdbClient)
-	_ = cache // injected into services as features need it
 
 	var enqueuer jobs.Enqueuer
 	if rdbClient.Client() != nil {
 		enqueuer = jobs.NewAsynqEnqueuer(&cfg.Redis)
+
+		pgRepo := postgres.NewPostgresRepository(db.GetDB())
+		ghClient := githubclient.NewClient(cfg.API.GithubToken)
+		syncSvc := services.NewSyncService(pgRepo, ghClient, cache, cfg.API.WebhookBaseURL)
+
+		syncWorker := workers.NewSyncWorker(syncSvc)
+		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
+
 		worker := jobs.NewWorker(&cfg.Redis)
+		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
+		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
+
 		go func() {
 			if err := worker.Run(); err != nil {
 				utils.Error("Job worker stopped", "error", err)
@@ -73,13 +88,14 @@ func main() {
 	} else {
 		enqueuer = jobs.NewNoopEnqueuer()
 	}
-	_ = enqueuer // injected into services as features need it
 
 	router := gin.Default()
 	api.RegisterRoutes(&api.RegisterRoutesParams{
-		DB:     db.GetDB(),
-		Config: cfg,
-		Router: router,
+		DB:       db.GetDB(),
+		Config:   cfg,
+		Router:   router,
+		Cache:    cache,
+		Enqueuer: enqueuer,
 	})
 
 	srv := &http.Server{

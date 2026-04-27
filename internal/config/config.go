@@ -46,6 +46,7 @@ type RedisConfig struct {
 type APIConfig struct {
 	AnthropicAPIKey string
 	GithubToken     string
+	WebhookBaseURL  string // public base URL for webhook endpoints, e.g. https://api.example.com
 }
 
 type LogConfig struct {
@@ -83,6 +84,7 @@ func Load() *Config {
 		API: APIConfig{
 			AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),
 			GithubToken:     getEnv("GITHUB_TOKEN", ""),
+			WebhookBaseURL:  getEnv("WEBHOOK_BASE_URL", ""),
 		},
 		OAuth: OAuthConfig{
 			Providers: map[string]OAuthProviderConfig{
