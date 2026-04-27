@@ -3,8 +3,57 @@ package models
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 )
+
+// StringArray maps a Go []string to a PostgreSQL text[] column.
+type StringArray []string
+
+func (a StringArray) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return "{}", nil
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, s := range a {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('"')
+		b.WriteString(strings.ReplaceAll(s, `"`, `\"`))
+		b.WriteByte('"')
+	}
+	b.WriteByte('}')
+	return b.String(), nil
+}
+
+func (a *StringArray) Scan(src any) error {
+	var raw string
+	switch v := src.(type) {
+	case string:
+		raw = v
+	case []byte:
+		raw = string(v)
+	case nil:
+		*a = StringArray{}
+		return nil
+	default:
+		return fmt.Errorf("StringArray: unsupported source type %T", src)
+	}
+	raw = strings.TrimPrefix(strings.TrimSuffix(raw, "}"), "{")
+	if raw == "" {
+		*a = StringArray{}
+		return nil
+	}
+	var result []string
+	for _, part := range strings.Split(raw, ",") {
+		result = append(result, strings.Trim(part, `"`))
+	}
+	*a = result
+	return nil
+}
 
 type WebhookEventType string
 
@@ -162,7 +211,7 @@ type WebhookConfig struct {
 	// Provider webhook settings
 	WebhookURL string   `gorm:"type:text" json:"webhook_url"`
 	Secret     string   `gorm:"type:text" json:"-"`
-	Events     []string `gorm:"type:text[];default:'{}'" json:"events"`
+	Events     StringArray `gorm:"type:text[];default:'{}'" json:"events"`
 	IsActive   bool     `gorm:"default:true" json:"is_active"`
 
 	ProviderWebhookID string `gorm:"type:varchar(255)" json:"provider_webhook_id,omitempty"`

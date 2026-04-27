@@ -2,11 +2,15 @@ package storage
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"time"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type Database interface {
@@ -21,7 +25,17 @@ type database struct {
 func New(cfg *config.DatabaseConfig) (*database, error) {
 	utils.Info("Connecting to database", "host", cfg.Host, "dbname", cfg.Name)
 
-	db, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{})
+	gormLog := gormlogger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		gormlogger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  gormlogger.Error,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
+	db, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{Logger: gormLog})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}

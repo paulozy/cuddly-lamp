@@ -33,6 +33,8 @@ type RepositoryMetadata struct {
 	ForkCount    int `json:"fork_count,omitempty"`
 	IssueCount   int `json:"issue_count,omitempty"`
 	PRCount      int `json:"pr_count,omitempty"`
+	BranchCount  int `json:"branch_count,omitempty"`
+	CommitCount  int `json:"commit_count,omitempty"`
 	Contributors int `json:"contributors,omitempty"`
 
 	// Configuration
@@ -73,7 +75,7 @@ type Repository struct {
 	ReviewsCount   int       `gorm:"default:0" json:"reviews_count"`
 
 	LastSyncedAt time.Time `json:"last_synced_at,omitempty"`
-	SyncStatus   string    `gorm:"type:varchar(50);default:'idle'" json:"sync_status"` // idle, syncing, error
+	SyncStatus   string    `gorm:"type:varchar(50);default:'idle'" json:"sync_status"` // idle, syncing, synced, error
 	SyncError    string    `gorm:"type:text" json:"sync_error,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
