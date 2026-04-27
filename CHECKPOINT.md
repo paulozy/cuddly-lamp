@@ -1,330 +1,175 @@
-# Project Checkpoint - April 26, 2026
+# Project Checkpoint - April 27, 2026
 
 ## 📌 What Has Been Implemented
 
-### Authentication System (100% ✅)
-- ✅ Email/Password registration with Argon2 password hashing
-- ✅ Email/Password login with verification
-- ✅ JWT token generation & validation with JTI per token
-- ✅ Token revocation with reason tracking
-- ✅ Multi-provider OAuth 2.0 infrastructure
-  - ✅ GitHub OAuth (fully implemented)
-  - ✅ GitLab OAuth (infrastructure ready, implementation included)
-  - 🔄 Extensible for Google, Apple, etc. (1 file + 2 env vars)
+### Authentication System ✅
+- Email/Password registration with Argon2 hashing (2 iterations, 64MB, 4 parallelism)
+- JWT access tokens (15min) with JTI revocation tracking
+- Refresh token rotation (RFC 9700) — opaque tokens stored as SHA-256, 7-day TTL
+- Refresh token reuse detection — replayed token revokes entire family (anti-hijacking)
+- Multi-provider OAuth 2.0 Authorization Code Flow (GitHub fully implemented, GitLab ready)
+- Stateless HMAC-signed CSRF state tokens (no Redis required)
+- Account linking — OAuth auto-links to existing email users
+- Role-based access control (admin, maintainer, developer, viewer)
+- Token logout — revokes access token + full refresh family
 
-### Authorization & Access Control (100% ✅)
-- ✅ Role-based access control (admin, maintainer, developer, viewer)
-- ✅ JWT middleware with token validation & revocation checks
-- ✅ Optional auth middleware (no 401 on missing token)
-- ✅ RBAC middleware for permission enforcement
-- ✅ User context injection into HTTP handlers
+### Repository Management ✅
+- CRUD endpoints (`POST/GET/PUT/DELETE /api/v1/repositories`) with ownership enforcement
+- Duplicate detection via URL before creation
+- GitHub sync on create — fetches branches, commits (last 100), PRs, languages, stars, forks
+- Sync status lifecycle: `idle → syncing → synced / error`
+- Sync error captured and stored on the repository record
+- WebhookConfig — registers GitHub webhook via API, stores HMAC secret per repo
+- Webhook registration skipped automatically when `WEBHOOK_BASE_URL` is localhost
 
-### Database & Migrations (100% ✅)
-- ✅ PostgreSQL 14+ with pgvector extension
-- ✅ Migration 001: Initial schema (8 tables + triggers)
-  - users, repositories, webhooks, code_analyses, code_embeddings, tokens, etc.
-- ✅ Migration 002: Auth tables
-  - Added password_hash to users, created tokens table with JWT support
-- ✅ Migration 003: OAuth connections
-  - oauth_connections table (provider + provider_user_id uniqueness)
-  - Data migration from legacy github_id/gitlab_id columns
-  - Column cleanup from users table
-- ✅ Audit triggers for created_at/updated_at automation
-- ✅ Soft deletes (deleted_at timestamp columns)
-- ✅ Proper cascading deletes for referential integrity
+### Webhook Pipeline ✅
+- HMAC-SHA256 signature validation (`X-Hub-Signature-256`)
+- Idempotency via `X-GitHub-Delivery` — duplicate deliveries return 200 without reprocessing
+- Events persisted to `webhooks` table with status (`pending → processed`) and retry metadata
+- Background processing via `webhook:process` asynq task
+- Supports: `push`, `pull_request`, `issues`, `release`, `repository`, `workflow_run`
 
-### API Endpoints (100% ✅)
+### Infrastructure ✅
+- Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
+- Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
+- asynq job queue — `Enqueuer` interface, priority queues (critical/default/low), dead-letter
+- Background workers registered in-process: `SyncWorker` (`repo:sync`) + `WebhookProcessor` (`webhook:process`)
+- GitHub API client (`internal/integrations/github/`) — repos, branches, commits, PRs, webhooks
+- GORM logger configured: `IgnoreRecordNotFoundError: true`, 200ms slow query threshold
+- Server boots without Redis — cache and queue degrade silently to no-op
+
+### Database & Migrations ✅
+- 5 SQL migrations applied and tracked via `schema_migrations`
+  - `001`: Initial schema — 8 tables + triggers + pgvector
+  - `002`: Auth tables — tokens, password_hash
+  - `003`: OAuth connections — provider uniqueness, data migration from users
+  - `004`: Refresh token rotation — `family_id`, `parent_jti` columns on tokens
+  - `005`: Sync status — added `'synced'` to `repositories.sync_status` check constraint
+- `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
+- Baseline detection for databases pre-dating migration tracking
+
+---
+
+## 📡 API Endpoints
+
 **Public Routes** (`/api/v1`):
-- ✅ `POST /auth/login` — Email/password login → JWT
-- ✅ `POST /auth/register` — Email/password registration → JWT
-- ✅ `GET /auth/:provider` — OAuth redirect (GitHub, GitLab)
-- ✅ `GET /auth/:provider/callback` — OAuth callback → JWT
-- ✅ `GET /health` — Health check
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/register` | Email/password registration → JWT pair |
+| POST | `/auth/login` | Email/password login → JWT pair |
+| POST | `/auth/refresh` | Rotate refresh token → new JWT pair |
+| GET | `/auth/:provider` | OAuth redirect (github, gitlab) |
+| GET | `/auth/:provider/callback` | OAuth callback → JWT pair |
+| POST | `/webhooks/github/:repoID` | GitHub webhook receiver (HMAC auth) |
+| GET | `/health` | Health check |
 
-**Protected Routes** (`/api/v1`, requires JWT):
-- ✅ `POST /auth/logout` — Revoke token
-- ✅ `GET /users/me` — Get current user info
-
-### Code Quality & Infrastructure (100% ✅)
-- ✅ Structured logging with zap
-- ✅ .env file loading with godotenv
-- ✅ Error handling middleware (global error responses)
-- ✅ CORS middleware
-- ✅ Request logging middleware
-- ✅ API versioning (/api/v1)
-- ✅ CLAUDE.md project guidelines
-- ✅ Comprehensive README.md
-
-### Dependency Management (100% ✅)
-- ✅ go.mod + go.sum properly configured
-- ✅ Key dependencies:
-  - gin-gonic/gin (HTTP framework)
-  - gorm.io/gorm + gorm.io/driver/postgres (ORM)
-  - golang-jwt/jwt/v5 (JWT)
-  - golang.org/x/oauth2 (OAuth 2.0)
-  - golang.org/x/crypto/argon2 (password hashing)
-  - uber-go/zap (structured logging)
-  - joho/godotenv (.env loading)
-  - google/uuid (UUID generation)
+**Protected Routes** (`/api/v1`, requires Bearer JWT):
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/logout` | Revoke access + refresh family |
+| GET | `/users/me` | Current user info |
+| POST | `/repositories` | Create repository + trigger sync |
+| GET | `/repositories` | List user's repositories |
+| GET | `/repositories/:id` | Get repository by ID |
+| PUT | `/repositories/:id` | Update repository |
+| DELETE | `/repositories/:id` | Delete repository |
 
 ---
 
-## 📁 Complete Project Structure
+## 🗄️ Database Schema
 
-```
-backend/
-├── cmd/server/
-│   └── main.go                          # Entry point
-├── internal/
-│   ├── api/
-│   │   ├── handlers/auth.go             # Auth HTTP handlers
-│   │   ├── middleware/                  # Auth, logging, CORS, RBAC
-│   │   ├── factories/make_auth_handler.go  # DI setup
-│   │   └── routes.go                    # Route registration
-│   ├── oauth/
-│   │   ├── provider.go                  # OAuthProvider interface
-│   │   ├── github.go                    # GitHub implementation
-│   │   └── gitlab.go                    # GitLab implementation
-│   ├── services/
-│   │   └── auth_service.go              # Auth logic
-│   │       ├── LoginWithEmail()         # Email login
-│   │       ├── RegisterWithEmail()      # Email registration
-│   │       ├── LoginWithOAuth()         # OAuth login
-│   │       ├── GenerateOAuthState()     # CSRF state token
-│   │       ├── VerifyOAuthState()       # CSRF verification
-│   │       ├── generateToken()          # JWT generation
-│   │       ├── ValidateToken()          # JWT validation
-│   │       └── RevokeToken()            # Token revocation
-│   ├── models/
-│   │   ├── user.go                      # User + roles
-│   │   ├── oauth_connection.go          # OAuth links
-│   │   ├── token.go                     # JWT records
-│   │   ├── auth.go                      # Auth DTOs
-│   │   └── (repository, webhook, code_analysis, embedding models)
-│   ├── config/
-│   │   └── config.go                    # Config + OAuth providers
-│   ├── storage/
-│   │   ├── repository.go                # Repository interface
-│   │   ├── postgres/postgres_repository.go  # GORM CRUD
-│   │   ├── migrations.go                # Migration runner (pgx/v5 fix)
-│   │   └── storage.go                   # DB initialization
-│   └── utils/
-│       ├── logger.go                    # Structured logging
-│       └── auth.go                      # Token extraction, context
-├── migrations/
-│   ├── 001-init-schema.sql              # Schema
-│   ├── 002-add-auth-tables.sql          # Auth tables
-│   └── 003-add-oauth-connections.sql    # OAuth connections
-├── .env.example                         # Env template
-├── docker-compose.yml                   # Dev environment
-├── CLAUDE.md                            # Guidelines
-├── README.md                            # Documentation
-├── CHECKPOINT.md                        # This file
-├── Makefile                             # Commands
-├── go.mod                               # Dependencies
-└── go.sum                               # Dependency hashes
-```
+| Table | Purpose |
+|-------|---------|
+| `users` | Platform users with roles, soft deletes |
+| `oauth_connections` | OAuth provider links (provider + provider_user_id unique) |
+| `tokens` | JWT records with revocation, family_id, parent_jti |
+| `repositories` | Git repos with sync_status, metadata (JSONB), analysis_status |
+| `webhook_configs` | Per-repo webhook registrations with HMAC secret |
+| `webhooks` | Incoming webhook events with status, retry, idempotency |
+| `code_analyses` | Code review results (pending use) |
+| `code_embeddings` | pgvector embeddings for semantic search (pending use) |
+| `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
 
-## 🔑 Key Features & Patterns
+## 🔑 Key Implementation Details
 
-### 1. Multi-Provider OAuth Infrastructure
-- **Extensible design**: Single interface, multiple implementations
-- **Stateless CSRF**: HMAC-signed state tokens (no Redis needed)
-- **Account linking**: Auto-link OAuth accounts to existing email users
-- **Account creation**: Auto-create users on first GitHub/GitLab login
+### StringArray (PostgreSQL text[])
+GORM doesn't natively handle `[]string` → `text[]`. Use `models.StringArray` on any model field mapped to a `text[]` column — it implements `driver.Valuer` and `sql.Scanner` with proper PostgreSQL array literal format.
 
-### 2. Password Security
-- **Argon2 IDKey**: 2 iterations, 64MB memory, 4 parallelism
-- **Per-password salt**: 16-byte random salt (not global secret)
-- **No boost**: Pure Argon2, no additional secret concatenation
+### Sync Status
+Valid values: `idle`, `syncing`, `synced`, `error` (enforced by DB check constraint).
 
-### 3. JWT Token Management
-- **JTI (JWT ID)**: Unique ID per token for revocation tracking
-- **Token records**: Stored in DB with revocation status & reason
-- **Revocation checks**: Validated on each protected request
-- **Last used tracking**: Updates timestamp on each validation
+### Webhook Security
+- HMAC-SHA256 over raw request body with per-repo secret
+- Secret generated with 32 bytes of `crypto/rand`, stored as hex
+- Duplicate deliveries detected by `X-GitHub-Delivery` ID before any processing
 
-### 4. Timezone Handling
-- **Always UTC**: `time.Now().UTC()` consistently throughout
-- **No offset bugs**: Explicit UTC conversion prevents timezone mismatches
-- **Database agnostic**: Works with TIMESTAMP (no timezone) columns
+### Refresh Token Security (RFC 9700)
+- Stored as `SHA-256(raw_token)` — never cleartext
+- `family_id` links all rotations of the same session
+- Reuse of an already-rotated token revokes the entire family immediately
 
-### 5. Migration System
-- **pgx/v5 compatible**: Uses `*sql.DB` instead of GORM's `db.Exec()`
-- **Multiple statements**: Properly handles full SQL files
-- **Conditional operations**: Checks for existence before adding/dropping
+### Webhook Registration on Localhost
+`SyncService.doSync` checks `isLocalURL(webhookBaseURL)` before calling the GitHub API. If the base URL contains `localhost` or `127.0.0.1`, registration is skipped with an info log. Use ngrok for local webhook testing — see `tests/GITHUB_SYNC_TESTING.md`.
+
+### Migration Baseline
+If `schema_migrations` is empty but `users` table exists, all current migration files are seeded as applied without executing them. This handles databases created before migration tracking was introduced. **Side effect**: if a new migration file is added before baseline runs, it will be marked applied without executing — apply it manually if this happens.
 
 ---
 
-## 🚀 Recent Fixes & Improvements
+## 📊 Test Coverage
 
-### Fix 1: .env File Loading
-**Issue**: Environment variables were not being loaded  
-**Solution**: Added `godotenv.Load()` in `main.go` before `config.Load()`  
-**Commit**: 3a5f1e2 (approx)
-
-### Fix 2: Token Expiration Bug
-**Issue**: Tokens were immediately marked as expired due to timezone mismatch  
-**Root Cause**: Server in UTC-3 timezone, PostgreSQL storing TIMESTAMP without timezone  
-**Solution**: Use `time.Now().UTC()` and explicit UTC comparison in validation  
-**Commit**: e8b178f (token timezone fix)
-
-### Fix 3: Migration Failures with pgx/v5
-**Issue**: SQL migrations failing with "column does not exist" errors  
-**Root Cause**: pgx/v5 doesn't support multiple statements in single `db.Exec()`  
-**Solution**: Use underlying `*sql.DB` from `db.DB()` for migration execution  
-**Commit**: Latest (migrations.go fix)
-
-### Fix 4: OAuth Provider Registration
-**Issue**: GitHub provider not registered even with valid credentials  
-**Root Cause**: Multiple causes:
-  - .env not loaded (fixed with godotenv)
-  - OAuth config not initialized (fixed with OAuthConfig map)
-  - Providers not registered at startup (fixed with RegisterProvider calls)  
-**Commit**: e8b178f + recent
+| Package | Coverage | Notes |
+|---------|----------|-------|
+| `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, sync pipeline |
+| `internal/storage/redis` | Unit tests ✅ | cache get/set/del/exists, no-op fallback |
+| `internal/utils` | Unit tests ✅ | URL parsing |
+| `internal/storage/postgres` | Integration tests ⏳ | requires `TEST_DATABASE_URL` |
+| `internal/api/handlers` | None ❌ | next priority |
 
 ---
 
-## 📊 Database Schema Summary
+## 🎯 Next Steps
 
-### Tables Created
-1. **users** - Platform users with roles and soft deletes
-2. **oauth_connections** - OAuth provider links (GitHub, GitLab, future)
-3. **tokens** - JWT token records with revocation tracking
-4. **repositories** - Git repositories with analysis status
-5. **webhooks** - Incoming webhook events with retry logic
-6. **code_analyses** - Code review results
-7. **code_embeddings** - Vector embeddings for semantic search (pgvector)
-8. **repository_dependencies** - Dependency graph
-
-### Key Constraints & Indexes
-- `users.email` — UNIQUE
-- `oauth_connections.(provider, provider_user_id)` — UNIQUE
-- `users.is_active` — INDEX
-- `repositories.owner_user_id` — INDEX
-- `code_embeddings.repository_id` — INDEX
-- `code_embeddings.embedding` — VECTOR INDEX (ivfflat, cosine)
+- [ ] **AI Integration** — Claude API for code analysis; wire `TypeAnalyzeRepo` job
+- [ ] **Semantic search** — pgvector embeddings; wire `TypeGenerateEmbeddings` job
+- [ ] **Handler tests** — unit tests for repository and webhook handlers
+- [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
+- [ ] **Rate limiting** — per-user request throttling
+- [ ] **API documentation** — Swagger/OpenAPI spec
 
 ---
 
-## 🔐 Security Considerations Implemented
+## 🔧 Environment Variables
 
-1. **Password Security**: Argon2 (modern best practice)
-2. **JWT Security**: 
-   - Signed with HS256
-   - JTI for revocation
-   - Expiration validation
-   - Stored in DB for revocation checks
-3. **OAuth Security**:
-   - HMAC-signed state tokens
-   - 10-minute state expiry
-   - Code → access token exchange server-side
-   - Email verification (GitHub requires it)
-4. **API Security**:
-   - Required JWT for protected routes
-   - CORS middleware
-   - Role-based access control
-5. **Database Security**:
-   - Soft deletes (no permanent data loss from UI)
-   - Cascading deletes (referential integrity)
-   - Audit timestamps (who changed what when)
+```env
+# Database
+DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
----
-
-## ✅ Testing Verification
-
-### Email/Password Flow
-```bash
-POST /api/v1/auth/register
-  → User created with Argon2 hash
-  → JWT returned with user info
-  
-POST /api/v1/auth/login
-  → Hash verified with Argon2
-  → JWT returned if active
-
-GET /api/v1/users/me + JWT
-  → 200 with user data (requires valid JWT)
-```
-
-### OAuth Flow
-```bash
-GET /api/v1/auth/github
-  → Redirects to GitHub
-
-GET /api/v1/auth/github/callback?code=...&state=...
-  → Exchanges code for access token
-  → Fetches user from GitHub API
-  → Creates/links user
-  → JWT returned
-```
-
----
-
-## 📝 Configuration Checklist
-
-### Required Environment Variables
-```bash
-# Database (Docker provides defaults)
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_NAME=idp_dev
+# Redis (optional — app starts without it)
+REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB
 
 # JWT
-JWT_SECRET=<change-in-production>
-JWT_ISSUER=idp-backend
-JWT_AUDIENCE=idp-users
-ACCESS_TOKEN_TTL=15
-REFRESH_TOKEN_TTL=10080
+JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE
+ACCESS_TOKEN_TTL=15          # minutes
+REFRESH_TOKEN_TTL=10080      # minutes (7 days)
 
-# GitHub OAuth (required for OAuth flow)
-GITHUB_CLIENT_ID=<from-github-app>
-GITHUB_CLIENT_SECRET=<from-github-app>
-GITHUB_CALLBACK_URL=http://localhost:3000/api/v1/auth/github/callback
+# GitHub
+GITHUB_TOKEN                 # Personal access token (repo + admin:repo_hook scopes)
+GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL
 
-# Optional
-GITLAB_CLIENT_ID=
-GITLAB_CLIENT_SECRET=
-GITLAB_CALLBACK_URL=
+# Webhooks
+WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in local dev)
+                             # Leave empty or use localhost to skip GitHub registration
+
+# API
+ANTHROPIC_API_KEY            # Claude API (pending use)
+LOG_LEVEL                    # debug / info / warn / error
 ```
 
 ---
 
-## 🎯 What's Ready for Next Features
-
-✅ Database layer - ready for repository management endpoints  
-✅ Auth middleware - ready for protected endpoints  
-✅ OAuth infrastructure - ready to add more providers  
-✅ Error handling - ready for more specific error responses  
-✅ Logging - ready for detailed audit logging  
-
-### Recommended Next Steps
-1. Implement repository management endpoints
-2. Add webhook handlers (GitHub/GitLab)
-3. Implement code analysis workflow
-4. Add semantic search (pgvector + Claude embeddings)
-5. Write comprehensive tests
-
----
-
-## 📚 Key Files & Line References
-
-- **auth_service.go** — Lines 1-261: Core auth logic
-- **oauth/github.go** — Lines 1-71: GitHub provider
-- **oauth/provider.go** — Lines 1-13: Provider interface
-- **config/config.go** — OAuth config loading
-- **migrations.go** — pgx/v5 compatible migration runner
-- **migrations/003** — OAuth connections schema
-- **.env.example** — All configuration variables
-
----
-
-**Status**: ✅ Authentication & Authorization Complete  
-**Commits This Session**: ~5 major commits (timezone fix, OAuth implementation, config fixes)  
-**Lines of Code Added**: ~600+ (OAuth providers, config, migration fixes)  
-**Test Coverage**: 0% (tests to be implemented next)  
-**Production Readiness**: ~40% (auth done, needs testing & deployment config)
+**Status**: 🚀 Repository & Webhook Pipeline Complete  
+**Commits this phase**: 7 (sync fixes + repository feature + webhook pipeline + docs)  
+**Production Readiness**: ~55% (auth + repo + webhook done; needs AI integration, tests, rate limiting)
