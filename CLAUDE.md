@@ -23,18 +23,21 @@ Backend of an Identity Provider (IDP) platform that integrates AI for code analy
 ```
 internal/
 ├── api/
-│   ├── handlers/         # HTTP request handlers
+│   ├── handlers/         # HTTP request handlers (auth, repository, webhook)
 │   ├── middleware/       # JWT auth, CORS, logging
 │   ├── routes.go         # Route definitions
 │   └── factories/        # Dependency injection setup
-├── models/               # GORM models (User, Repository, Token, etc.)
-├── services/             # Business logic (AuthService, etc.)
+├── integrations/
+│   └── github/           # GitHub API client + webhook HMAC validation
+├── models/               # GORM models (User, Repository, Token, WebhookConfig, etc.)
+├── services/             # Business logic (AuthService, RepositoryService, SyncService)
+├── workers/              # asynq task handlers (SyncWorker, WebhookProcessor)
 ├── storage/
 │   ├── postgres/         # PostgreSQL repository implementation
 │   └── redis/            # Redis client, Cache interface, key builders
 ├── jobs/                 # Background job queue (asynq) — Enqueuer, Worker, task types
 ├── config/               # Configuration loading from .env
-└── utils/                # Logging, helpers
+└── utils/                # Logging, URL parsing helpers
 ```
 
 ## Coding Conventions
@@ -70,16 +73,19 @@ internal/
 
 1. **Authentication & JWT**: Complete — email/password, JWT access tokens, refresh token rotation (RFC 9700), OAuth (GitHub/GitLab)
 2. **Infrastructure**: Complete — Redis cache layer + asynq job queue wired in `main.go` with no-op fallbacks
-3. **Next: Repository management**: CRUD endpoints, webhook handlers, code analysis pipeline
-4. **AI Integration**: Claude integration for code analysis (blocked on repository + webhook endpoints)
+3. **Repository management**: Complete — CRUD endpoints, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
+4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
+5. **Next: AI Integration** — Claude integration for code analysis (`TypeAnalyzeRepo` job); wire `TypeGenerateEmbeddings` for pgvector search
 
 ## Known Issues & Constraints
 
-- **Partial test coverage**: `internal/services` and `internal/storage/redis` have tests; `internal/storage/postgres` (integration) and handlers have none yet
+- **Partial test coverage**: services and redis have tests; postgres integration tests and handlers have none yet
 - **Token validation**: Allows tokens not found in DB for backward compatibility (tokens created before DB migration)
 - **Soft deletes**: Using `*time.Time` for DeletedAt (nullable), not `gorm.DeletedAt`
 - **Worker in-process**: asynq worker runs in the same binary as the HTTP server; split to `cmd/worker/` when independent scaling is needed
 - **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
+- **StringArray**: `models.StringArray` is a custom type for PostgreSQL `text[]` — use it instead of `[]string` on any GORM model field mapped to a `text[]` column
+- **Webhook registration on localhost**: skipped automatically when `WEBHOOK_BASE_URL` contains `localhost`/`127.0.0.1` — use ngrok for local webhook testing
 
 ## Database Notes
 
@@ -96,6 +102,7 @@ internal/
 - `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`: JWT configuration
 - `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`: Token expiration (in minutes)
 - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys
+- `WEBHOOK_BASE_URL`: Public base URL for webhook registration (e.g. ngrok URL); omit or use localhost to skip GitHub webhook registration
 - `LOG_LEVEL`: Logging verbosity (info, debug, error)
 
 ## Do NOT

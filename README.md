@@ -24,16 +24,32 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Soft deletes (deleted_at timestamps)
 - ✅ Audit triggers (created_at, updated_at automation)
 
+### Repository Management
+- ✅ CRUD endpoints — create, list, get, update, delete repositories
+- ✅ GitHub sync — fetches metadata (branches, commits, PRs, languages, stars, forks)
+- ✅ Sync status lifecycle — `idle → syncing → synced / error`
+- ✅ WebhookConfig — registers GitHub webhook on sync, stores HMAC secret
+- ✅ Webhook registration skipped automatically on localhost (use ngrok for local dev)
+
+### Webhook Pipeline
+- ✅ HMAC-SHA256 signature validation (X-Hub-Signature-256)
+- ✅ Idempotency via `X-GitHub-Delivery` ID — duplicate deliveries return 200
+- ✅ Events persisted to `webhooks` table with status tracking and retry logic
+- ✅ Background processing worker (`webhook:process` asynq task)
+
 ### API Routes
 - ✅ Public routes: login, register, token refresh, OAuth (GitHub/GitLab)
+- ✅ Public webhook receiver: `POST /api/v1/webhooks/github/:repoID` (HMAC auth)
 - ✅ Protected routes: /users/me, logout
+- ✅ Protected repository routes: CRUD on `/api/v1/repositories`
 - ✅ Health check endpoint
 
 ### Infrastructure
 - ✅ Redis client (go-redis/v9) with connection pool and graceful no-op fallback
-- ✅ Cache layer — `Cache` interface with `ErrCacheMiss`, centralised key builders
+- ✅ Cache layer — `Cache` interface with `ErrCacheMiss`, centralised key builders (`TokenKey`, `UserKey`, `RepoKey`)
 - ✅ Job queue — `Enqueuer` interface backed by `asynq` (retries, cron, dead-letter, priority queues)
-- ✅ Background worker — priority queues (critical/default/low), graceful shutdown
+- ✅ Background workers — `SyncWorker` (repo:sync) + `WebhookProcessor` (webhook:process), graceful shutdown
+- ✅ GitHub API client — `internal/integrations/github/` (repos, branches, commits, PRs, webhooks)
 - ✅ Server boots without Redis — cache + queue degrade silently to no-op
 
 ### Code Quality
@@ -81,24 +97,27 @@ curl http://localhost:3000/api/v1/health
 # Register with email/password
 curl -X POST http://localhost:3000/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "full_name": "Test User",
-    "password": "Password123"
-  }'
+  -d '{"email": "user@example.com", "full_name": "Test User", "password": "Password123"}'
 
-# Get current user (requires JWT token from register/login)
-curl -H "Authorization: Bearer <access_token>" \
-  http://localhost:3000/api/v1/users/me
-
-# Refresh access token using refresh token
-curl -X POST http://localhost:3000/api/v1/auth/refresh \
+# Login and capture token
+TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"refresh_token": "<refresh_token>"}'
+  -d '{"email":"user@example.com","password":"Password123"}' | jq -r '.access_token')
+
+# Add a repository (triggers GitHub sync automatically)
+curl -X POST http://localhost:3000/api/v1/repositories \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://github.com/owner/repo"}'
+
+# List repositories
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/repositories
 
 # OAuth: redirect to GitHub (if configured)
 curl -L http://localhost:3000/api/v1/auth/github
 ```
+
+> For webhook testing with ngrok see [`tests/GITHUB_SYNC_TESTING.md`](tests/GITHUB_SYNC_TESTING.md).
 
 ## 📚 Documentação
 
@@ -169,11 +188,13 @@ make clean            # Remove build artifacts
 ```
 backend/
 ├── cmd/server/
-│   └── main.go                    # Entry point (loads .env, starts HTTP server)
+│   └── main.go                    # Entry point — wires DB, Redis, workers, HTTP server
 ├── internal/
 │   ├── api/
 │   │   ├── handlers/
-│   │   │   └── auth.go            # Login, register, OAuth, logout, /users/me
+│   │   │   ├── auth.go            # Login, register, OAuth, logout, /users/me
+│   │   │   ├── repository.go      # Repository CRUD endpoints
+│   │   │   └── webhook.go         # GitHub webhook receiver (HMAC validation)
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
 │   │   │   ├── logger.go          # Request logging
@@ -181,26 +202,37 @@ backend/
 │   │   │   ├── optional_auth.go   # Optional auth (no 401 on missing token)
 │   │   │   └── rbac.go            # Role-based access control
 │   │   ├── factories/
-│   │   │   └── make_auth_handler.go  # DI: auth service + providers
+│   │   │   ├── make_auth_handler.go        # DI: auth service + providers
+│   │   │   ├── make_repository_handler.go  # DI: repository service
+│   │   │   └── make_webhook_handler.go     # DI: webhook handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
+│   ├── integrations/
+│   │   └── github/                # GitHub API client (repos, branches, commits, PRs, webhooks)
+│   │       ├── client.go          # HTTP client + ClientInterface
+│   │       └── validation.go      # HMAC-SHA256 webhook signature validation
 │   ├── oauth/                     # Multi-provider OAuth 2.0
 │   │   ├── provider.go            # OAuthProvider interface
 │   │   ├── github.go              # GitHub implementation
 │   │   └── gitlab.go              # GitLab implementation
 │   ├── services/
 │   │   ├── auth_service.go        # JWT, password hashing (Argon2), OAuth, refresh tokens
-│   │   └── auth_service_refresh_test.go  # Refresh token rotation tests
+│   │   ├── repository_service.go  # Repository business logic (ownership, dedup)
+│   │   ├── sync_service.go        # GitHub sync (metadata + webhook registration)
+│   │   └── *_test.go              # Unit tests (auth refresh, repository, sync)
+│   ├── workers/
+│   │   ├── sync_worker.go         # Handles repo:sync asynq task
+│   │   └── webhook_processor.go   # Handles webhook:process asynq task
 │   ├── models/
 │   │   ├── user.go                # User with roles
 │   │   ├── oauth_connection.go    # OAuth connections (provider links)
-│   │   ├── token.go               # JWT token records
-│   │   ├── repository.go          # Git repositories
-│   │   ├── webhook.go             # Incoming webhooks
+│   │   ├── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
+│   │   ├── repository.go          # Repository + RepositoryMetadata + StringArray
+│   │   ├── repository_dto.go      # CreateRepositoryRequest, UpdateRepositoryRequest
+│   │   ├── webhook.go             # Webhook events + WebhookConfig + StringArray type
 │   │   ├── code_analysis.go       # Code analysis results
-│   │   ├── code_embedding.go      # Vector embeddings (pgvector)
-│   │   └── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
+│   │   └── code_embedding.go      # Vector embeddings (pgvector)
 │   ├── config/
-│   │   └── config.go              # Config struct + env loading
+│   │   └── config.go              # Config struct + env loading (incl. WEBHOOK_BASE_URL)
 │   ├── storage/
 │   │   ├── repository.go          # Repository interface
 │   │   ├── postgres/
@@ -208,30 +240,32 @@ backend/
 │   │   ├── redis/
 │   │   │   ├── redis.go           # RedisClient interface + impl + no-op
 │   │   │   ├── cache.go           # Cache interface (Get/Set/Del/Exists + ErrCacheMiss)
-│   │   │   └── keys.go            # Centralised key builders (TokenKey, UserKey, ...)
+│   │   │   └── keys.go            # Key builders (TokenKey, UserKey, RepoKey, ...)
 │   │   ├── migrations.go          # SQL migration runner with schema_migrations tracking
-│   │   └── storage.go             # Database initialization
+│   │   └── storage.go             # Database initialization + GORM logger config
 │   ├── jobs/
 │   │   ├── queue.go               # Enqueuer interface + asynq impl + no-op
 │   │   ├── worker.go              # asynq worker server (priority queues, graceful shutdown)
 │   │   └── tasks/
-│   │       └── types.go           # Task type constants (repo:analyze, webhook:process, ...)
+│   │       └── types.go           # Task type constants + payload structs
 │   └── utils/
 │       ├── logger.go              # Structured logging (zap)
-│       └── auth.go                # Token extraction, context helpers
+│       ├── auth.go                # Token extraction, context helpers
+│       └── repository.go          # URL parsing helpers (ParseRepositoryURL)
 ├── migrations/
 │   ├── 001-init-schema.sql        # Users, repos, webhooks, analysis, embeddings
 │   ├── 002-add-auth-tables.sql    # Tokens, password_hash
 │   ├── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
-│   └── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
+│   ├── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
+│   └── 005-add-synced-status.sql  # Add 'synced' to sync_status check constraint
+├── tests/
+│   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
-├── .env                           # Local env vars (git-ignored)
 ├── docker-compose.yml             # Dev: PostgreSQL + Redis
 ├── CLAUDE.md                      # Project guidelines & conventions
-├── go.mod                         # Go module file
-├── go.sum                         # Dependency hashes
-├── Makefile                       # Commands: dev, build, test, lint
-└── README.md                      # This file
+├── go.mod / go.sum
+├── Makefile
+└── README.md
 ```
 
 ## 🗄️ Database
@@ -322,11 +356,14 @@ Implementadas operações CRUD para todas as entidades:
 // Users
 GetUser, GetUserByEmail, GetUserByGitHubID, CreateUser, UpdateUser, ListUsers
 
-// Repositories  
-GetRepository, GetRepositoryByURL, CreateRepository, UpdateRepository, 
+// Repositories
+GetRepository, GetRepositoryByURL, CreateRepository, UpdateRepository,
 ListRepositories, DeleteRepository, SearchRepositories
 
-// Webhooks
+// WebhookConfigs
+GetWebhookConfigByRepoID, CreateWebhookConfig, UpdateWebhookConfig
+
+// Webhooks (events)
 GetWebhook, GetWebhookByDeliveryID, CreateWebhook, UpdateWebhook,
 ListPendingWebhooks, ListFailedWebhooks
 
@@ -394,7 +431,10 @@ Job queue (internal/jobs):
   No-op fallback — NewNoopEnqueuer() logs and discards jobs silently
 
 Task type constants (internal/jobs/tasks):
-  TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings
+  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings
+
+Key builders (internal/storage/redis/keys.go):
+  TokenKey(jti), UserKey(id), RepoKey(id), SessionKey(id)
 ```
 
 ### pgx/v5 Migration Quirk
@@ -408,12 +448,12 @@ Task type constants (internal/jobs/tasks):
 
 ## 🎯 Next Steps
 
-- [ ] Repository management endpoints (CRUD + list)
-- [ ] Webhook handlers (GitHub/GitLab) — wire `TypeProcessWebhook` job
+- [x] Repository management endpoints (CRUD + GitHub sync)
+- [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
 - [ ] Code analysis API + Claude integration — wire `TypeAnalyzeRepo` job
 - [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
-- [ ] Integration tests for migration runner (requires test DB)
+- [ ] Integration tests for handlers and postgres repository (requires test DB)
 - [ ] API documentation (Swagger/OpenAPI)
 
 ## 🤝 Contribuindo
@@ -430,5 +470,5 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🏗️ Infrastructure Phase Complete (Auth + Redis Cache + Job Queue)  
-**Última atualização**: April 26, 2026
+**Status**: 🚀 Repository & Webhook Pipeline Complete (Auth + Sync + Webhook Ingestion)  
+**Última atualização**: April 27, 2026
