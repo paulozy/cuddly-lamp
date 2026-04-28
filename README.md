@@ -60,6 +60,13 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ GitHub API client — `internal/integrations/github/` (repos, branches, commits, PRs, webhooks)
 - ✅ Server boots without Redis — cache + queue degrade silently to no-op
 
+### API Documentation
+- ✅ Swagger/OpenAPI 2.0 with swaggo/swag
+- ✅ Interactive Swagger UI at `/swagger/index.html`
+- ✅ Comprehensive annotations on all 13 endpoints (auth, repository, webhook)
+- ✅ JWT security scheme documented
+- ✅ Automatic generation with `make swagger`
+
 ### Code Quality
 - ✅ Structured logging (zap)
 - ✅ .env file loading (godotenv)
@@ -162,6 +169,7 @@ make docker-logs      # Mostra logs dos containers
 make fmt              # Formata código (gofmt)
 make mod-tidy         # Atualiza go.mod/go.sum
 make clean            # Remove build artifacts
+make swagger          # Gera documentação Swagger/OpenAPI
 ```
 
 ## 🔐 Setting Up GitHub OAuth
@@ -469,11 +477,11 @@ Key builders (internal/storage/redis/keys.go):
 - [x] Repository management endpoints (CRUD + GitHub sync)
 - [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
 - [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
+- [x] API documentation (Swagger/OpenAPI)
 - [ ] Code analysis API + Claude integration — wire `TypeAnalyzeRepo` job
 - [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
-- [ ] API documentation (Swagger/OpenAPI)
 
 ## 🤝 Contribuindo
 
@@ -489,5 +497,11 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🔐 Encryption Complete (Auth + Sync + Webhook + Field-Level Encryption)  
+**Status**: 📚 Swagger/OpenAPI Complete (Auth + Sync + Webhook + Encryption + Docs)  
 **Última atualização**: April 28, 2026
+
+### 📖 Accessing the API Documentation
+```bash
+make dev
+# Open browser: http://localhost:3000/swagger/index.html
+```

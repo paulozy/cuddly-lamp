@@ -37,6 +37,16 @@
 - **CLI migration tool** (`cmd/migrate-encrypt/`) to encrypt pre-existing plaintext data
 - **Key generation**: `openssl rand -base64 32` for 32-byte (256-bit) base64-encoded key via `ENCRYPTION_KEY` env var
 
+### Swagger/OpenAPI Documentation ✅
+- **Library**: swaggo/swag (code-first, annotation-based)
+- **Format**: OpenAPI 2.0 (Swagger)
+- **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
+- **Coverage**: All 13 endpoints documented (7 auth, 5 repository, 1 webhook)
+- **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
+- **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
+- **Generation**: `make swagger` rebuilds docs/ from annotations
+- **Files**: docs/docs.go committed (for consumers without swag CLI), docs/swagger.json/yaml ignored (.gitignore)
+
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
@@ -153,7 +163,6 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - [ ] **Handler tests** — unit tests for repository and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Rate limiting** — per-user request throttling
-- [ ] **API documentation** — Swagger/OpenAPI spec
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
 
 ---
@@ -188,6 +197,27 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🔐 Field-Level Encryption Complete (Auth + Repo + Webhook + Encryption)  
-**Commits this phase**: 2 (encryption feature + docs checkpoint)  
-**Production Readiness**: ~65% (auth + repo + webhook + encryption done; needs AI integration, tests, rate limiting)
+**Status**: 📚 Swagger/OpenAPI Complete (Auth + Repo + Webhook + Encryption + Docs)  
+**Commits this phase**: 3 (encryption feature + docs checkpoint + swagger feature)  
+**Production Readiness**: ~70% (auth + repo + webhook + encryption + docs done; needs AI integration, tests, rate limiting)
+
+---
+
+## 📖 API Documentation Access
+
+**Interactive Swagger UI:**
+```bash
+make dev
+# Open: http://localhost:3000/swagger/index.html
+```
+
+**13 documented endpoints:**
+- 7 Auth endpoints (login, register, refresh, OAuth, logout, /users/me)
+- 5 Repository endpoints (CRUD)
+- 1 Webhook endpoint (GitHub receiver)
+
+**Features:**
+- ✅ JWT security scheme (BearerAuth)
+- ✅ Try-it-out functionality (test endpoints from UI)
+- ✅ Request/response examples
+- ✅ Error codes documented
