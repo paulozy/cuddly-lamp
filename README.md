@@ -15,14 +15,22 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Role-based access control (admin, maintainer, developer, viewer)
 - ✅ Token logout (access + full refresh family revocation)
 
+### Encryption & Data Security
+- ✅ AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets)
+- ✅ Key rotation support (base64-encoded 32-byte key via `ENCRYPTION_KEY`)
+- ✅ Transparent field-level encryption via GORM hooks
+- ✅ CLI migration tool for encrypting existing unencrypted data (`cmd/migrate-encrypt/`)
+- ✅ Automatic encryption on save, decryption on load
+
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 4 SQL migrations (schema, auth, oauth_connections, refresh token rotation)
+- ✅ 6 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
 - ✅ Soft deletes (deleted_at timestamps)
 - ✅ Audit triggers (created_at, updated_at automation)
+- ✅ Encrypted fields: OAuth tokens (access_token_encrypted), webhook secrets (secret_encrypted)
 
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
@@ -187,8 +195,11 @@ make clean            # Remove build artifacts
 
 ```
 backend/
-├── cmd/server/
-│   └── main.go                    # Entry point — wires DB, Redis, workers, HTTP server
+├── cmd/
+│   ├── server/
+│   │   └── main.go                    # Entry point — wires DB, Redis, workers, HTTP server
+│   └── migrate-encrypt/
+│       └── main.go                    # CLI tool to encrypt existing sensitive fields
 ├── internal/
 │   ├── api/
 │   │   ├── handlers/
@@ -206,6 +217,10 @@ backend/
 │   │   │   ├── make_repository_handler.go  # DI: repository service
 │   │   │   └── make_webhook_handler.go     # DI: webhook handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
+│   ├── crypto/                    # Field-level encryption (AES-256-GCM)
+│   │   ├── cipher.go              # Encrypt/decrypt functions
+│   │   ├── cipher_test.go         # Cipher tests
+│   │   └── serializer.go          # GORM hooks for transparent encryption
 │   ├── integrations/
 │   │   └── github/                # GitHub API client (repos, branches, commits, PRs, webhooks)
 │   │       ├── client.go          # HTTP client + ClientInterface
@@ -257,7 +272,8 @@ backend/
 │   ├── 002-add-auth-tables.sql    # Tokens, password_hash
 │   ├── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
 │   ├── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
-│   └── 005-add-synced-status.sql  # Add 'synced' to sync_status check constraint
+│   ├── 005-add-synced-status.sql  # Add 'synced' to sync_status check constraint
+│   └── 006-encrypt-sensitive-fields.sql  # Add encrypted columns (access_token_encrypted, secret_encrypted)
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -298,6 +314,8 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **ENV** - Ambiente (development/production)
 - **DB_HOST, DB_USER, DB_PASSWORD, DB_NAME** - PostgreSQL
 - **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
+- **JWT_SECRET** - Secret for JWT signing and state token validation
+- **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
 - **ANTHROPIC_API_KEY** - Claude API key
 - **GITHUB_TOKEN** - GitHub access token
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -450,6 +468,7 @@ Key builders (internal/storage/redis/keys.go):
 
 - [x] Repository management endpoints (CRUD + GitHub sync)
 - [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
+- [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
 - [ ] Code analysis API + Claude integration — wire `TypeAnalyzeRepo` job
 - [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
@@ -470,5 +489,5 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🚀 Repository & Webhook Pipeline Complete (Auth + Sync + Webhook Ingestion)  
-**Última atualização**: April 27, 2026
+**Status**: 🔐 Encryption Complete (Auth + Sync + Webhook + Field-Level Encryption)  
+**Última atualização**: April 28, 2026

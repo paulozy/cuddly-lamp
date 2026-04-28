@@ -75,7 +75,8 @@ internal/
 2. **Infrastructure**: Complete — Redis cache layer + asynq job queue wired in `main.go` with no-op fallbacks
 3. **Repository management**: Complete — CRUD endpoints, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
 4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
-5. **Next: AI Integration** — Claude integration for code analysis (`TypeAnalyzeRepo` job); wire `TypeGenerateEmbeddings` for pgvector search
+5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
+6. **Next: AI Integration** — Claude integration for code analysis (`TypeAnalyzeRepo` job); wire `TypeGenerateEmbeddings` for pgvector search
 
 ## Known Issues & Constraints
 
@@ -86,6 +87,7 @@ internal/
 - **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
 - **StringArray**: `models.StringArray` is a custom type for PostgreSQL `text[]` — use it instead of `[]string` on any GORM model field mapped to a `text[]` column
 - **Webhook registration on localhost**: skipped automatically when `WEBHOOK_BASE_URL` contains `localhost`/`127.0.0.1` — use ngrok for local webhook testing
+- **Field-level encryption**: Encrypted fields require `ENCRYPTION_KEY` at startup; existing unencrypted data must be migrated using `cmd/migrate-encrypt/` tool; decryption happens transparently via GORM `AfterFind` hooks
 
 ## Database Notes
 
@@ -94,6 +96,17 @@ internal/
 - GORM auto-migration creates columns without timezone, so explicit UTC conversion is critical
 - Column name mapping uses GORM struct tags: `gorm:"column:name"` (required for non-standard names like GitHubID → github_id)
 
+## Encryption Notes
+
+- **AES-256-GCM cipher**: Provides authenticated encryption (no separate MAC needed)
+- **Key generation**: `openssl rand -base64 32` produces a 32-byte (256-bit) key, base64-encoded
+- **Nonce (IV)**: 12-byte random nonce generated fresh per encryption; stored as ciphertext prefix
+- **Decryption flow**: GORM `AfterFind` hook extracts nonce, decrypts, stores plaintext in memory model
+- **Encryption flow**: GORM `BeforeSave` hook reads plaintext, encrypts, stores ciphertext in database
+- **Encrypted fields**: OAuth tokens (`access_token_encrypted`), webhook secrets (`secret_encrypted`)
+- **Migration**: Use `cmd/migrate-encrypt/main.go` to encrypt pre-existing plaintext data (reads from old plaintext columns, writes encrypted versions, updates foreign keys, deletes plaintext columns)
+- **Key rotation**: Not yet implemented; new `ENCRYPTION_KEY` will fail to decrypt existing ciphertext. Plan: store key version in database for multi-key support.
+
 ## Environment Configuration
 
 `.env` variables (see `.env.example`):
@@ -101,6 +114,7 @@ internal/
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`: Redis (optional — app starts without it)
 - `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`: JWT configuration
 - `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`: Token expiration (in minutes)
+- `ENCRYPTION_KEY`: Base64-encoded 32-byte AES-256-GCM key for field encryption (generate with `openssl rand -base64 32`)
 - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys
 - `WEBHOOK_BASE_URL`: Public base URL for webhook registration (e.g. ngrok URL); omit or use localhost to skip GitHub webhook registration
 - `LOG_LEVEL`: Logging verbosity (info, debug, error)
