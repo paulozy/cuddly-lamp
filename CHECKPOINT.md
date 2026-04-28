@@ -1,4 +1,4 @@
-# Project Checkpoint - April 27, 2026
+# Project Checkpoint - April 28, 2026
 
 ## 📌 What Has Been Implemented
 
@@ -29,6 +29,14 @@
 - Background processing via `webhook:process` asynq task
 - Supports: `push`, `pull_request`, `issues`, `release`, `repository`, `workflow_run`
 
+### Field-Level Encryption ✅
+- **AES-256-GCM cipher** (`internal/crypto/`) for sensitive fields with authenticated encryption
+- **Automatic encryption/decryption** via GORM hooks (`BeforeSave`, `AfterFind`)
+- **12-byte random nonce** generated per encryption, stored with ciphertext
+- **Encrypted fields**: OAuth tokens (`access_token_encrypted` on `oauth_connections`), webhook secrets (`secret_encrypted` on `webhook_configs`)
+- **CLI migration tool** (`cmd/migrate-encrypt/`) to encrypt pre-existing plaintext data
+- **Key generation**: `openssl rand -base64 32` for 32-byte (256-bit) base64-encoded key via `ENCRYPTION_KEY` env var
+
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
@@ -39,12 +47,13 @@
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 5 SQL migrations applied and tracked via `schema_migrations`
+- 6 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
   - `004`: Refresh token rotation — `family_id`, `parent_jti` columns on tokens
   - `005`: Sync status — added `'synced'` to `repositories.sync_status` check constraint
+  - `006`: Encrypted fields — `access_token_encrypted` (bytea) on `oauth_connections`, `secret_encrypted` (bytea) on `webhook_configs`
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -116,6 +125,13 @@ Valid values: `idle`, `syncing`, `synced`, `error` (enforced by DB check constra
 ### Migration Baseline
 If `schema_migrations` is empty but `users` table exists, all current migration files are seeded as applied without executing them. This handles databases created before migration tracking was introduced. **Side effect**: if a new migration file is added before baseline runs, it will be marked applied without executing — apply it manually if this happens.
 
+### Field-Level Encryption
+- **Cipher**: AES-256-GCM with 12-byte random nonce per encryption (no separate MAC needed)
+- **Storage**: Ciphertext stored as bytea; nonce prepended to ciphertext (25 bytes total minimum: 12 nonce + 1 tag + ciphertext)
+- **Transparent hooks**: GORM `BeforeSave` encrypts plaintext fields, `AfterFind` decrypts bytea to plaintext (decryption only happens in memory on fetch, plaintext never stored)
+- **Key rotation**: Not yet implemented — future: store key version in database for multi-key support
+- **Migration tool** (`cmd/migrate-encrypt/`): Reads plaintext columns, encrypts to new columns, updates models, drops plaintext columns (safe two-phase migration)
+
 ---
 
 ## 📊 Test Coverage
@@ -138,6 +154,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Rate limiting** — per-user request throttling
 - [ ] **API documentation** — Swagger/OpenAPI spec
+- [ ] **Key rotation** — store key version in database for multi-key encryption support
 
 ---
 
@@ -150,10 +167,11 @@ DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # Redis (optional — app starts without it)
 REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB
 
-# JWT
+# JWT & Encryption
 JWT_SECRET, JWT_ISSUER, JWT_AUDIENCE
 ACCESS_TOKEN_TTL=15          # minutes
 REFRESH_TOKEN_TTL=10080      # minutes (7 days)
+ENCRYPTION_KEY               # Base64-encoded 32-byte key (generate: openssl rand -base64 32)
 
 # GitHub
 GITHUB_TOKEN                 # Personal access token (repo + admin:repo_hook scopes)
@@ -170,6 +188,6 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🚀 Repository & Webhook Pipeline Complete  
-**Commits this phase**: 7 (sync fixes + repository feature + webhook pipeline + docs)  
-**Production Readiness**: ~55% (auth + repo + webhook done; needs AI integration, tests, rate limiting)
+**Status**: 🔐 Field-Level Encryption Complete (Auth + Repo + Webhook + Encryption)  
+**Commits this phase**: 2 (encryption feature + docs checkpoint)  
+**Production Readiness**: ~65% (auth + repo + webhook + encryption done; needs AI integration, tests, rate limiting)
