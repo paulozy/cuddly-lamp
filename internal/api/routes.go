@@ -2,6 +2,8 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/factories"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/handlers"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
@@ -46,6 +48,9 @@ func setupAPIRoutes(
 	repoHandler *handlers.RepositoryHandler,
 	webhookHandler *handlers.WebhookHandler,
 ) {
+	// Swagger UI
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
 	public := router.Group("/api/v1")
 	{
 		public.GET("/health", healthCheck)

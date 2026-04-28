@@ -1,4 +1,4 @@
-.PHONY: help build run dev test lint clean docker-up docker-down docker-logs
+.PHONY: help build run dev test lint clean docker-up docker-down docker-logs swagger
 
 help:
 	@echo "IDP Backend - Available commands"
@@ -22,6 +22,7 @@ help:
 	@echo "  make clean            - Clean build artifacts"
 	@echo "  make fmt              - Format code"
 	@echo "  make mod-tidy         - Tidy go.mod"
+	@echo "  make swagger          - Generate Swagger/OpenAPI documentation"
 
 # Development
 dev: docker-up
@@ -83,3 +84,8 @@ mod-tidy:
 	@echo "Tidying go.mod..."
 	@go mod tidy
 	@echo "Tidy done"
+
+swagger:
+	@echo "Generating Swagger/OpenAPI documentation..."
+	@swag init -g cmd/server/main.go -o docs --parseInternal --parseDependency
+	@echo "Swagger documentation generated in docs/"

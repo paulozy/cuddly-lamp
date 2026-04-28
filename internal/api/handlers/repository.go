@@ -19,6 +19,18 @@ func NewRepositoryHandler(repoService *services.RepositoryService) *RepositoryHa
 	return &RepositoryHandler{repoService: repoService}
 }
 
+// CreateRepository creates a new repository and triggers initial sync.
+// @Summary      Create repository
+// @Tags         repositories
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      models.CreateRepositoryRequest  true  "Repository details"
+// @Success      201   {object}  models.RepositoryResponse
+// @Failure      400   {object}  models.ErrorResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      409   {object}  models.ErrorResponse  "Repository already exists"
+// @Router       /repositories [post]
 func (h *RepositoryHandler) CreateRepository(c *gin.Context) {
 	var req models.CreateRepositoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -57,6 +69,17 @@ func (h *RepositoryHandler) CreateRepository(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+// GetRepository retrieves a single repository by ID.
+// @Summary      Get repository
+// @Tags         repositories
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id  path      string  true  "Repository ID"
+// @Success      200   {object}  models.RepositoryResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      403   {object}  models.ErrorResponse  "Access denied"
+// @Failure      404   {object}  models.ErrorResponse
+// @Router       /repositories/{id} [get]
 func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 	id := c.Param("id")
 
@@ -78,6 +101,17 @@ func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// ListRepositories lists all repositories for the authenticated user.
+// @Summary      List repositories
+// @Tags         repositories
+// @Produce      json
+// @Security     BearerAuth
+// @Param        limit   query     int  false  "Items per page"  default(20)
+// @Param        offset  query     int  false  "Pagination offset"  default(0)
+// @Success      200     {object}  models.RepositoryListResponse
+// @Failure      401     {object}  models.ErrorResponse
+// @Failure      500     {object}  models.ErrorResponse
+// @Router       /repositories [get]
 func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
@@ -103,6 +137,20 @@ func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// UpdateRepository updates repository details.
+// @Summary      Update repository
+// @Tags         repositories
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                          true  "Repository ID"
+// @Param        body  body      models.UpdateRepositoryRequest  true  "Updated repository details"
+// @Success      200   {object}  models.RepositoryResponse
+// @Failure      400   {object}  models.ErrorResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      403   {object}  models.ErrorResponse  "Access denied"
+// @Failure      404   {object}  models.ErrorResponse
+// @Router       /repositories/{id} [put]
 func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 	id := c.Param("id")
 
@@ -133,6 +181,16 @@ func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// DeleteRepository deletes a repository.
+// @Summary      Delete repository
+// @Tags         repositories
+// @Security     BearerAuth
+// @Param        id  path  string  true  "Repository ID"
+// @Success      204
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      403   {object}  models.ErrorResponse  "Access denied"
+// @Failure      404   {object}  models.ErrorResponse
+// @Router       /repositories/{id} [delete]
 func (h *RepositoryHandler) DeleteRepository(c *gin.Context) {
 	id := c.Param("id")
 

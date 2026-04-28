@@ -23,9 +23,18 @@ import (
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 	"github.com/paulozy/idp-with-ai-backend/internal/workers"
+	_ "github.com/paulozy/idp-with-ai-backend/docs"
 	"gorm.io/gorm/schema"
 )
 
+// @title           IDP with AI Backend API
+// @version         1.0
+// @description     Identity Provider platform with JWT auth and AI code analysis
+// @host            localhost:3000
+// @BasePath        /api/v1
+// @securityDefinitions.apikey BearerAuth
+// @in              header
+// @name            Authorization
 func main() {
 	godotenv.Load()
 

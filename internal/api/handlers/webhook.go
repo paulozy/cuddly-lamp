@@ -23,6 +23,20 @@ func NewWebhookHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *Webhook
 	return &WebhookHandler{repo: repo, enqueuer: enqueuer}
 }
 
+// HandleGitHubWebhook receives and processes GitHub webhook events.
+// @Summary      Receive GitHub webhook
+// @Tags         webhooks
+// @Accept       json
+// @Param        repoID                 path    string  true  "Repository ID"
+// @Param        X-Hub-Signature-256    header  string  true  "HMAC-SHA256 signature"
+// @Param        X-GitHub-Delivery      header  string  true  "Unique delivery ID (idempotency)"
+// @Param        X-GitHub-Event         header  string  true  "Event type (push, pull_request, issues, etc.)"
+// @Success      202                    "Webhook accepted for processing"
+// @Success      200                    "Duplicate delivery (already processed)"
+// @Failure      400  {object}  models.ErrorResponse  "Missing repository ID"
+// @Failure      401  {object}  models.ErrorResponse  "Invalid signature or no webhook configured"
+// @Failure      500  {object}  models.ErrorResponse  "Internal server error"
+// @Router       /webhooks/github/{repoID} [post]
 func (h *WebhookHandler) HandleGitHubWebhook(c *gin.Context) {
 	repoID := c.Param("repoID")
 	if repoID == "" {
