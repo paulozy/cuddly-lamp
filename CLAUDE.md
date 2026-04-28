@@ -16,6 +16,7 @@ Backend of an Identity Provider (IDP) platform that integrates AI for code analy
 - **ORM**: GORM v2
 - **Auth**: JWT (golang-jwt/jwt v5)
 - **Password Hashing**: Argon2 (golang.org/x/crypto/argon2)
+- **Encryption**: AES-256-GCM (crypto/aes, crypto/cipher)
 - **AI Integration**: Anthropic API (Claude for code analysis)
 
 ## Architecture
@@ -129,3 +130,35 @@ internal/
 - Do not use weak password hashing (Argon2 is required)
 - Do not mix UTC and local time — always be explicit with `.UTC()`
 - Do not skip error handling at system boundaries (API input, DB, external services)
+
+## Checkpoint — April 28, 2026
+
+**Status**: ✅ All core features complete — Auth + Repo Sync + Webhook Pipeline + Field-Level Encryption
+
+**Completed in this session**:
+1. ✅ **Field-level encryption** (`internal/crypto/`):
+   - AES-256-GCM cipher with 12-byte random nonce per encryption
+   - Transparent GORM hooks (`BeforeSave`, `AfterFind`) for automatic encryption/decryption
+   - `Serializer` interface for field-level encryption on models
+
+2. ✅ **Database migration** (`migrations/006-encrypt-sensitive-fields.sql`):
+   - Added `access_token_encrypted` to `oauth_connections`
+   - Added `secret_encrypted` to `webhook_configs`
+
+3. ✅ **CLI migration tool** (`cmd/migrate-encrypt/`):
+   - Reads plaintext fields from database
+   - Encrypts and writes to encrypted columns
+   - Updates foreign keys and deletes plaintext columns
+   - Handles both `oauth_connections` and `webhook_configs` tables
+
+4. ✅ **Configuration & server wiring**:
+   - `ENCRYPTION_KEY` environment variable (base64-encoded 32-byte key)
+   - Server initialization loads encryption key and registers GORM hooks
+   - Models updated: `OAuthConnection`, `WebhookConfig`
+
+5. ✅ **Documentation**:
+   - README updated: feature list, env variables, project structure, next steps
+   - CLAUDE.md updated: tech stack, encryption notes, env configuration, constraints
+   - Comprehensive encryption implementation guide for future maintenance
+
+**Ready for next phase**: Claude AI integration (`TypeAnalyzeRepo` job) and semantic search (`TypeGenerateEmbeddings`)
