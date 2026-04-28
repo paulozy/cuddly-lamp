@@ -24,6 +24,7 @@ type ServerConfig struct {
 	JWTAudience     string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	EncryptionKey   string
 }
 
 type DatabaseConfig struct {
@@ -73,6 +74,7 @@ func Load() *Config {
 			JWTAudience:     getEnv("JWT_AUDIENCE", "idp-users"),
 			AccessTokenTTL:  time.Duration(getEnvInt("ACCESS_TOKEN_TTL", 15)) * time.Minute,     // in minutes
 			RefreshTokenTTL: time.Duration(getEnvInt("REFRESH_TOKEN_TTL", 10080)) * time.Minute, // in minutes (7 days)
+			EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
 		},
 		Database: newDatabaseConfig(),
 		Redis: RedisConfig{

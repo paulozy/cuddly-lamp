@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	appcrypto "github.com/paulozy/idp-with-ai-backend/internal/crypto"
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -21,12 +23,25 @@ import (
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 	"github.com/paulozy/idp-with-ai-backend/internal/workers"
+	"gorm.io/gorm/schema"
 )
 
 func main() {
 	godotenv.Load()
 
 	cfg := config.Load()
+
+	encKeyRaw, err := base64.StdEncoding.DecodeString(cfg.Server.EncryptionKey)
+	if err != nil || len(encKeyRaw) != 32 {
+		fmt.Fprintln(os.Stderr, "ENCRYPTION_KEY must be a base64-encoded 32-byte value (generate with: openssl rand -base64 32)")
+		os.Exit(1)
+	}
+	cipher, err := appcrypto.New(encKeyRaw, 0x01)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize encryption cipher: %v\n", err)
+		os.Exit(1)
+	}
+	schema.RegisterSerializer("enc", appcrypto.EncryptedSerializer{Cipher: cipher})
 
 	if err := utils.InitLogger(cfg.Log.Level); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)

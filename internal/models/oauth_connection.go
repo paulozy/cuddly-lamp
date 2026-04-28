@@ -11,7 +11,7 @@ type OAuthConnection struct {
 	UserID         uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
 	Provider       string    `gorm:"type:varchar(50);not null" json:"provider"`
 	ProviderUserID string    `gorm:"type:varchar(255);not null" json:"provider_user_id"`
-	AccessToken    string    `gorm:"type:text" json:"-"`
+	AccessToken    string    `gorm:"type:bytea;serializer:enc" json:"-"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
