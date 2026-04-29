@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
@@ -159,5 +160,5 @@ func TestExtractJSON(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 && (len(s) >= len(substr)))
+	return strings.Contains(s, substr)
 }

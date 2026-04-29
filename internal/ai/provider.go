@@ -70,6 +70,14 @@ type CodeIssue struct {
 	Column        int
 	IsAIGenerated bool
 	Confidence    float32
+
+	// Security-specific fields (optional)
+	CWEID         string
+	OWASPCategory string
+
+	// Architecture-specific fields (optional)
+	Pattern      string
+	DebtCategory string
 }
 
 // CodeMetrics represents code quality metrics
