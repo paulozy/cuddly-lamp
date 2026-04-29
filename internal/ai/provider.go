@@ -50,6 +50,9 @@ type AnalysisRequest struct {
 	PRAuthor      string
 	ChangedFiles  []ChangedFile
 
+	// Computed metrics (populated by local analysis)
+	Metrics *CodeMetrics
+
 	// Analysis parameters
 	AnalysisType AnalysisType
 }

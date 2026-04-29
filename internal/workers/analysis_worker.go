@@ -12,6 +12,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
+	"github.com/paulozy/idp-with-ai-backend/internal/metrics"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
@@ -92,8 +93,17 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 	owner, repo := parts[0], parts[1]
 
-	// Build analysis request
-	analysisReq := w.buildAnalysisRequest(ctx, repository, payload, owner, repo)
+	// Calculate code metrics locally (lines of code, complexity)
+	// Note: test coverage is skipped as it's a CI artifact, not a git artifact
+	repoMetrics, err := metrics.Calculate(ctx, repository.URL, "") // no token needed for public repos, fail gracefully for private
+	if err != nil {
+		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "error", err)
+		// Don't fail the analysis — use zero metrics and continue
+		repoMetrics = &ai.CodeMetrics{}
+	}
+
+	// Build analysis request with computed metrics
+	analysisReq := w.buildAnalysisRequest(ctx, repository, payload, owner, repo, repoMetrics)
 	if analysisReq == nil {
 		return w.failAnalysis(ctx, repository, "failed to build analysis request", payload.TriggeredBy)
 	}
@@ -178,13 +188,14 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	return nil
 }
 
-func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string) *ai.AnalysisRequest {
+func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
 	req := &ai.AnalysisRequest{
 		RepositoryID:  repository.ID,
 		RepoName:      repository.Name,
 		Branch:        payload.Branch,
 		CommitSHA:     payload.CommitSHA,
 		AnalysisType:  ai.AnalysisTypeCodeReview,
+		Metrics:       repoMetrics, // computed metrics passed to Claude
 	}
 
 	// Extract metadata from repository

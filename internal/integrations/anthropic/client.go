@@ -132,9 +132,17 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 		sb.WriteString("Code Review\n")
 	}
 
+	// Include computed metrics in the prompt
+	if req.Metrics != nil {
+		sb.WriteString("\nCOMPUTED METRICS (do not recalculate):\n")
+		sb.WriteString(fmt.Sprintf("- Total lines of code: %d\n", req.Metrics.LinesOfCode))
+		sb.WriteString(fmt.Sprintf("- Estimated cyclomatic complexity: %d\n", req.Metrics.CyclomaticComplexity))
+		sb.WriteString("- Test coverage: not available (CI artifact, not in git)\n")
+	}
+
 	sb.WriteString("\nProvide your analysis as a JSON response with the following structure:\n")
-	sb.WriteString(`{"summary": "...", "issues": [{"category": "...", "severity": "...", "title": "...", "description": "...", "suggestion": "...", "file_path": "...", "line": 0}], "metrics": {"lines_of_code": 0, "cyclomatic_complexity": 0, "test_coverage": 0.0}}`)
-	sb.WriteString("\n\nIMPORTANT: Return ONLY valid JSON. Do not wrap your response in markdown code fences or backticks.")
+	sb.WriteString(`{"summary": "...", "issues": [{"category": "...", "severity": "...", "title": "...", "description": "...", "suggestion": "...", "file_path": "...", "line": 0}], "metrics": {"lines_of_code": 0, "cyclomatic_complexity": 0}}`)
+	sb.WriteString("\n\nIMPORTANT: Return ONLY valid JSON. Do not wrap your response in markdown code fences or backticks. Return metrics as received — do not recalculate.")
 
 	return sb.String()
 }
