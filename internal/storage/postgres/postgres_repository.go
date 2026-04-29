@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -378,14 +379,43 @@ func (pr *PostgresRepository) CreateCodeEmbedding(ctx context.Context, embedding
 	return nil
 }
 
-func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, repoID string, vector []float32, limit int) ([]models.CodeEmbedding, error) {
-	var embeddings []models.CodeEmbedding
+func (pr *PostgresRepository) CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error {
+	if len(embeddings) == 0 {
+		return nil
+	}
+	if err := pr.db.WithContext(ctx).CreateInBatches(embeddings, 100).Error; err != nil {
+		return fmt.Errorf("create code embeddings: %w", err)
+	}
+	return nil
+}
 
-	// Use PostgreSQL pgvector similarity search
-	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ?", repoID).
-		Order(clause.Expr{SQL: "embedding <-> ?", Vars: []interface{}{vector}}).
-		Limit(limit).
+func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, filter storage.EmbeddingSearchFilter) ([]models.CodeEmbedding, error) {
+	var embeddings []models.CodeEmbedding
+	if filter.Limit <= 0 || filter.Limit > 50 {
+		filter.Limit = 10
+	}
+
+	queryVector := pgvector.NewVector(filter.Vector)
+	query := pr.db.WithContext(ctx).
+		Select("code_embeddings.*, 1 - (embedding <=> ?) AS score", queryVector).
+		Where("repository_id = ?", filter.RepositoryID)
+
+	if filter.Provider != "" {
+		query = query.Where("provider = ?", filter.Provider)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.Dimension > 0 {
+		query = query.Where("dimension = ?", filter.Dimension)
+	}
+	if filter.Branch != "" {
+		query = query.Where("branch = ?", filter.Branch)
+	}
+
+	if err := query.
+		Order(clause.Expr{SQL: "embedding <=> ?", Vars: []interface{}{queryVector}}).
+		Limit(filter.Limit).
 		Find(&embeddings).Error; err != nil {
 		return nil, fmt.Errorf("search embeddings: %w", err)
 	}
@@ -393,9 +423,21 @@ func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, repoID strin
 	return embeddings, nil
 }
 
-func (pr *PostgresRepository) DeleteEmbeddingsByRepository(ctx context.Context, repoID string) error {
-	if err := pr.db.WithContext(ctx).
-		Delete(&models.CodeEmbedding{}, "repository_id = ?", repoID).Error; err != nil {
+func (pr *PostgresRepository) DeleteEmbeddings(ctx context.Context, filter storage.EmbeddingDeleteFilter) error {
+	query := pr.db.WithContext(ctx).Where("repository_id = ?", filter.RepositoryID)
+	if filter.Provider != "" {
+		query = query.Where("provider = ?", filter.Provider)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.Dimension > 0 {
+		query = query.Where("dimension = ?", filter.Dimension)
+	}
+	if filter.Branch != "" {
+		query = query.Where("branch = ?", filter.Branch)
+	}
+	if err := query.Delete(&models.CodeEmbedding{}).Error; err != nil {
 		return fmt.Errorf("delete embeddings by repository: %w", err)
 	}
 	return nil

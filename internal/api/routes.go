@@ -2,24 +2,26 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/factories"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/handlers"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
 )
 
 type RegisterRoutesParams struct {
-	DB       *gorm.DB
-	Config   *config.Config
-	Router   *gin.Engine
-	Cache    redisstore.Cache
-	Enqueuer jobs.Enqueuer
+	DB                *gorm.DB
+	Config            *config.Config
+	Router            *gin.Engine
+	Cache             redisstore.Cache
+	Enqueuer          jobs.Enqueuer
+	EmbeddingProvider embeddings.Provider
 }
 
 func RegisterRoutes(params *RegisterRoutesParams) {
@@ -30,7 +32,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	authConfig := factories.MakeAuthConfig(repository, params.Config)
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, int64(params.Config.API.AnthropicTokensPerHour))
+	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, int64(params.Config.API.AnthropicTokensPerHour), params.EmbeddingProvider)
 
 	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler)
 }
@@ -81,5 +83,7 @@ func setupAPIRoutes(
 		// Analysis routes
 		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)
 		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
+		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
+		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/datatypes"
 )
 
@@ -133,7 +134,7 @@ type CodeAnalysis struct {
 	WarningCount  int `json:"warning_count"`
 	InfoCount     int `json:"info_count"`
 
-	TriggeredBy   string `gorm:"type:varchar(255)" json:"triggered_by"` // user, webhook, schedule
+	TriggeredBy   string  `gorm:"type:varchar(255)" json:"triggered_by"` // user, webhook, schedule
 	TriggeredByID *string `gorm:"type:uuid" json:"triggered_by_id,omitempty"`
 
 	IsAIAnalysis bool   `gorm:"default:true" json:"is_ai_analysis"`
@@ -143,8 +144,8 @@ type CodeAnalysis struct {
 
 	ErrorMessage string `gorm:"type:text" json:"error_message,omitempty"`
 	// Audit
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
 	EmbeddingID *string `gorm:"type:uuid" json:"embedding_id,omitempty"` // Link to code embedding if created
@@ -259,7 +260,13 @@ type CodeEmbedding struct {
 	StartLine   int    `json:"start_line,omitempty"`
 	EndLine     int    `json:"end_line,omitempty"`
 
-	Embedding []float32 `gorm:"type:vector(1536)"  json:"embedding,omitempty"` // 1536 for OpenAI embeddings
+	Provider  string          `gorm:"type:varchar(50);default:'voyage';index" json:"provider,omitempty"`
+	Model     string          `gorm:"type:varchar(100);default:'voyage-code-3';index" json:"model,omitempty"`
+	Dimension int             `gorm:"default:1024;index" json:"dimension,omitempty"`
+	Branch    string          `gorm:"type:varchar(255);index" json:"branch,omitempty"`
+	CommitSHA string          `gorm:"type:varchar(100)" json:"commit_sha,omitempty"`
+	Embedding pgvector.Vector `gorm:"type:vector(1024)" json:"embedding,omitempty"`
+	Score     float64         `gorm:"column:score;->" json:"score,omitempty"`
 
 	Tokens    int       `json:"tokens,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
