@@ -24,6 +24,9 @@ type ClientInterface interface {
 	ListPullRequests(ctx context.Context, owner, repo string) ([]PullRequest, error)
 	CreateWebhook(ctx context.Context, owner, repo, webhookURL, secret string) (int64, error)
 	DeleteWebhook(ctx context.Context, owner, repo string, webhookID int64) error
+	GetPullRequest(ctx context.Context, owner, repo string, prID int64) (*PullRequest, error)
+	GetPullRequestFiles(ctx context.Context, owner, repo string, prID int64) ([]PRFile, error)
+	CreatePullRequestReview(ctx context.Context, owner, repo string, prID int64, body string, event string, comments []ReviewCommentInput) (int64, error)
 }
 
 type RepoInfo struct {
@@ -60,9 +63,28 @@ type commitUser struct {
 }
 
 type PullRequest struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	State  string `json:"state"`
+	ID              int64  `json:"id"`
+	Number          int64  `json:"number"`
+	Title           string `json:"title"`
+	Body            string `json:"body"`
+	State           string `json:"state"` // open, closed
+	User            User   `json:"user"`
+	Head            Branch `json:"head"`
+	Base            Branch `json:"base"`
+	MergedAt        string `json:"merged_at,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+	Draft           bool   `json:"draft"`
+	CommitsCount    int    `json:"commits"`
+	ChangedFiles    int    `json:"changed_files"`
+	AdditionsCount  int    `json:"additions"`
+	DeletionsCount  int    `json:"deletions"`
+}
+
+type User struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Name  string `json:"name,omitempty"`
 }
 
 type Client struct {

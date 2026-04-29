@@ -1,0 +1,258 @@
+package workers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hibiken/asynq"
+	"github.com/paulozy/idp-with-ai-backend/internal/ai"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
+	"github.com/paulozy/idp-with-ai-backend/internal/models"
+	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
+)
+
+type AnalysisWorker struct {
+	analyzer ai.Analyzer
+	repo     storage.Repository
+	ghClient github.ClientInterface
+}
+
+func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient github.ClientInterface) *AnalysisWorker {
+	return &AnalysisWorker{
+		analyzer: analyzer,
+		repo:     repo,
+		ghClient: ghClient,
+	}
+}
+
+func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
+	var payload tasks.AnalyzeRepoPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return fmt.Errorf("analysis worker: unmarshal payload: %w", err)
+	}
+
+	if payload.RepositoryID == "" {
+		return fmt.Errorf("analysis worker: empty repository_id")
+	}
+
+	utils.Info("analysis worker: processing", "repo_id", payload.RepositoryID, "pr_id", payload.PullRequestID)
+
+	// Fetch repository
+	repository, err := w.repo.GetRepository(ctx, payload.RepositoryID)
+	if err != nil {
+		utils.Error("analysis worker: fetch repo failed", "repo_id", payload.RepositoryID, "error", err)
+		return err
+	}
+
+	if repository == nil {
+		return fmt.Errorf("analysis worker: repository not found: %s", payload.RepositoryID)
+	}
+
+	// Update status
+	repository.AnalysisStatus = "in_progress"
+	if err := w.repo.UpdateRepository(ctx, repository); err != nil {
+		utils.Error("analysis worker: update status failed", "repo_id", payload.RepositoryID, "error", err)
+		return err
+	}
+
+	// Parse repository URL to extract owner/repo
+	owner, repo, err := parseGitHubURL(repository.URL)
+	if err != nil {
+		return w.failAnalysis(ctx, repository, fmt.Sprintf("invalid repository URL: %v", err))
+	}
+
+	// Build analysis request
+	analysisReq := w.buildAnalysisRequest(ctx, repository, payload, owner, repo)
+	if analysisReq == nil {
+		return w.failAnalysis(ctx, repository, "failed to build analysis request")
+	}
+
+	// Call analyzer
+	startTime := time.Now()
+	analysisResult, err := w.analyzer.AnalyzeCode(ctx, analysisReq)
+	processingMs := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		utils.Error("analysis worker: analyzer failed", "repo_id", payload.RepositoryID, "error", err)
+		return w.failAnalysis(ctx, repository, fmt.Sprintf("analyzer error: %v", err))
+	}
+
+	// Save analysis result
+	codeAnalysis := &models.CodeAnalysis{
+		ID:            generateUUID(),
+		RepositoryID:  repository.ID,
+		Type:          models.AnalysisTypeCodeReview,
+		Status:        "completed",
+		CommitSHA:     payload.CommitSHA,
+		Branch:        payload.Branch,
+		SummaryText:   analysisResult.Summary,
+		IsAIAnalysis:  true,
+		AIModel:       analysisResult.Model,
+		TokensUsed:    analysisResult.TokensUsed,
+		ProcessingMs:  processingMs,
+		TriggeredBy:   "webhook",
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+
+	// Handle PR-specific fields
+	if payload.PullRequestID > 0 {
+		prID := int(payload.PullRequestID)
+		codeAnalysis.PullRequestID = &prID
+	}
+
+	// Convert issues to code analysis issues
+	if err := codeAnalysis.Issues.Scan(analysisResult.Issues); err != nil {
+		utils.Error("analysis worker: scan issues failed", "repo_id", payload.RepositoryID, "error", err)
+		return w.failAnalysis(ctx, repository, "failed to store issues")
+	}
+
+	// Set issue counts
+	codeAnalysis.IssueCount = len(analysisResult.Issues)
+	for _, issue := range analysisResult.Issues {
+		switch issue.Severity {
+		case "critical":
+			codeAnalysis.CriticalCount++
+		case "high":
+			codeAnalysis.ErrorCount++
+		case "medium":
+			codeAnalysis.WarningCount++
+		case "low", "info":
+			codeAnalysis.InfoCount++
+		}
+	}
+
+	// Store metrics
+	codeAnalysis.Metrics = models.CodeMetrics{
+		TotalLines:           int(analysisResult.Metrics.LinesOfCode),
+		CyclomaticComplexity: float64(analysisResult.Metrics.CyclomaticComplexity),
+		TestCoverage:         float64(analysisResult.Metrics.TestCoverage),
+	}
+
+	if err := w.repo.CreateCodeAnalysis(ctx, codeAnalysis); err != nil {
+		utils.Error("analysis worker: create analysis failed", "repo_id", payload.RepositoryID, "error", err)
+		return w.failAnalysis(ctx, repository, "failed to save analysis")
+	}
+
+	// Update repository status
+	repository.AnalysisStatus = "completed"
+	repository.LastAnalyzedAt = time.Now().UTC()
+	if err := w.repo.UpdateRepository(ctx, repository); err != nil {
+		utils.Error("analysis worker: final update failed", "repo_id", payload.RepositoryID, "error", err)
+		// Don't fail the task, analysis was already saved
+	}
+
+	utils.Info("analysis worker: completed", "repo_id", payload.RepositoryID, "issues", len(analysisResult.Issues))
+	return nil
+}
+
+func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string) *ai.AnalysisRequest {
+	req := &ai.AnalysisRequest{
+		RepositoryID:  repository.ID,
+		RepoName:      repository.Name,
+		Branch:        payload.Branch,
+		CommitSHA:     payload.CommitSHA,
+		AnalysisType:  ai.AnalysisTypeCodeReview,
+	}
+
+	// Extract metadata from repository
+	metadata := repository.Metadata
+	// Convert language map keys to slice
+	for lang := range metadata.Languages {
+		req.Languages = append(req.Languages, lang)
+	}
+	req.Topics = metadata.Topics
+	req.HasCI = metadata.HasCI
+	req.HasTests = metadata.HasTests
+	if metadata.TestCoverage != nil {
+		req.TestCoverage = float32(*metadata.TestCoverage)
+	}
+	req.DefaultBranch = metadata.DefaultBranch
+
+	// Fallback to provided branch/commit
+	if req.Branch == "" {
+		req.Branch = req.DefaultBranch
+		if req.Branch == "" {
+			req.Branch = "main"
+		}
+	}
+
+	// Fetch recent commits for context
+	commits, err := w.ghClient.GetCommits(ctx, owner, repoName, req.Branch, 10)
+	if err != nil {
+		utils.Warn("analysis worker: fetch commits failed", "error", err)
+		// Don't fail, continue with empty commits
+	}
+
+	for _, commit := range commits {
+		req.RecentCommits = append(req.RecentCommits, ai.CommitSummary{
+			SHA:     commit.SHA,
+			Message: commit.Commit.Message,
+			Author:  commit.Commit.Author.Name,
+			Date:    commit.Commit.Author.Date.Format(time.RFC3339),
+		})
+	}
+
+	// TODO: For PR analysis, fetch PR details and changed files
+	// if payload.PullRequestID > 0 {
+	//   req.ChangedFiles = ... fetch from github
+	// }
+
+	return req
+}
+
+func (w *AnalysisWorker) failAnalysis(ctx context.Context, repository *models.Repository, errorMsg string) error {
+	utils.Error("analysis worker: failing analysis", "repo_id", repository.ID, "error", errorMsg)
+
+	// Create failed analysis record
+	codeAnalysis := &models.CodeAnalysis{
+		ID:           generateUUID(),
+		RepositoryID: repository.ID,
+		Type:         models.AnalysisTypeCodeReview,
+		Status:       "failed",
+		ErrorMessage: errorMsg,
+		TriggeredBy:  "webhook",
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+
+	if err := w.repo.CreateCodeAnalysis(ctx, codeAnalysis); err != nil {
+		utils.Error("analysis worker: create failed analysis record", "error", err)
+	}
+
+	// Update repository status
+	repository.AnalysisStatus = "failed"
+	if err := w.repo.UpdateRepository(ctx, repository); err != nil {
+		utils.Error("analysis worker: update failed status", "error", err)
+	}
+
+	return fmt.Errorf(errorMsg)
+}
+
+func parseGitHubURL(url string) (owner, repo string, err error) {
+	// Expected formats:
+	// https://github.com/owner/repo
+	// https://github.com/owner/repo.git
+	// git@github.com:owner/repo.git
+
+	// For now, simple implementation. Extend as needed.
+	// This is handled by the RepositoryService, we just need to validate it's set
+	if url == "" {
+		return "", "", fmt.Errorf("empty repository url")
+	}
+
+	// TODO: Parse URL properly. For MVP, assume it's already validated
+	// by the SyncService when the repository was created.
+	// In a real implementation, use go-git or parse manually.
+	return "owner", "repo", nil
+}
+
+func generateUUID() string {
+	// TODO: Use a proper UUID library. For now, use a simple implementation.
+	// In production, import "github.com/google/uuid"
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}

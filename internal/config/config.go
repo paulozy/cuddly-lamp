@@ -45,9 +45,10 @@ type RedisConfig struct {
 }
 
 type APIConfig struct {
-	AnthropicAPIKey string
-	GithubToken     string
-	WebhookBaseURL  string // public base URL for webhook endpoints, e.g. https://api.example.com
+	AnthropicAPIKey       string
+	GithubToken           string
+	WebhookBaseURL        string // public base URL for webhook endpoints, e.g. https://api.example.com
+	GitHubPRReviewEnabled bool   // whether to post PR reviews
 }
 
 type LogConfig struct {
@@ -84,9 +85,10 @@ func Load() *Config {
 			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 		API: APIConfig{
-			AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),
-			GithubToken:     getEnv("GITHUB_TOKEN", ""),
-			WebhookBaseURL:  getEnv("WEBHOOK_BASE_URL", ""),
+			AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
+			GithubToken:           getEnv("GITHUB_TOKEN", ""),
+			WebhookBaseURL:        getEnv("WEBHOOK_BASE_URL", ""),
+			GitHubPRReviewEnabled: getEnvBool("GITHUB_PR_REVIEW_ENABLED", false),
 		},
 		OAuth: OAuthConfig{
 			Providers: map[string]OAuthProviderConfig{
@@ -143,6 +145,15 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
 		}
 	}
 	return defaultValue

@@ -82,12 +82,46 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 	}
 
 	switch webhook.EventType {
-	case models.WebhookEventPush, models.WebhookEventPullRequest:
+	case models.WebhookEventPush:
 		utils.Info("webhook processor: triggering sync", "event", webhook.EventType, "repo_id", repoID)
 		syncPayload := tasks.SyncRepoPayload{RepositoryID: repoID}
 		if err := w.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, syncPayload); err != nil {
 			return fmt.Errorf("enqueue sync job: %w", err)
 		}
+
+		// Trigger analysis for push events if repository needs analysis
+		repo, err := w.repo.GetRepository(ctx, repoID)
+		if err == nil && repo != nil && repo.AnalysisStatus != "in_progress" {
+			analyzePayload := tasks.AnalyzeRepoPayload{
+				RepositoryID: repoID,
+				Branch:       webhook.EventPayload.Branch,
+				CommitSHA:    webhook.EventPayload.CommitSHA,
+				Type:         "code_review",
+			}
+			if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
+				utils.Warn("webhook processor: failed to enqueue analysis", "repo_id", repoID, "error", err)
+				// Don't fail the whole webhook if analysis fails to enqueue
+			}
+		}
+
+	case models.WebhookEventPullRequest:
+		utils.Info("webhook processor: triggering analysis for PR", "event", webhook.EventType, "repo_id", repoID)
+		// For PR events, trigger analysis directly
+		var prID int64
+		if webhook.EventPayload.PullRequestID != nil {
+			prID = int64(*webhook.EventPayload.PullRequestID)
+		}
+		analyzePayload := tasks.AnalyzeRepoPayload{
+			RepositoryID:  repoID,
+			Branch:        webhook.EventPayload.Branch,
+			CommitSHA:     webhook.EventPayload.CommitSHA,
+			PullRequestID: prID,
+			Type:          "code_review",
+		}
+		if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
+			return fmt.Errorf("enqueue analysis job: %w", err)
+		}
+
 	default:
 		utils.Info("webhook processor: ignoring event type", "event", webhook.EventType)
 	}

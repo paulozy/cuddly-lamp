@@ -16,3 +16,16 @@ type SyncRepoPayload struct {
 type WebhookProcessPayload struct {
 	WebhookID string `json:"webhook_id"`
 }
+
+type AnalyzeRepoPayload struct {
+	RepositoryID  string `json:"repository_id"`
+	Branch        string `json:"branch,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	PullRequestID int64  `json:"pull_request_id,omitempty"`
+	Type          string `json:"type,omitempty"`
+}
+
+type GenerateEmbeddingsPayload struct {
+	RepositoryID string `json:"repository_id"`
+	AnalysisID   string `json:"analysis_id,omitempty"`
+}

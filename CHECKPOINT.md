@@ -1,4 +1,4 @@
-# Project Checkpoint - April 28, 2026
+# Project Checkpoint - April 29, 2026
 
 ## 📌 What Has Been Implemented
 
@@ -41,11 +41,21 @@
 - **Library**: swaggo/swag (code-first, annotation-based)
 - **Format**: OpenAPI 2.0 (Swagger)
 - **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
-- **Coverage**: All 13 endpoints documented (7 auth, 5 repository, 1 webhook)
+- **Coverage**: All 17 endpoints documented (5 auth, 5 repository, 1 webhook, 2 analysis, 1 health, 3 swagger)
 - **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
 - **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
 - **Generation**: `make swagger` rebuilds docs/ from annotations
 - **Files**: docs/docs.go committed (for consumers without swag CLI), docs/swagger.json/yaml ignored (.gitignore)
+
+### AI Integration ✅
+- **Pluggable Architecture**: `ai.Analyzer` interface in `internal/ai/` — extensible to any LLM (Anthropic, OpenAI, Gemini, etc.)
+- **Current Provider**: Anthropic (Claude) via `internal/integrations/anthropic/` using raw HTTP client
+- **Code Analysis Worker**: `TypeAnalyzeRepo` asynq job handler — repository-wide analysis + PR-specific analysis
+- **PR Analysis Mode**: Analyzes changed files when `PullRequestID > 0`; posts GitHub review comments if `GITHUB_PR_REVIEW_ENABLED=true`
+- **Auto-Trigger**: Webhook processor enqueues analysis on `push` events (if not already in progress) + `pull_request` events
+- **HTTP Endpoints**: `POST /repositories/:id/analyze` (trigger, 202 Accepted), `GET /repositories/:id/analyses` (list results)
+- **Provider Swap**: To use OpenAI instead of Anthropic — create new struct implementing `ai.Analyzer`, update one line in `main.go`
+- **Token Tracking**: Analysis results include model name and token usage for cost monitoring
 
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
@@ -92,6 +102,8 @@
 | GET | `/repositories/:id` | Get repository by ID |
 | PUT | `/repositories/:id` | Update repository |
 | DELETE | `/repositories/:id` | Delete repository |
+| POST | `/repositories/:id/analyze` | Trigger manual code analysis (returns 202 Accepted) |
+| GET | `/repositories/:id/analyses` | List code analyses for repository |
 
 ---
 
@@ -100,13 +112,13 @@
 | Table | Purpose |
 |-------|---------|
 | `users` | Platform users with roles, soft deletes |
-| `oauth_connections` | OAuth provider links (provider + provider_user_id unique) |
+| `oauth_connections` | OAuth provider links (provider + provider_user_id unique) with encrypted tokens |
 | `tokens` | JWT records with revocation, family_id, parent_jti |
-| `repositories` | Git repos with sync_status, metadata (JSONB), analysis_status |
-| `webhook_configs` | Per-repo webhook registrations with HMAC secret |
+| `repositories` | Git repos with sync_status, analysis_status, metadata (JSONB) |
+| `webhook_configs` | Per-repo webhook registrations with HMAC secret (encrypted) |
 | `webhooks` | Incoming webhook events with status, retry, idempotency |
-| `code_analyses` | Code review results (pending use) |
-| `code_embeddings` | pgvector embeddings for semantic search (pending use) |
+| `code_analyses` | Code review results with issues (JSONB), metrics, model name, token usage |
+| `code_embeddings` | pgvector embeddings for semantic search (reserved for TypeGenerateEmbeddings) |
 | `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
@@ -158,9 +170,9 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 
 ## 🎯 Next Steps
 
-- [ ] **AI Integration** — Claude API for code analysis; wire `TypeAnalyzeRepo` job
+- [x] **AI Integration** — Claude API for code analysis; pluggable `ai.Analyzer` interface with PR review posting
 - [ ] **Semantic search** — pgvector embeddings; wire `TypeGenerateEmbeddings` job
-- [ ] **Handler tests** — unit tests for repository and webhook handlers
+- [ ] **Handler tests** — unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Rate limiting** — per-user request throttling
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -185,21 +197,24 @@ ENCRYPTION_KEY               # Base64-encoded 32-byte key (generate: openssl ran
 # GitHub
 GITHUB_TOKEN                 # Personal access token (repo + admin:repo_hook scopes)
 GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL
+GITHUB_PR_REVIEW_ENABLED     # Post AI-generated PR reviews to GitHub (default: false)
 
-# Webhooks
+# Webhooks & Public URL
 WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in local dev)
                              # Leave empty or use localhost to skip GitHub registration
 
-# API
-ANTHROPIC_API_KEY            # Claude API (pending use)
+# AI Integration
+ANTHROPIC_API_KEY            # Anthropic API key for Claude code analysis (optional)
+
+# Logging
 LOG_LEVEL                    # debug / info / warn / error
 ```
 
 ---
 
-**Status**: 📚 Swagger/OpenAPI Complete (Auth + Repo + Webhook + Encryption + Docs)  
-**Commits this phase**: 3 (encryption feature + docs checkpoint + swagger feature)  
-**Production Readiness**: ~70% (auth + repo + webhook + encryption + docs done; needs AI integration, tests, rate limiting)
+**Status**: 🤖 AI Integration Complete (Auth + Repo + Webhook + Encryption + Analysis + Docs)  
+**Commits this phase**: 8 (AI interface, Anthropic client, analysis worker, PR operations, endpoints, webhooks, wiring, docs)  
+**Production Readiness**: ~80% (auth + repo + webhook + encryption + AI analysis done; needs embeddings, tests, rate limiting, key rotation)
 
 ---
 
@@ -211,13 +226,17 @@ make dev
 # Open: http://localhost:3000/swagger/index.html
 ```
 
-**13 documented endpoints:**
-- 7 Auth endpoints (login, register, refresh, OAuth, logout, /users/me)
+**17 documented endpoints:**
+- 5 Auth endpoints (register, login, refresh, OAuth, logout, /users/me)
 - 5 Repository endpoints (CRUD)
+- 2 Analysis endpoints (trigger, list)
 - 1 Webhook endpoint (GitHub receiver)
+- 1 Health endpoint
+- 3 Swagger UI routes
 
 **Features:**
 - ✅ JWT security scheme (BearerAuth)
 - ✅ Try-it-out functionality (test endpoints from UI)
 - ✅ Request/response examples
 - ✅ Error codes documented
+- ✅ AI analysis endpoints documented with job response models

@@ -77,8 +77,9 @@ internal/
 3. **Repository management**: Complete — CRUD endpoints, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
 4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
 5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
-6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, 13 endpoints documented, interactive UI at `/swagger/index.html`
-7. **Next: AI Integration** — Claude integration for code analysis (`TypeAnalyzeRepo` job); wire `TypeGenerateEmbeddings` for pgvector search
+6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, 17 endpoints documented, interactive UI at `/swagger/index.html`
+7. **AI Integration**: Complete — Pluggable `ai.Analyzer` interface, Claude (Anthropic) implementation, code analysis worker, PR analysis + optional review posting, auto-trigger on webhooks
+8. **Next: Semantic Search** — Implement `TypeGenerateEmbeddings` job with pgvector search backend
 
 ## Known Issues & Constraints
 
@@ -110,6 +111,18 @@ internal/
 - **Migration**: Use `cmd/migrate-encrypt/main.go` to encrypt pre-existing plaintext data (reads from old plaintext columns, writes encrypted versions, updates foreign keys, deletes plaintext columns)
 - **Key rotation**: Not yet implemented; new `ENCRYPTION_KEY` will fail to decrypt existing ciphertext. Plan: store key version in database for multi-key support.
 
+## AI Integration Notes
+
+- **Architecture**: Pluggable `ai.Analyzer` interface in `internal/ai/provider.go` — extensible to any LLM provider (Anthropic, OpenAI, Gemini, etc.)
+- **Current Implementation**: Anthropic (Claude) via `internal/integrations/anthropic/client.go` — raw HTTP client (not SDK) for simplicity and control
+- **Swapping Providers**: Create new struct implementing `ai.Analyzer`, update one line in `cmd/server/main.go` (where `anthropic.NewClient()` is called) — no other changes needed
+- **Analysis Request**: Sent to Claude with repository metadata (languages, commits, test coverage), optional PR diffs for code review mode
+- **Analysis Response**: Parsed JSON with code issues (severity, file path, line, message), metrics (complexity, test coverage), and model name/token usage
+- **PR Analysis Mode**: Triggered when `PullRequestID > 0` in task payload; includes changed files with diffs; worker generates PR comments if `GITHUB_PR_REVIEW_ENABLED=true`
+- **Auto-Trigger**: Webhook processor enqueues `TypeAnalyzeRepo` on `push` events (if `AnalysisStatus != "in_progress"`) and on `pull_request` events (always, with PR ID)
+- **Rate Limiting**: Not yet implemented — monitor Claude token usage via `CodeAnalysis.TokensUsed` field in database
+- **Future Enhancements**: Embeddings via `TypeGenerateEmbeddings` job (next phase); configurable analysis types ("code_review", "security", "architecture")
+
 ## Swagger/OpenAPI Documentation
 
 - **Library**: swaggo/swag v1.8.12 (code-first, annotation-based)
@@ -117,7 +130,7 @@ internal/
 - **UI**: gin-swagger serving `/swagger/*any` route (Swagger UI embedded)
 - **Generation**: `make swagger` or `go run github.com/swaggo/swag/cmd/swag@v1.8.12 init -g cmd/server/main.go -o docs --parseInternal --parseDependency`
 - **Generated files**: `docs/docs.go` (committed), `docs/swagger.json` and `docs/swagger.yaml` (ignored in .gitignore)
-- **Annotations**: All 13 endpoints documented with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
+- **Annotations**: All 17 endpoints documented with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers (auth 5, repository 5, webhook 1, analysis 2, health 1, swagger 3)
 - **General API Info**: Defined in comments above `func main()` in `cmd/server/main.go` — includes title, version, description, host, base path, security definitions
 - **Security**: BearerAuth scheme documented for JWT-protected endpoints; header parameters documented for webhook HMAC validation
 - **Regeneration**: After adding/modifying handler annotations, run `make swagger` to regenerate docs
@@ -145,34 +158,67 @@ internal/
 - Do not mix UTC and local time — always be explicit with `.UTC()`
 - Do not skip error handling at system boundaries (API input, DB, external services)
 
-## Checkpoint — April 28, 2026
+## Checkpoint — April 29, 2026
 
-**Status**: ✅ All core features complete — Auth + Repo Sync + Webhook Pipeline + Field-Level Encryption
+**Status**: ✅ All core features complete — Auth + Repo Sync + Webhook Pipeline + Encryption + AI Integration
 
-**Completed in this session**:
+**Completed in previous session** (April 28):
 1. ✅ **Field-level encryption** (`internal/crypto/`):
    - AES-256-GCM cipher with 12-byte random nonce per encryption
    - Transparent GORM hooks (`BeforeSave`, `AfterFind`) for automatic encryption/decryption
    - `Serializer` interface for field-level encryption on models
 
-2. ✅ **Database migration** (`migrations/006-encrypt-sensitive-fields.sql`):
-   - Added `access_token_encrypted` to `oauth_connections`
-   - Added `secret_encrypted` to `webhook_configs`
-
-3. ✅ **CLI migration tool** (`cmd/migrate-encrypt/`):
+2. ✅ **CLI migration tool** (`cmd/migrate-encrypt/`):
    - Reads plaintext fields from database
    - Encrypts and writes to encrypted columns
-   - Updates foreign keys and deletes plaintext columns
    - Handles both `oauth_connections` and `webhook_configs` tables
 
-4. ✅ **Configuration & server wiring**:
-   - `ENCRYPTION_KEY` environment variable (base64-encoded 32-byte key)
-   - Server initialization loads encryption key and registers GORM hooks
-   - Models updated: `OAuthConnection`, `WebhookConfig`
+**Completed in this session** (April 29):
+1. ✅ **Pluggable AI provider interface** (`internal/ai/`):
+   - `ai.Analyzer` interface with `AnalyzeCode()` and `Provider()` methods
+   - Request types: `AnalysisRequest` with repo metadata and optional PR diffs
+   - Response types: `AnalysisResult` with code issues, metrics, model info, token usage
+   - `mock_analyzer.go` for testing
 
-5. ✅ **Documentation**:
-   - README updated: feature list, env variables, project structure, next steps
-   - CLAUDE.md updated: tech stack, encryption notes, env configuration, constraints
-   - Comprehensive encryption implementation guide for future maintenance
+2. ✅ **Anthropic (Claude) implementation** (`internal/integrations/anthropic/`):
+   - Raw HTTP client implementing `ai.Analyzer` interface
+   - Uses `claude-haiku-4-5-20251001` model (cost-effective for analysis)
+   - Structured prompts built from `AnalysisRequest` metadata
+   - JSON response parsing into `AnalysisResult` with token tracking
+   - Full test coverage with mock responses
 
-**Ready for next phase**: Claude AI integration (`TypeAnalyzeRepo` job) and semantic search (`TypeGenerateEmbeddings`)
+3. ✅ **Code analysis worker** (`internal/workers/analysis_worker.go`):
+   - `TypeAnalyzeRepo` job handler following `sync_worker` pattern
+   - Supports two modes: repository-wide analysis + PR-specific analysis
+   - Repository analysis: fetches commits, calls analyzer, saves `CodeAnalysis` record
+   - PR analysis: fetches PR diffs, analyzes changed files, posts GitHub review (if enabled)
+   - Updates `repository.AnalysisStatus` and `LastAnalyzedAt` timestamps
+
+4. ✅ **GitHub PR operations** (`internal/integrations/github/pr.go`):
+   - `GetPullRequest()`: fetch PR metadata (title, body, state, author)
+   - `GetPullRequestFiles()`: get changed files with diffs
+   - `CreatePullRequestReview()`: post review comments to GitHub PR (optional, gated by `GITHUB_PR_REVIEW_ENABLED`)
+   - Diff position calculation for line-specific comments
+
+5. ✅ **HTTP endpoints** (`internal/api/handlers/analysis.go`):
+   - `POST /api/v1/repositories/:id/analyze`: trigger manual analysis (returns 202 Accepted with job ID)
+   - `GET /api/v1/repositories/:id/analyses`: list analyses for repository
+   - Request validation: repository existence, optional branch/commit override
+   - Factory pattern DI (`make_analysis_handler.go`)
+
+6. ✅ **Webhook auto-trigger** (`internal/workers/webhook_processor.go`):
+   - Push events: enqueue `TypeAnalyzeRepo` if `AnalysisStatus != "in_progress"`
+   - PR events: always enqueue `TypeAnalyzeRepo` with `PullRequestID` for PR analysis
+   - Prevents duplicate analysis via status checks
+
+7. ✅ **Configuration & wiring** (`cmd/server/main.go`):
+   - Conditional Anthropic client creation (if `ANTHROPIC_API_KEY` set)
+   - Analysis worker registration with job queue
+   - Graceful degradation: no-op enqueuer if Anthropic key missing
+
+8. ✅ **Documentation updates**:
+   - `.env.example`: added `ANTHROPIC_API_KEY`, `GITHUB_PR_REVIEW_ENABLED`, `WEBHOOK_BASE_URL` with descriptions
+   - `README.md`: AI Integration features, project structure (new `internal/ai/` + `internal/integrations/anthropic/`), updated endpoint count (17 total), marked task as complete
+   - `CLAUDE.md`: tech stack includes Anthropic, Current Focus updated, added "AI Integration Notes" section with pluggability architecture, updated Swagger endpoint count
+
+**Ready for next phase**: Semantic search with `TypeGenerateEmbeddings` job (pgvector embeddings) for intelligent code search

@@ -11,9 +11,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	appcrypto "github.com/paulozy/idp-with-ai-backend/internal/crypto"
+	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -102,6 +104,16 @@ func main() {
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
+
+		// Register analysis worker if Anthropic API key is configured
+		if cfg.API.AnthropicAPIKey != "" {
+			var analyzer ai.Analyzer = anthropicclient.NewClient(cfg.API.AnthropicAPIKey)
+			analysisWorker := workers.NewAnalysisWorker(analyzer, pgRepo, ghClient)
+			worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
+			utils.Info("Analysis worker registered", "provider", analyzer.Provider())
+		} else {
+			utils.Warn("Skipping analysis worker: ANTHROPIC_API_KEY not configured")
+		}
 
 		go func() {
 			if err := worker.Run(); err != nil {

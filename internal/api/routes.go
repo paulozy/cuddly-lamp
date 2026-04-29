@@ -30,8 +30,9 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	authConfig := factories.MakeAuthConfig(repository, params.Config)
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
+	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -47,6 +48,7 @@ func setupAPIRoutes(
 	authMiddleware gin.HandlerFunc,
 	repoHandler *handlers.RepositoryHandler,
 	webhookHandler *handlers.WebhookHandler,
+	analysisHandler *handlers.AnalysisHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -75,5 +77,9 @@ func setupAPIRoutes(
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
 		protected.PUT("/repositories/:id", repoHandler.UpdateRepository)
 		protected.DELETE("/repositories/:id", repoHandler.DeleteRepository)
+
+		// Analysis routes
+		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)
+		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
 	}
 }

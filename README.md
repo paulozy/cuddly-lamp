@@ -63,9 +63,20 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 ### API Documentation
 - ✅ Swagger/OpenAPI 2.0 with swaggo/swag
 - ✅ Interactive Swagger UI at `/swagger/index.html`
-- ✅ Comprehensive annotations on all 13 endpoints (auth, repository, webhook)
+- ✅ Comprehensive annotations on all 17 endpoints (auth, repository, webhook, analysis)
 - ✅ JWT security scheme documented
 - ✅ Automatic generation with `make swagger`
+
+### AI Integration
+- ✅ Pluggable `ai.Analyzer` interface for code analysis
+- ✅ Anthropic (Claude) implementation with automatic HTTP client
+- ✅ Analysis worker (`TypeAnalyzeRepo` job) — triggers on push/PR webhook events
+- ✅ Pull request analysis with diff parsing and file-level commenting
+- ✅ PR review posting (optional via `GITHUB_PR_REVIEW_ENABLED=true`)
+- ✅ HTTP endpoints: `POST /repositories/:id/analyze`, `GET /repositories/:id/analyses`
+- ✅ Support for multiple analysis types: `code_review`, `security`, `architecture`
+- ✅ Auto-trigger: analyze repositories on `push` events, create PR comments on `pull_request` events
+- ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
 
 ### Code Quality
 - ✅ Structured logging (zap)
@@ -213,7 +224,8 @@ backend/
 │   │   ├── handlers/
 │   │   │   ├── auth.go            # Login, register, OAuth, logout, /users/me
 │   │   │   ├── repository.go      # Repository CRUD endpoints
-│   │   │   └── webhook.go         # GitHub webhook receiver (HMAC validation)
+│   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
+│   │   │   └── analysis.go        # Code analysis endpoints (trigger + list)
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
 │   │   │   ├── logger.go          # Request logging
@@ -223,15 +235,23 @@ backend/
 │   │   ├── factories/
 │   │   │   ├── make_auth_handler.go        # DI: auth service + providers
 │   │   │   ├── make_repository_handler.go  # DI: repository service
-│   │   │   └── make_webhook_handler.go     # DI: webhook handler
+│   │   │   ├── make_webhook_handler.go     # DI: webhook handler
+│   │   │   └── make_analysis_handler.go    # DI: analysis handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
+│   ├── ai/                        # Pluggable AI provider interface
+│   │   ├── provider.go            # Analyzer interface + request/response types
+│   │   └── mock_analyzer.go       # Mock implementation for testing
 │   ├── crypto/                    # Field-level encryption (AES-256-GCM)
 │   │   ├── cipher.go              # Encrypt/decrypt functions
 │   │   ├── cipher_test.go         # Cipher tests
 │   │   └── serializer.go          # GORM hooks for transparent encryption
 │   ├── integrations/
+│   │   ├── anthropic/             # Anthropic (Claude) AI implementation
+│   │   │   ├── client.go          # HTTP client implementing ai.Analyzer
+│   │   │   └── client_test.go     # Anthropic client tests
 │   │   └── github/                # GitHub API client (repos, branches, commits, PRs, webhooks)
 │   │       ├── client.go          # HTTP client + ClientInterface
+│   │       ├── pr.go              # PR-specific operations (fetch, review posting)
 │   │       └── validation.go      # HMAC-SHA256 webhook signature validation
 │   ├── oauth/                     # Multi-provider OAuth 2.0
 │   │   ├── provider.go            # OAuthProvider interface
@@ -244,7 +264,9 @@ backend/
 │   │   └── *_test.go              # Unit tests (auth refresh, repository, sync)
 │   ├── workers/
 │   │   ├── sync_worker.go         # Handles repo:sync asynq task
-│   │   └── webhook_processor.go   # Handles webhook:process asynq task
+│   │   ├── webhook_processor.go   # Handles webhook:process asynq task
+│   │   ├── analysis_worker.go     # Handles repo:analyze asynq task (code + PR analysis)
+│   │   └── analysis_worker_test.go # Analysis worker tests
 │   ├── models/
 │   │   ├── user.go                # User with roles
 │   │   ├── oauth_connection.go    # OAuth connections (provider links)
@@ -252,8 +274,9 @@ backend/
 │   │   ├── repository.go          # Repository + RepositoryMetadata + StringArray
 │   │   ├── repository_dto.go      # CreateRepositoryRequest, UpdateRepositoryRequest
 │   │   ├── webhook.go             # Webhook events + WebhookConfig + StringArray type
-│   │   ├── code_analysis.go       # Code analysis results
-│   │   └── code_embedding.go      # Vector embeddings (pgvector)
+│   │   ├── code_analysis.go       # Code analysis results (issues, metrics, model used)
+│   │   ├── code_embedding.go      # Vector embeddings (pgvector)
+│   │   └── request_response.go    # Request/response DTOs (AnalyzeRepositoryRequest, JobResponse)
 │   ├── config/
 │   │   └── config.go              # Config struct + env loading (incl. WEBHOOK_BASE_URL)
 │   ├── storage/
@@ -478,7 +501,7 @@ Key builders (internal/storage/redis/keys.go):
 - [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
 - [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
 - [x] API documentation (Swagger/OpenAPI)
-- [ ] Code analysis API + Claude integration — wire `TypeAnalyzeRepo` job
+- [x] Code analysis API + Claude integration — `TypeAnalyzeRepo` job with pluggable AI providers
 - [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
@@ -497,8 +520,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 📚 Swagger/OpenAPI Complete (Auth + Sync + Webhook + Encryption + Docs)  
-**Última atualização**: April 28, 2026
+**Status**: 🤖 AI Integration Complete (Auth + Sync + Webhook + Encryption + Analysis + Docs)  
+**Última atualização**: April 29, 2026
 
 ### 📖 Accessing the API Documentation
 ```bash
