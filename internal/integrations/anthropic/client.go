@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultModel = "claude-haiku-4-5-20251001"
-	maxTokens    = 2048
+	maxTokens    = 4096
 )
 
 // Client implements ai.Analyzer using the Anthropic SDK
@@ -112,7 +112,11 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 	if len(req.RecentCommits) > 0 {
 		sb.WriteString("\nRECENT COMMITS:\n")
 		for _, commit := range req.RecentCommits {
-			sb.WriteString(fmt.Sprintf("- %s: %s (by %s)\n", commit.SHA[:7], commit.Message, commit.Author))
+			shaShort := commit.SHA
+			if len(shaShort) > 7 {
+				shaShort = shaShort[:7]
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s (by %s)\n", shaShort, commit.Message, commit.Author))
 		}
 	}
 
@@ -130,6 +134,7 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 
 	sb.WriteString("\nProvide your analysis as a JSON response with the following structure:\n")
 	sb.WriteString(`{"summary": "...", "issues": [{"category": "...", "severity": "...", "title": "...", "description": "...", "suggestion": "...", "file_path": "...", "line": 0}], "metrics": {"lines_of_code": 0, "cyclomatic_complexity": 0, "test_coverage": 0.0}}`)
+	sb.WriteString("\n\nIMPORTANT: Return ONLY valid JSON. Do not wrap your response in markdown code fences or backticks.")
 
 	return sb.String()
 }
@@ -210,26 +215,33 @@ func (c *Client) parseResponse(text string, tokensUsed int) (*ai.AnalysisResult,
 
 // extractJSON extracts JSON from text that may be wrapped in markdown code blocks
 func extractJSON(text string) string {
-	// Try to extract JSON from markdown code blocks
-	if strings.Contains(text, "```json") {
-		start := strings.Index(text, "```json") + len("```json")
-		end := strings.Index(text[start:], "```")
-		if end != -1 {
+	// Branch 1: Try to extract from ```json ... ``` code block
+	if idx := strings.Index(text, "```json"); idx != -1 {
+		start := idx + len("```json")
+		if end := strings.Index(text[start:], "```"); end != -1 {
 			return strings.TrimSpace(text[start : start+end])
 		}
+		// Closing fence missing (response may be truncated) — fall through to brace extraction
 	}
-	if strings.Contains(text, "```") {
-		start := strings.Index(text, "```") + len("```")
-		// Skip language identifier if present
+	// Branch 2: Try to extract from ``` ... ``` code block (without language tag)
+	if idx := strings.Index(text, "```"); idx != -1 {
+		start := idx + len("```")
+		// Skip language identifier (e.g., "json\n") if present
 		if newline := strings.Index(text[start:], "\n"); newline != -1 {
 			start += newline + 1
 		}
-		end := strings.Index(text[start:], "```")
-		if end != -1 {
+		if end := strings.Index(text[start:], "```"); end != -1 {
 			return strings.TrimSpace(text[start : start+end])
 		}
+		// Closing fence missing — fall through to brace extraction
 	}
-	// No code block found, return the text as-is
+	// Branch 3: Extract raw JSON by finding { ... } boundaries (fallback for truncated responses)
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start != -1 && end != -1 && end > start {
+		return strings.TrimSpace(text[start : end+1])
+	}
+	// No JSON found, return trimmed text as-is
 	return strings.TrimSpace(text)
 }
 
