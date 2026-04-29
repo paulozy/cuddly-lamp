@@ -79,7 +79,8 @@ internal/
 5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
 6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, 17 endpoints documented, interactive UI at `/swagger/index.html`
 7. **AI Integration**: Complete — Pluggable `ai.Analyzer` interface, Claude (Anthropic) implementation, code analysis worker, PR analysis + optional review posting, auto-trigger on webhooks
-8. **Next: Semantic Search** — Implement `TypeGenerateEmbeddings` job with pgvector search backend
+8. **Analysis Pipeline Improvements**: Complete — Deduplication (manual triggers), token rate limiting (20K/hour), local metrics computation
+9. **Next: Semantic Search** — Implement `TypeGenerateEmbeddings` job with pgvector search backend
 
 ## Known Issues & Constraints
 
@@ -114,13 +115,15 @@ internal/
 ## AI Integration Notes
 
 - **Architecture**: Pluggable `ai.Analyzer` interface in `internal/ai/provider.go` — extensible to any LLM provider (Anthropic, OpenAI, Gemini, etc.)
-- **Current Implementation**: Anthropic (Claude) via `internal/integrations/anthropic/client.go` — raw HTTP client (not SDK) for simplicity and control
+- **Current Implementation**: Anthropic (Claude) via `internal/integrations/anthropic/client.go` — Anthropic SDK with structured prompts
 - **Swapping Providers**: Create new struct implementing `ai.Analyzer`, update one line in `cmd/server/main.go` (where `anthropic.NewClient()` is called) — no other changes needed
-- **Analysis Request**: Sent to Claude with repository metadata (languages, commits, test coverage), optional PR diffs for code review mode
+- **Analysis Request**: Sent to Claude with repository metadata (languages, commits, test coverage), computed metrics (LOC, complexity), optional PR diffs for code review mode
 - **Analysis Response**: Parsed JSON with code issues (severity, file path, line, message), metrics (complexity, test coverage), and model name/token usage
 - **PR Analysis Mode**: Triggered when `PullRequestID > 0` in task payload; includes changed files with diffs; worker generates PR comments if `GITHUB_PR_REVIEW_ENABLED=true`
 - **Auto-Trigger**: Webhook processor enqueues `TypeAnalyzeRepo` on `push` events (if `AnalysisStatus != "in_progress"`) and on `pull_request` events (always, with PR ID)
-- **Rate Limiting**: Not yet implemented — monitor Claude token usage via `CodeAnalysis.TokensUsed` field in database
+- **Deduplication**: Manual trigger deduplication via `asynq.TaskID("analyze:manual:{repoID}")` with 10-minute retention — returns 409 Conflict if already pending
+- **Rate Limiting**: Token-based rate limiting (default 20K tokens/hour, configurable via `ANTHROPIC_TOKENS_PER_HOUR`) — checks accumulated tokens in last hour via DB SUM query
+- **Local Metrics**: Computed before Claude call via shallow git clone (`Depth:1`) with go-git, no submodules — counts lines of code, estimates cyclomatic complexity
 - **Future Enhancements**: Embeddings via `TypeGenerateEmbeddings` job (next phase); configurable analysis types ("code_review", "security", "architecture")
 
 ## Swagger/OpenAPI Documentation
@@ -220,5 +223,24 @@ internal/
    - `.env.example`: added `ANTHROPIC_API_KEY`, `GITHUB_PR_REVIEW_ENABLED`, `WEBHOOK_BASE_URL` with descriptions
    - `README.md`: AI Integration features, project structure (new `internal/ai/` + `internal/integrations/anthropic/`), updated endpoint count (17 total), marked task as complete
    - `CLAUDE.md`: tech stack includes Anthropic, Current Focus updated, added "AI Integration Notes" section with pluggability architecture, updated Swagger endpoint count
+
+**Completed in current session** (April 29, continued):
+1. ✅ **Analysis Pipeline Deduplication** (`internal/jobs/tasks/types.go`, `internal/api/handlers/analysis.go`):
+   - Manual triggers deduplicated via `asynq.TaskID("analyze:manual:{repoID}")` with 10-minute retention
+   - Returns 409 Conflict if analysis already pending/active
+   - `TriggeredBy` field added to `AnalyzeRepoPayload` to track trigger source ("user" | "webhook")
+
+2. ✅ **Token-Based Rate Limiting** (`internal/config/config.go`, `internal/storage/repository.go`, handlers):
+   - Hourly token budget via `ANTHROPIC_TOKENS_PER_HOUR` (default 20,000)
+   - Database SUM query checks accumulated tokens in last 60 minutes
+   - Both manual triggers and webhooks respect limit
+   - Returns 429 Too Many Requests when budget exhausted
+
+3. ✅ **Local Code Metrics** (`internal/metrics/calculator.go`):
+   - Uses go-git for shallow clone (Depth:1) with security hardening (no submodules)
+   - Counts total lines, blank lines, code lines, and estimates cyclomatic complexity
+   - Integrated into analysis worker — metrics computed before Claude call
+   - Claude receives computed metrics in prompt with instruction not to recalculate
+   - Graceful degradation: continues with zero metrics if clone fails
 
 **Ready for next phase**: Semantic search with `TypeGenerateEmbeddings` job (pgvector embeddings) for intelligent code search

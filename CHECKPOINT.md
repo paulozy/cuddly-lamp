@@ -168,13 +168,38 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 
 ---
 
+## 📋 Latest Updates (April 29, Current Session)
+
+### Phase 1: Analysis Pipeline Deduplication ✅
+- **Trigger**: Manual analysis trigger via `POST /repositories/:id/analyze`
+- **Implementation**: `asynq.TaskID("analyze:manual:{repoID}")` with `asynq.Retention(10*time.Minute)`
+- **Behavior**: Prevents duplicate pending/active analysis jobs; returns 409 Conflict if already exists
+- **Tracking**: Added `TriggeredBy` field to `AnalyzeRepoPayload` ("user" | "webhook")
+- **Files**: `internal/jobs/tasks/types.go`, `internal/api/handlers/analysis.go`, `internal/api/factories/make_analysis_handler.go`
+
+### Phase 2: Token-Based Rate Limiting ✅
+- **Budget**: Hourly token limit (default 20,000, configurable via `ANTHROPIC_TOKENS_PER_HOUR`)
+- **Mechanism**: Database SUM query on `code_analyses.tokens_used` where `created_at >= now() - 1h`
+- **Applied to**: Both manual triggers and webhook auto-triggers
+- **Response**: 429 Too Many Requests when limit exceeded
+- **Files**: `internal/config/config.go`, `internal/storage/repository.go`, `internal/storage/postgres/postgres_repository.go`, handlers, `.env.example`
+
+### Phase 3: Local Code Metrics ✅
+- **Technology**: go-git shallow clone (`Depth:1`, no submodules) for security
+- **Metrics computed**: Lines of code (total, code, blank), cyclomatic complexity estimate
+- **Integration**: Calculated before Claude call, passed in prompt with "do not recalculate" instruction
+- **Graceful degradation**: Continues with zero metrics if clone fails (warns but doesn't fail analysis)
+- **Files**: `internal/metrics/calculator.go` (new), `internal/workers/analysis_worker.go`, `internal/ai/provider.go`, `internal/integrations/anthropic/client.go`
+
+---
+
 ## 🎯 Next Steps
 
 - [x] **AI Integration** — Claude API for code analysis; pluggable `ai.Analyzer` interface with PR review posting
+- [x] **Analysis Pipeline** — Deduplication, token rate limiting, local metrics computation
 - [ ] **Semantic search** — pgvector embeddings; wire `TypeGenerateEmbeddings` job
 - [ ] **Handler tests** — unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
-- [ ] **Rate limiting** — per-user request throttling
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
 
 ---
@@ -205,6 +230,7 @@ WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in loc
 
 # AI Integration
 ANTHROPIC_API_KEY            # Anthropic API key for Claude code analysis (optional)
+ANTHROPIC_TOKENS_PER_HOUR=20000  # Hourly token budget for Anthropic API
 
 # Logging
 LOG_LEVEL                    # debug / info / warn / error
@@ -212,9 +238,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration Complete (Auth + Repo + Webhook + Encryption + Analysis + Docs)  
-**Commits this phase**: 8 (AI interface, Anthropic client, analysis worker, PR operations, endpoints, webhooks, wiring, docs)  
-**Production Readiness**: ~80% (auth + repo + webhook + encryption + AI analysis done; needs embeddings, tests, rate limiting, key rotation)
+**Status**: 🤖 AI Integration + Pipeline Optimization Complete (Auth + Repo + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics)  
+**Commits this phase**: 3 (deduplication, token rate limiting, local metrics)  
+**Total commits (AI + pipeline)**: 11  
+**Production Readiness**: ~85% (auth + repo + webhook + encryption + AI analysis + pipeline safety done; needs embeddings, handler tests, integration tests, key rotation)
 
 ---
 

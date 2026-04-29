@@ -69,13 +69,16 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### AI Integration
 - ✅ Pluggable `ai.Analyzer` interface for code analysis
-- ✅ Anthropic (Claude) implementation with automatic HTTP client
+- ✅ Anthropic (Claude) implementation with Anthropic SDK
 - ✅ Analysis worker (`TypeAnalyzeRepo` job) — triggers on push/PR webhook events
 - ✅ Pull request analysis with diff parsing and file-level commenting
 - ✅ PR review posting (optional via `GITHUB_PR_REVIEW_ENABLED=true`)
 - ✅ HTTP endpoints: `POST /repositories/:id/analyze`, `GET /repositories/:id/analyses`
 - ✅ Support for multiple analysis types: `code_review`, `security`, `architecture`
 - ✅ Auto-trigger: analyze repositories on `push` events, create PR comments on `pull_request` events
+- ✅ Deduplication: manual trigger deduplication via asynq.TaskID (returns 409 on conflict)
+- ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
+- ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
 
 ### Code Quality
@@ -347,8 +350,11 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
 - **JWT_SECRET** - Secret for JWT signing and state token validation
 - **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
-- **ANTHROPIC_API_KEY** - Claude API key
-- **GITHUB_TOKEN** - GitHub access token
+- **ANTHROPIC_API_KEY** - Claude API key for code analysis (optional — skips analysis if not set)
+- **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
+- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration and PR operations)
+- **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
+- **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
 
 ## 🚨 Troubleshooting
@@ -520,8 +526,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration Complete (Auth + Sync + Webhook + Encryption + Analysis + Docs)  
-**Última atualização**: April 29, 2026
+**Status**: 🤖 AI Integration + Pipeline Optimization Complete (Auth + Sync + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics)  
+**Última atualização**: April 29, 2026 (Phase 1-3: Analysis Pipeline Improvements)
 
 ### 📖 Accessing the API Documentation
 ```bash
