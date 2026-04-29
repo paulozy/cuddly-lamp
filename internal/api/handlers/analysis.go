@@ -16,14 +16,16 @@ import (
 )
 
 type AnalysisHandler struct {
-	repo     storage.Repository
-	enqueuer jobs.Enqueuer
+	repo               storage.Repository
+	enqueuer           jobs.Enqueuer
+	tokenHourlyLimit   int64
 }
 
-func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *AnalysisHandler {
+func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer, tokenLimit int64) *AnalysisHandler {
 	return &AnalysisHandler{
-		repo:     repo,
-		enqueuer: enqueuer,
+		repo:             repo,
+		enqueuer:         enqueuer,
+		tokenHourlyLimit: tokenLimit,
 	}
 }
 
@@ -83,6 +85,16 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 	// Set defaults
 	if req.Type == "" {
 		req.Type = "code_review"
+	}
+
+	// Check token budget
+	used, err := h.repo.SumTokensUsedSince(c.Request.Context(), time.Now().UTC().Add(-time.Hour))
+	if err == nil && used >= h.tokenHourlyLimit {
+		c.JSON(http.StatusTooManyRequests, models.ErrorResponse{
+			Error:            "rate_limit_exceeded",
+			ErrorDescription: fmt.Sprintf("token budget exhausted (%d/%d tokens used in last hour)", used, h.tokenHourlyLimit),
+		})
+		return
 	}
 
 	// Enqueue analysis job with deduplication: manual triggers get a deterministic TaskID

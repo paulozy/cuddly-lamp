@@ -16,16 +16,18 @@ import (
 )
 
 type WebhookProcessor struct {
-	repo        storage.Repository
-	syncService *services.SyncService
-	enqueuer    jobs.Enqueuer
+	repo               storage.Repository
+	syncService        *services.SyncService
+	enqueuer           jobs.Enqueuer
+	tokenHourlyLimit   int64
 }
 
-func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enqueuer jobs.Enqueuer) *WebhookProcessor {
+func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enqueuer jobs.Enqueuer, tokenLimit int64) *WebhookProcessor {
 	return &WebhookProcessor{
-		repo:        repo,
-		syncService: svc,
-		enqueuer:    enqueuer,
+		repo:             repo,
+		syncService:      svc,
+		enqueuer:         enqueuer,
+		tokenHourlyLimit: tokenLimit,
 	}
 }
 
@@ -92,36 +94,49 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 		// Trigger analysis for push events if repository needs analysis
 		repo, err := w.repo.GetRepository(ctx, repoID)
 		if err == nil && repo != nil && repo.AnalysisStatus != "in_progress" {
-			analyzePayload := tasks.AnalyzeRepoPayload{
-				RepositoryID: repoID,
-				Branch:       webhook.EventPayload.Branch,
-				CommitSHA:    webhook.EventPayload.CommitSHA,
-				Type:         "code_review",
-				TriggeredBy:  "webhook",
-			}
-			if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
-				utils.Warn("webhook processor: failed to enqueue analysis", "repo_id", repoID, "error", err)
-				// Don't fail the whole webhook if analysis fails to enqueue
+			// Check token budget
+			used, err := w.repo.SumTokensUsedSince(ctx, time.Now().UTC().Add(-time.Hour))
+			if err != nil || used < w.tokenHourlyLimit {
+				analyzePayload := tasks.AnalyzeRepoPayload{
+					RepositoryID: repoID,
+					Branch:       webhook.EventPayload.Branch,
+					CommitSHA:    webhook.EventPayload.CommitSHA,
+					Type:         "code_review",
+					TriggeredBy:  "webhook",
+				}
+				if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
+					utils.Warn("webhook processor: failed to enqueue analysis", "repo_id", repoID, "error", err)
+					// Don't fail the whole webhook if analysis fails to enqueue
+				}
+			} else {
+				utils.Warn("webhook processor: skipping analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", w.tokenHourlyLimit)
 			}
 		}
 
 	case models.WebhookEventPullRequest:
 		utils.Info("webhook processor: triggering analysis for PR", "event", webhook.EventType, "repo_id", repoID)
-		// For PR events, trigger analysis directly
-		var prID int64
-		if webhook.EventPayload.PullRequestID != nil {
-			prID = int64(*webhook.EventPayload.PullRequestID)
-		}
-		analyzePayload := tasks.AnalyzeRepoPayload{
-			RepositoryID:  repoID,
-			Branch:        webhook.EventPayload.Branch,
-			CommitSHA:     webhook.EventPayload.CommitSHA,
-			PullRequestID: prID,
-			Type:          "code_review",
-			TriggeredBy:   "webhook",
-		}
-		if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
-			return fmt.Errorf("enqueue analysis job: %w", err)
+
+		// Check token budget
+		used, err := w.repo.SumTokensUsedSince(ctx, time.Now().UTC().Add(-time.Hour))
+		if err != nil || used < w.tokenHourlyLimit {
+			// For PR events, trigger analysis directly
+			var prID int64
+			if webhook.EventPayload.PullRequestID != nil {
+				prID = int64(*webhook.EventPayload.PullRequestID)
+			}
+			analyzePayload := tasks.AnalyzeRepoPayload{
+				RepositoryID:  repoID,
+				Branch:        webhook.EventPayload.Branch,
+				CommitSHA:     webhook.EventPayload.CommitSHA,
+				PullRequestID: prID,
+				Type:          "code_review",
+				TriggeredBy:   "webhook",
+			}
+			if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
+				return fmt.Errorf("enqueue analysis job: %w", err)
+			}
+		} else {
+			utils.Warn("webhook processor: skipping PR analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", w.tokenHourlyLimit)
 		}
 
 	default:

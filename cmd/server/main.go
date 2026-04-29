@@ -99,7 +99,7 @@ func main() {
 		syncSvc := services.NewSyncService(pgRepo, ghClient, cache, cfg.API.WebhookBaseURL)
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
-		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
+		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer, int64(cfg.API.AnthropicTokensPerHour))
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)

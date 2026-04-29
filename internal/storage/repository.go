@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -44,6 +45,7 @@ type Repository interface {
 	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
 	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
+	SumTokensUsedSince(ctx context.Context, since time.Time) (int64, error)
 
 	// Code Embedding operations
 	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error

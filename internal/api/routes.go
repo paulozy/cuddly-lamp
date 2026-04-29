@@ -30,7 +30,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	authConfig := factories.MakeAuthConfig(repository, params.Config)
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
+	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, int64(params.Config.API.AnthropicTokensPerHour))
 
 	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler)
 }

@@ -45,10 +45,11 @@ type RedisConfig struct {
 }
 
 type APIConfig struct {
-	AnthropicAPIKey       string
-	GithubToken           string
-	WebhookBaseURL        string // public base URL for webhook endpoints, e.g. https://api.example.com
-	GitHubPRReviewEnabled bool   // whether to post PR reviews
+	AnthropicAPIKey         string
+	AnthropicTokensPerHour  int
+	GithubToken             string
+	WebhookBaseURL          string // public base URL for webhook endpoints, e.g. https://api.example.com
+	GitHubPRReviewEnabled   bool   // whether to post PR reviews
 }
 
 type LogConfig struct {
@@ -85,10 +86,11 @@ func Load() *Config {
 			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 		API: APIConfig{
-			AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
-			GithubToken:           getEnv("GITHUB_TOKEN", ""),
-			WebhookBaseURL:        getEnv("WEBHOOK_BASE_URL", ""),
-			GitHubPRReviewEnabled: getEnvBool("GITHUB_PR_REVIEW_ENABLED", false),
+			AnthropicAPIKey:        getEnv("ANTHROPIC_API_KEY", ""),
+			AnthropicTokensPerHour: getEnvInt("ANTHROPIC_TOKENS_PER_HOUR", 20000),
+			GithubToken:            getEnv("GITHUB_TOKEN", ""),
+			WebhookBaseURL:         getEnv("WEBHOOK_BASE_URL", ""),
+			GitHubPRReviewEnabled:  getEnvBool("GITHUB_PR_REVIEW_ENABLED", false),
 		},
 		OAuth: OAuthConfig{
 			Providers: map[string]OAuthProviderConfig{

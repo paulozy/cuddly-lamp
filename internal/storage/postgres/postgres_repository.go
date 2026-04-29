@@ -496,3 +496,16 @@ func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *m
 	}
 	return nil
 }
+
+// SumTokensUsedSince returns the total tokens used for completed analyses since the given time
+func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, since time.Time) (int64, error) {
+	var total int64
+	if err := pr.db.WithContext(ctx).
+		Model(&models.CodeAnalysis{}).
+		Where("created_at >= ? AND status = ?", since, "completed").
+		Select("COALESCE(SUM(tokens_used), 0)").
+		Scan(&total).Error; err != nil {
+		return 0, fmt.Errorf("sum tokens used since: %w", err)
+	}
+	return total, nil
+}
