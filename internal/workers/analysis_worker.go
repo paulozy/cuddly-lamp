@@ -3,12 +3,12 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
-	"gorm.io/datatypes"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -16,19 +16,24 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
+	"gorm.io/datatypes"
 )
 
 type AnalysisWorker struct {
-	analyzer ai.Analyzer
-	repo     storage.Repository
-	ghClient github.ClientInterface
+	analyzer         ai.Analyzer
+	repo             storage.Repository
+	ghClient         github.ClientInterface
+	githubToken      string
+	calculateMetrics func(ctx context.Context, repoURL, githubToken, branch string) (*ai.CodeMetrics, error)
 }
 
-func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient github.ClientInterface) *AnalysisWorker {
+func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient github.ClientInterface, githubToken string) *AnalysisWorker {
 	return &AnalysisWorker{
-		analyzer: analyzer,
-		repo:     repo,
-		ghClient: ghClient,
+		analyzer:         analyzer,
+		repo:             repo,
+		ghClient:         ghClient,
+		githubToken:      githubToken,
+		calculateMetrics: metrics.Calculate,
 	}
 }
 
@@ -93,12 +98,19 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 	owner, repo := parts[0], parts[1]
 
+	branch := payload.Branch
+	if branch == "" {
+		branch = repository.Metadata.DefaultBranch
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
 	// Calculate code metrics locally (lines of code, complexity)
 	// Note: test coverage is skipped as it's a CI artifact, not a git artifact
-	repoMetrics, err := metrics.Calculate(ctx, repository.URL, "") // no token needed for public repos, fail gracefully for private
+	repoMetrics, err := w.calculateMetrics(ctx, repository.URL, w.githubToken, branch)
 	if err != nil {
-		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "error", err)
-		// Don't fail the analysis — use zero metrics and continue
+		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", w.githubToken != "", "error", err)
 		repoMetrics = &ai.CodeMetrics{}
 	}
 
@@ -124,19 +136,19 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		triggeredBy = "webhook" // backward compatibility
 	}
 	codeAnalysis := &models.CodeAnalysis{
-		RepositoryID:  repository.ID,
-		Type:          models.AnalysisTypeCodeReview,
-		Status:        "completed",
-		CommitSHA:     payload.CommitSHA,
-		Branch:        payload.Branch,
-		SummaryText:   analysisResult.Summary,
-		IsAIAnalysis:  true,
-		AIModel:       analysisResult.Model,
-		TokensUsed:    analysisResult.TokensUsed,
-		ProcessingMs:  processingMs,
-		TriggeredBy:   triggeredBy,
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		RepositoryID: repository.ID,
+		Type:         models.AnalysisTypeCodeReview,
+		Status:       "completed",
+		CommitSHA:    payload.CommitSHA,
+		Branch:       payload.Branch,
+		SummaryText:  analysisResult.Summary,
+		IsAIAnalysis: true,
+		AIModel:      analysisResult.Model,
+		TokensUsed:   analysisResult.TokensUsed,
+		ProcessingMs: processingMs,
+		TriggeredBy:  triggeredBy,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
 	// Handle PR-specific fields
@@ -190,12 +202,12 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 
 func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
 	req := &ai.AnalysisRequest{
-		RepositoryID:  repository.ID,
-		RepoName:      repository.Name,
-		Branch:        payload.Branch,
-		CommitSHA:     payload.CommitSHA,
-		AnalysisType:  ai.AnalysisTypeCodeReview,
-		Metrics:       repoMetrics, // computed metrics passed to Claude
+		RepositoryID: repository.ID,
+		RepoName:     repository.Name,
+		Branch:       payload.Branch,
+		CommitSHA:    payload.CommitSHA,
+		AnalysisType: ai.AnalysisTypeCodeReview,
+		Metrics:      repoMetrics, // computed metrics passed to Claude
 	}
 
 	// Extract metadata from repository
@@ -272,7 +284,7 @@ func (w *AnalysisWorker) failAnalysis(ctx context.Context, repository *models.Re
 		utils.Error("analysis worker: update failed status", "error", err)
 	}
 
-	return fmt.Errorf(errorMsg)
+	return errors.New(errorMsg)
 }
 
 // Note: UUID generation is handled by PostgreSQL (gen_random_uuid())

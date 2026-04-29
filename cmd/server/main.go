@@ -127,7 +127,7 @@ func main() {
 		// Register analysis worker if Anthropic API key is configured
 		if cfg.API.AnthropicAPIKey != "" {
 			var analyzer ai.Analyzer = anthropicclient.NewClient(cfg.API.AnthropicAPIKey)
-			analysisWorker := workers.NewAnalysisWorker(analyzer, pgRepo, ghClient)
+			analysisWorker := workers.NewAnalysisWorker(analyzer, pgRepo, ghClient, cfg.API.GithubToken)
 			worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
 			utils.Info("Analysis worker registered", "provider", analyzer.Provider())
 		} else {
