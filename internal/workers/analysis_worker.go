@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"gorm.io/datatypes"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -28,6 +29,26 @@ func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient g
 		repo:     repo,
 		ghClient: ghClient,
 	}
+}
+
+// mapIssues converts ai.CodeIssue to models.CodeIssue
+func mapIssues(aiIssues []ai.CodeIssue) []models.CodeIssue {
+	out := make([]models.CodeIssue, 0, len(aiIssues))
+	for _, issue := range aiIssues {
+		out = append(out, models.CodeIssue{
+			File:          issue.FilePath,
+			Line:          issue.Line,
+			Column:        issue.Column,
+			Severity:      models.SeverityLevel(issue.Severity),
+			Category:      issue.Category,
+			Title:         issue.Title,
+			Description:   issue.Description,
+			Suggestion:    issue.Suggestion,
+			IsAIGenerated: issue.IsAIGenerated,
+			Confidence:    float64(issue.Confidence),
+		})
+	}
+	return out
 }
 
 func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
@@ -110,23 +131,21 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		codeAnalysis.PullRequestID = &prID
 	}
 
-	// Convert issues to code analysis issues
-	if err := codeAnalysis.Issues.Scan(analysisResult.Issues); err != nil {
-		utils.Error("analysis worker: scan issues failed", "repo_id", payload.RepositoryID, "error", err)
-		return w.failAnalysis(ctx, repository, "failed to store issues")
-	}
+	// Convert and store issues (datatypes.JSONType requires proper type conversion)
+	convertedIssues := mapIssues(analysisResult.Issues)
+	codeAnalysis.Issues = datatypes.NewJSONType(convertedIssues)
 
-	// Set issue counts
-	codeAnalysis.IssueCount = len(analysisResult.Issues)
-	for _, issue := range analysisResult.Issues {
+	// Count issues by severity
+	codeAnalysis.IssueCount = len(convertedIssues)
+	for _, issue := range convertedIssues {
 		switch issue.Severity {
-		case "critical":
+		case models.SeverityCritical:
 			codeAnalysis.CriticalCount++
-		case "high":
+		case models.SeverityError:
 			codeAnalysis.ErrorCount++
-		case "medium":
+		case models.SeverityWarning:
 			codeAnalysis.WarningCount++
-		case "low", "info":
+		case models.SeverityInfo:
 			codeAnalysis.InfoCount++
 		}
 	}
