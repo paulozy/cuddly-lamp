@@ -1,101 +1,60 @@
 package anthropic
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 )
 
 const (
 	defaultModel = "claude-haiku-4-5-20251001"
 	maxTokens    = 2048
-	apiVersion   = "2024-06-01"
-	apiURL       = "https://api.anthropic.com/v1"
 )
 
-// Client implements ai.Analyzer using the Anthropic API
+// Client implements ai.Analyzer using the Anthropic SDK
 type Client struct {
-	apiKey     string
-	httpClient *http.Client
-	model      string
+	client *anthropic.Client
+	model  string
 }
 
 // NewClient creates a new Anthropic client
 func NewClient(apiKey string) *Client {
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+	)
 	return &Client{
-		apiKey:     apiKey,
-		httpClient: &http.Client{},
-		model:      defaultModel,
+		client: &client,
+		model:  defaultModel,
 	}
 }
 
 // AnalyzeCode implements ai.Analyzer
 func (c *Client) AnalyzeCode(ctx context.Context, req *ai.AnalysisRequest) (*ai.AnalysisResult, error) {
-	if c.apiKey == "" {
-		return nil, fmt.Errorf("anthropic api key not configured")
-	}
-
 	prompt := c.buildPrompt(req)
 
-	// Build request body
-	reqBody := map[string]interface{}{
-		"model":      c.model,
-		"max_tokens": maxTokens,
-		"messages": []map[string]string{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
+	// Call Claude API using SDK
+	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     c.model,
+		MaxTokens: int64(maxTokens),
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("anthropic api error: %w", err)
 	}
 
-	// Create HTTP request
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", apiURL+"/messages", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set headers
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.apiKey)
-	httpReq.Header.Set("anthropic-version", apiVersion)
-
-	// Make request
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call anthropic api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("anthropic api error: status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse response
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	// Extract text content
+	// Extract text content from response
 	var responseText string
-	if content, ok := respData["content"].([]interface{}); ok && len(content) > 0 {
-		if textBlock, ok := content[0].(map[string]interface{}); ok {
-			if text, ok := textBlock["text"].(string); ok {
-				responseText = text
-			}
+	if message.Content != nil && len(message.Content) > 0 {
+		// Access the first content block - it's a union type with Type and Text fields
+		if message.Content[0].Type == "text" {
+			responseText = message.Content[0].Text
 		}
 	}
 
@@ -104,15 +63,7 @@ func (c *Client) AnalyzeCode(ctx context.Context, req *ai.AnalysisRequest) (*ai.
 	}
 
 	// Get token usage
-	var tokensUsed int64
-	if usage, ok := respData["usage"].(map[string]interface{}); ok {
-		if inputTokens, ok := usage["input_tokens"].(float64); ok {
-			tokensUsed += int64(inputTokens)
-		}
-		if outputTokens, ok := usage["output_tokens"].(float64); ok {
-			tokensUsed += int64(outputTokens)
-		}
-	}
+	tokensUsed := int(message.Usage.InputTokens + message.Usage.OutputTokens)
 
 	return c.parseResponse(responseText, tokensUsed)
 }
@@ -184,7 +135,7 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 }
 
 // parseResponse parses Claude's JSON response into AnalysisResult
-func (c *Client) parseResponse(text string, tokensUsed int64) (*ai.AnalysisResult, error) {
+func (c *Client) parseResponse(text string, tokensUsed int) (*ai.AnalysisResult, error) {
 	// Try to extract JSON from the response
 	jsonStr := text
 	if strings.Contains(text, "```json") {
@@ -208,7 +159,7 @@ func (c *Client) parseResponse(text string, tokensUsed int64) (*ai.AnalysisResul
 
 	result := &ai.AnalysisResult{
 		Model:      c.model,
-		TokensUsed: int(tokensUsed),
+		TokensUsed: tokensUsed,
 		Issues:     []ai.CodeIssue{},
 		Metrics:    ai.CodeMetrics{},
 	}

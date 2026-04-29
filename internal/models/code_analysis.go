@@ -147,7 +147,7 @@ type CodeAnalysis struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
-	EmbeddingID string `gorm:"type:uuid" json:"embedding_id,omitempty"` // Link to code embedding if created
+	EmbeddingID *string `gorm:"type:uuid" json:"embedding_id,omitempty"` // Link to code embedding if created
 }
 
 func (CodeAnalysis) TableName() string {
