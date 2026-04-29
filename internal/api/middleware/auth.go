@@ -33,6 +33,7 @@ func AuthMiddleware(authService *services.AuthService) gin.HandlerFunc {
 		}
 
 		ctx := context.WithValue(c.Request.Context(), utils.ContextKeyUser, claims.UserID)
+		ctx = context.WithValue(ctx, utils.ContextKeyOrganization, claims.OrganizationID)
 		ctx = context.WithValue(ctx, utils.ContextKeyClaims, claims)
 		c.Request = c.Request.WithContext(ctx)
 

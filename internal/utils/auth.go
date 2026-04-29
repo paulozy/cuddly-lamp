@@ -13,6 +13,7 @@ const (
 	AuthorizationHeader = "Authorization"
 	BearerScheme        = "Bearer"
 	ContextKeyUser      = "user"
+	ContextKeyOrganization = "organization"
 	ContextKeyClaims    = "claims"
 )
 
@@ -46,6 +47,14 @@ func GetUserIDFromContext(c *gin.Context) (string, error) {
 		return "", errors.New("user not found in context")
 	}
 	return userID, nil
+}
+
+func GetOrganizationIDFromContext(c *gin.Context) (string, error) {
+	orgID, ok := c.Request.Context().Value(ContextKeyOrganization).(string)
+	if !ok || orgID == "" {
+		return "", errors.New("organization not found in context")
+	}
+	return orgID, nil
 }
 
 func GetClaimsFromContext(c *gin.Context) (*models.TokenClaims, error) {

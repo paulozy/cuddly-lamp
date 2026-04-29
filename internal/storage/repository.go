@@ -16,9 +16,19 @@ type Repository interface {
 	UpdateUser(ctx context.Context, user *models.User) error
 	ListUsers(ctx context.Context, limit, offset int) ([]models.User, error)
 
+	// Organization operations
+	GetOrganization(ctx context.Context, id string) (*models.Organization, error)
+	GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error)
+	CreateOrganization(ctx context.Context, org *models.Organization) error
+	GetOrganizationMember(ctx context.Context, orgID, userID string) (*models.OrganizationMember, error)
+	CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error
+	CountOrganizationMembers(ctx context.Context, orgID string) (int64, error)
+	GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
+	UpsertOrganizationConfig(ctx context.Context, cfg *models.OrganizationConfig) error
+
 	// Repository operations
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
-	GetRepositoryByURL(ctx context.Context, url string) (*models.Repository, error)
+	GetRepositoryByURL(ctx context.Context, organizationID, url string) (*models.Repository, error)
 	CreateRepository(ctx context.Context, repo *models.Repository) error
 	UpdateRepository(ctx context.Context, repo *models.Repository) error
 	ListRepositories(ctx context.Context, filter *RepositoryFilter) ([]models.Repository, int64, error)
@@ -45,7 +55,7 @@ type Repository interface {
 	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
 	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
-	SumTokensUsedSince(ctx context.Context, since time.Time) (int64, error)
+	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
 	// Code Embedding operations
 	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
@@ -67,6 +77,7 @@ type Repository interface {
 }
 
 type RepositoryFilter struct {
+	OrganizationID string
 	OwnerUserID    string
 	Type           models.RepositoryType
 	IsPublic       bool

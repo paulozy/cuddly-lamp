@@ -18,7 +18,7 @@ func RoleBasedAuthMiddleware(minRole models.UserRole) gin.HandlerFunc {
 			return
 		}
 
-		if !utils.HasPermission(claims.Role, minRole) {
+		if !utils.HasPermission(claims.OrganizationRole, minRole) {
 			c.JSON(403, gin.H{
 				"error":   "forbidden",
 				"message": "insufficient permissions",

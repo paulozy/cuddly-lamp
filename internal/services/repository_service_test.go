@@ -11,16 +11,15 @@ import (
 	rediscache "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 )
 
-
 // ── mocks ──────────────────────────────────────────────────────────────────
 
 type mockRepoStore struct {
 	storage.Repository // embed for unimplemented methods
 
-	repos      map[string]*models.Repository
-	createErr  error
-	updateErr  error
-	deleteErr  error
+	repos     map[string]*models.Repository
+	createErr error
+	updateErr error
+	deleteErr error
 }
 
 func newMockRepoStore() *mockRepoStore {
@@ -35,9 +34,9 @@ func (m *mockRepoStore) GetRepository(_ context.Context, id string) (*models.Rep
 	return r, nil
 }
 
-func (m *mockRepoStore) GetRepositoryByURL(_ context.Context, url string) (*models.Repository, error) {
+func (m *mockRepoStore) GetRepositoryByURL(_ context.Context, organizationID, url string) (*models.Repository, error) {
 	for _, r := range m.repos {
-		if r.URL == url {
+		if r.URL == url && (organizationID == "" || r.OrganizationID == organizationID) {
 			return r, nil
 		}
 	}
@@ -72,7 +71,7 @@ func (m *mockRepoStore) DeleteRepository(_ context.Context, id string) error {
 func (m *mockRepoStore) ListRepositories(_ context.Context, filter *storage.RepositoryFilter) ([]models.Repository, int64, error) {
 	var result []models.Repository
 	for _, r := range m.repos {
-		if filter.OwnerUserID == "" || r.OwnerUserID == filter.OwnerUserID {
+		if filter.OrganizationID == "" || r.OrganizationID == filter.OrganizationID {
 			result = append(result, *r)
 		}
 	}
@@ -131,10 +130,12 @@ func newRepoService(store *mockRepoStore, cache rediscache.Cache) *RepositorySer
 }
 
 const (
-	ownerID  = "user-owner"
-	otherID  = "user-other"
-	ghURL    = "https://github.com/owner/repo"
-	glURL    = "https://gitlab.com/owner/repo"
+	orgID      = "org-1"
+	otherOrgID = "org-2"
+	ownerID    = "user-owner"
+	otherID    = "user-other"
+	ghURL      = "https://github.com/owner/repo"
+	glURL      = "https://gitlab.com/owner/repo"
 )
 
 // ── CreateRepository ───────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ const (
 func TestRepositoryService_Create_Success(t *testing.T) {
 	svc := newRepoService(newMockRepoStore(), newMockCache())
 
-	resp, err := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	resp, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,8 +162,8 @@ func TestRepositoryService_Create_DuplicateURL(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	_, _ = svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
-	_, err := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	_, _ = svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	_, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 	if err == nil {
 		t.Fatal("expected ErrRepositoryAlreadyExists, got nil")
 	}
@@ -174,7 +175,7 @@ func TestRepositoryService_Create_DuplicateURL(t *testing.T) {
 func TestRepositoryService_Create_InvalidURL(t *testing.T) {
 	svc := newRepoService(newMockRepoStore(), newMockCache())
 
-	_, err := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: "https://bitbucket.org/owner/repo"})
+	_, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: "https://bitbucket.org/owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for unsupported host, got nil")
 	}
@@ -186,9 +187,9 @@ func TestRepositoryService_Get_Success(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	got, err := svc.GetRepository(context.Background(), created.ID, ownerID)
+	got, err := svc.GetRepository(context.Background(), created.ID, orgID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestRepositoryService_Get_Success(t *testing.T) {
 func TestRepositoryService_Get_NotFound(t *testing.T) {
 	svc := newRepoService(newMockRepoStore(), newMockCache())
 
-	_, err := svc.GetRepository(context.Background(), "nonexistent", ownerID)
+	_, err := svc.GetRepository(context.Background(), "nonexistent", orgID)
 	if err != ErrRepositoryNotFound {
 		t.Errorf("error = %v, want ErrRepositoryNotFound", err)
 	}
@@ -210,9 +211,9 @@ func TestRepositoryService_Get_Forbidden(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	_, err := svc.GetRepository(context.Background(), created.ID, otherID)
+	_, err := svc.GetRepository(context.Background(), created.ID, otherOrgID)
 	if err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
@@ -224,20 +225,20 @@ func TestRepositoryService_List_OnlyOwnerRepos(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	_, _ = svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	_, _ = svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	// Seed a repo for another user directly so the URL doesn't conflict
-	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OwnerUserID: otherID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
+	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, OwnerUserID: otherID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
 
-	result, err := svc.ListRepositories(context.Background(), ownerID, 10, 0)
+	result, err := svc.ListRepositories(context.Background(), orgID, 10, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Total != 1 {
 		t.Errorf("Total = %d, want 1", result.Total)
 	}
-	if result.Items[0].OwnerUserID != ownerID {
-		t.Errorf("wrong owner in result")
+	if result.Items[0].OrganizationID != orgID {
+		t.Errorf("wrong organization in result")
 	}
 }
 
@@ -247,10 +248,10 @@ func TestRepositoryService_Update_Success(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "new description"
-	updated, err := svc.UpdateRepository(context.Background(), created.ID, ownerID, models.UpdateRepositoryRequest{Description: &desc})
+	updated, err := svc.UpdateRepository(context.Background(), created.ID, orgID, models.UpdateRepositoryRequest{Description: &desc})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -263,10 +264,10 @@ func TestRepositoryService_Update_Forbidden(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "desc"
-	_, err := svc.UpdateRepository(context.Background(), created.ID, otherID, models.UpdateRepositoryRequest{Description: &desc})
+	_, err := svc.UpdateRepository(context.Background(), created.ID, otherOrgID, models.UpdateRepositoryRequest{Description: &desc})
 	if err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
@@ -278,13 +279,13 @@ func TestRepositoryService_Delete_Success(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, ownerID); err != nil {
+	if err := svc.DeleteRepository(context.Background(), created.ID, orgID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	_, err := svc.GetRepository(context.Background(), created.ID, ownerID)
+	_, err := svc.GetRepository(context.Background(), created.ID, orgID)
 	if err != ErrRepositoryNotFound {
 		t.Errorf("expected ErrRepositoryNotFound after delete, got %v", err)
 	}
@@ -294,9 +295,9 @@ func TestRepositoryService_Delete_Forbidden(t *testing.T) {
 	store := newMockRepoStore()
 	svc := newRepoService(store, newMockCache())
 
-	created, _ := svc.CreateRepository(context.Background(), ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, otherID); err != ErrForbidden {
+	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID); err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
 }

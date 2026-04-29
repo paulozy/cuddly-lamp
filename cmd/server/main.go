@@ -12,12 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	_ "github.com/paulozy/idp-with-ai-backend/docs"
-	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	appcrypto "github.com/paulozy/idp-with-ai-backend/internal/crypto"
-	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
-	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -91,18 +88,6 @@ func main() {
 
 	cache := redisstore.NewRedisCache(rdbClient)
 
-	var embeddingProvider embeddings.Provider
-	if cfg.Embeddings.Provider == embeddings.ProviderVoyage {
-		if cfg.Embeddings.VoyageAPIKey != "" {
-			embeddingProvider = embeddings.NewVoyageClient(cfg.Embeddings.VoyageAPIKey, cfg.Embeddings.Model, cfg.Embeddings.Dimensions)
-			utils.Info("Embedding provider configured", "provider", embeddingProvider.Provider(), "model", embeddingProvider.Model(), "dimension", embeddingProvider.Dimension())
-		} else {
-			utils.Warn("Skipping embedding provider: VOYAGE_API_KEY not configured")
-		}
-	} else {
-		utils.Warn("Skipping embedding provider: unsupported provider", "provider", cfg.Embeddings.Provider)
-	}
-
 	var enqueuer jobs.Enqueuer
 	if rdbClient.Client() != nil {
 		enqueuer = jobs.NewAsynqEnqueuer(&cfg.Redis)
@@ -112,27 +97,15 @@ func main() {
 		syncSvc := services.NewSyncService(pgRepo, ghClient, cache, cfg.API.WebhookBaseURL)
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
-		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer, int64(cfg.API.AnthropicTokensPerHour))
+		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
+		embeddingWorker := workers.NewEmbeddingWorker(pgRepo)
+		analysisWorker := workers.NewAnalysisWorker(pgRepo)
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
-
-		if embeddingProvider != nil {
-			embeddingWorker := workers.NewEmbeddingWorker(embeddingProvider, pgRepo, cfg.API.GithubToken)
-			worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
-			utils.Info("Embedding worker registered", "provider", embeddingProvider.Provider(), "model", embeddingProvider.Model())
-		}
-
-		// Register analysis worker if Anthropic API key is configured
-		if cfg.API.AnthropicAPIKey != "" {
-			var analyzer ai.Analyzer = anthropicclient.NewClient(cfg.API.AnthropicAPIKey)
-			analysisWorker := workers.NewAnalysisWorker(analyzer, pgRepo, ghClient, cfg.API.GithubToken)
-			worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
-			utils.Info("Analysis worker registered", "provider", analyzer.Provider())
-		} else {
-			utils.Warn("Skipping analysis worker: ANTHROPIC_API_KEY not configured")
-		}
+		worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
+		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
 
 		go func() {
 			if err := worker.Run(); err != nil {
@@ -146,12 +119,11 @@ func main() {
 
 	router := gin.Default()
 	api.RegisterRoutes(&api.RegisterRoutesParams{
-		DB:                db.GetDB(),
-		Config:            cfg,
-		Router:            router,
-		Cache:             cache,
-		Enqueuer:          enqueuer,
-		EmbeddingProvider: embeddingProvider,
+		DB:       db.GetDB(),
+		Config:   cfg,
+		Router:   router,
+		Cache:    cache,
+		Enqueuer: enqueuer,
 	})
 
 	srv := &http.Server{

@@ -60,8 +60,12 @@ type Repository struct {
 	URL         string         `gorm:"type:text;uniqueIndex" json:"url"`
 	Type        RepositoryType `gorm:"type:varchar(50);index" json:"type"` // github, gitlab, gitea, custom
 
-	OwnerUserID string `gorm:"type:uuid;index" json:"owner_user_id"`
-	OwnerUser   *User  `gorm:"foreignKey:OwnerUserID" json:"owner_user,omitempty"`
+	OrganizationID  string        `gorm:"type:uuid;index" json:"organization_id"`
+	Organization    *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	CreatedByUserID string        `gorm:"type:uuid;index" json:"created_by_user_id,omitempty"`
+	CreatedByUser   *User         `gorm:"foreignKey:CreatedByUserID" json:"created_by_user,omitempty"`
+	OwnerUserID     string        `gorm:"type:uuid;index" json:"owner_user_id,omitempty"`
+	OwnerUser       *User         `gorm:"foreignKey:OwnerUserID" json:"owner_user,omitempty"`
 
 	IsPublic bool `gorm:"default:false" json:"is_public"`
 
@@ -94,7 +98,7 @@ func (Repository) TableName() string {
 }
 
 func (r *Repository) IsValid() bool {
-	return r.Name != "" && r.URL != "" && r.Type != "" && r.OwnerUserID != ""
+	return r.Name != "" && r.URL != "" && r.Type != "" && r.OrganizationID != ""
 }
 
 func (r *Repository) NeedsAnalysis() bool {

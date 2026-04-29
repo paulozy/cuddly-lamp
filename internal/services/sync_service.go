@@ -73,12 +73,17 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 }
 
 func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, owner, name string) error {
-	info, err := s.github.GetRepository(ctx, owner, name)
+	gh, webhookBaseURL, err := s.githubClientForRepository(ctx, repo)
+	if err != nil {
+		return err
+	}
+
+	info, err := gh.GetRepository(ctx, owner, name)
 	if err != nil {
 		return fmt.Errorf("get repository info: %w", err)
 	}
 
-	branches, err := s.github.GetBranches(ctx, owner, name)
+	branches, err := gh.GetBranches(ctx, owner, name)
 	if err != nil {
 		return fmt.Errorf("get branches: %w", err)
 	}
@@ -88,12 +93,12 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, owner
 		defaultBranch = "main"
 	}
 
-	commits, err := s.github.GetCommits(ctx, owner, name, defaultBranch, 100)
+	commits, err := gh.GetCommits(ctx, owner, name, defaultBranch, 100)
 	if err != nil && !errors.Is(err, github.ErrNotFound) {
 		return fmt.Errorf("get commits: %w", err)
 	}
 
-	prs, err := s.github.ListPullRequests(ctx, owner, name)
+	prs, err := gh.ListPullRequests(ctx, owner, name)
 	if err != nil {
 		return fmt.Errorf("list pull requests: %w", err)
 	}
@@ -127,18 +132,18 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, owner
 		_ = s.cache.Del(ctx, rediscache.RepoKey(repo.ID))
 	}
 
-	if s.webhookBaseURL != "" && !isLocalURL(s.webhookBaseURL) {
-		if regErr := s.ensureWebhookRegistered(ctx, repo, owner, name); regErr != nil {
+	if webhookBaseURL != "" && !isLocalURL(webhookBaseURL) {
+		if regErr := s.ensureWebhookRegistered(ctx, gh, webhookBaseURL, repo, owner, name); regErr != nil {
 			utils.Warn("sync: webhook registration failed", "repo_id", repo.ID, "error", regErr)
 		}
-	} else if s.webhookBaseURL != "" {
+	} else if webhookBaseURL != "" {
 		utils.Info("sync: skipping webhook registration (local URL not reachable by GitHub)", "repo_id", repo.ID)
 	}
 
 	return nil
 }
 
-func (s *SyncService) ensureWebhookRegistered(ctx context.Context, repo *models.Repository, owner, name string) error {
+func (s *SyncService) ensureWebhookRegistered(ctx context.Context, gh github.ClientInterface, webhookBaseURL string, repo *models.Repository, owner, name string) error {
 	existing, err := s.repo.GetWebhookConfigByRepoID(ctx, repo.ID)
 	if err != nil {
 		return fmt.Errorf("check existing webhook config: %w", err)
@@ -152,8 +157,8 @@ func (s *SyncService) ensureWebhookRegistered(ctx context.Context, repo *models.
 		return fmt.Errorf("generate webhook secret: %w", err)
 	}
 
-	webhookURL := fmt.Sprintf("%s/api/v1/webhooks/github/%s", s.webhookBaseURL, repo.ID)
-	webhookID, err := s.github.CreateWebhook(ctx, owner, name, webhookURL, secret)
+	webhookURL := fmt.Sprintf("%s/api/v1/webhooks/github/%s", webhookBaseURL, repo.ID)
+	webhookID, err := gh.CreateWebhook(ctx, owner, name, webhookURL, secret)
 	if err != nil {
 		return fmt.Errorf("create github webhook: %w", err)
 	}
@@ -176,6 +181,22 @@ func (s *SyncService) ensureWebhookRegistered(ctx context.Context, repo *models.
 	existing.ProviderWebhookID = cfg.ProviderWebhookID
 	existing.IsActive = true
 	return s.repo.UpdateWebhookConfig(ctx, existing)
+}
+
+func (s *SyncService) githubClientForRepository(ctx context.Context, repo *models.Repository) (github.ClientInterface, string, error) {
+	if repo.OrganizationID != "" {
+		cfg, err := s.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
+		if err != nil {
+			return nil, "", err
+		}
+		if cfg != nil {
+			return github.NewClient(cfg.GithubToken), cfg.WebhookBaseURL, nil
+		}
+	}
+	if s.github != nil {
+		return s.github, s.webhookBaseURL, nil
+	}
+	return nil, "", fmt.Errorf("github is not configured for organization")
 }
 
 func isLocalURL(u string) bool {

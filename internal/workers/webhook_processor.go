@@ -16,18 +16,16 @@ import (
 )
 
 type WebhookProcessor struct {
-	repo               storage.Repository
-	syncService        *services.SyncService
-	enqueuer           jobs.Enqueuer
-	tokenHourlyLimit   int64
+	repo        storage.Repository
+	syncService *services.SyncService
+	enqueuer    jobs.Enqueuer
 }
 
-func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enqueuer jobs.Enqueuer, tokenLimit int64) *WebhookProcessor {
+func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enqueuer jobs.Enqueuer) *WebhookProcessor {
 	return &WebhookProcessor{
-		repo:             repo,
-		syncService:      svc,
-		enqueuer:         enqueuer,
-		tokenHourlyLimit: tokenLimit,
+		repo:        repo,
+		syncService: svc,
+		enqueuer:    enqueuer,
 	}
 }
 
@@ -95,8 +93,9 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 		repo, err := w.repo.GetRepository(ctx, repoID)
 		if err == nil && repo != nil && repo.AnalysisStatus != "in_progress" {
 			// Check token budget
-			used, err := w.repo.SumTokensUsedSince(ctx, time.Now().UTC().Add(-time.Hour))
-			if err != nil || used < w.tokenHourlyLimit {
+			limit := w.tokenLimitForRepository(ctx, repo)
+			used, err := w.repo.SumTokensUsedSince(ctx, repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
+			if err != nil || used < limit {
 				analyzePayload := tasks.AnalyzeRepoPayload{
 					RepositoryID: repoID,
 					Branch:       webhook.EventPayload.Branch,
@@ -109,7 +108,7 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 					// Don't fail the whole webhook if analysis fails to enqueue
 				}
 			} else {
-				utils.Warn("webhook processor: skipping analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", w.tokenHourlyLimit)
+				utils.Warn("webhook processor: skipping analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", limit)
 			}
 		}
 
@@ -117,8 +116,13 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 		utils.Info("webhook processor: triggering analysis for PR", "event", webhook.EventType, "repo_id", repoID)
 
 		// Check token budget
-		used, err := w.repo.SumTokensUsedSince(ctx, time.Now().UTC().Add(-time.Hour))
-		if err != nil || used < w.tokenHourlyLimit {
+		repo, repoErr := w.repo.GetRepository(ctx, repoID)
+		if repoErr != nil || repo == nil {
+			return fmt.Errorf("fetch repository: %w", repoErr)
+		}
+		limit := w.tokenLimitForRepository(ctx, repo)
+		used, err := w.repo.SumTokensUsedSince(ctx, repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
+		if err != nil || used < limit {
 			// For PR events, trigger analysis directly
 			var prID int64
 			if webhook.EventPayload.PullRequestID != nil {
@@ -136,11 +140,19 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 				return fmt.Errorf("enqueue analysis job: %w", err)
 			}
 		} else {
-			utils.Warn("webhook processor: skipping PR analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", w.tokenHourlyLimit)
+			utils.Warn("webhook processor: skipping PR analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", limit)
 		}
 
 	default:
 		utils.Info("webhook processor: ignoring event type", "event", webhook.EventType)
 	}
 	return nil
+}
+
+func (w *WebhookProcessor) tokenLimitForRepository(ctx context.Context, repo *models.Repository) int64 {
+	cfg, err := w.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
+	if err != nil || cfg == nil || cfg.AnthropicTokensPerHour <= 0 {
+		return 20000
+	}
+	return int64(cfg.AnthropicTokensPerHour)
 }

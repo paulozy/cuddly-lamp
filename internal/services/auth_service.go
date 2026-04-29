@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -47,7 +48,12 @@ var (
 	ErrTokenRevoked = fmt.Errorf("token revoked")
 )
 
-func (s *AuthService) LoginWithEmail(ctx context.Context, email, password string) (*models.TokenResponse, error) {
+func (s *AuthService) LoginWithEmail(ctx context.Context, orgSlug, email, password string) (*models.TokenResponse, error) {
+	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
+	if err != nil || org == nil || !org.IsActive {
+		return nil, fmt.Errorf("invalid organization")
+	}
+
 	user, err := s.repo.GetUserByEmail(ctx, email)
 	if user == nil || err != nil {
 		return nil, fmt.Errorf("invalid email or password")
@@ -61,17 +67,34 @@ func (s *AuthService) LoginWithEmail(ctx context.Context, email, password string
 		return nil, fmt.Errorf("account is inactive")
 	}
 
-	return s.generateTokenPair(ctx, user)
+	member, err := s.repo.GetOrganizationMember(ctx, org.ID, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve organization membership: %w", err)
+	}
+	if member == nil {
+		return nil, fmt.Errorf("user does not belong to organization")
+	}
+
+	return s.generateTokenPair(ctx, user, org, member.Role)
 }
 
-func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, password string) (*models.TokenResponse, error) {
+func (s *AuthService) RegisterWithEmail(ctx context.Context, orgSlug, email, fullName, password string) (*models.TokenResponse, error) {
 	if err := validatePasswordStrength(password); err != nil {
 		return nil, fmt.Errorf("password validation failed: %w", err)
 	}
 
+	org, err := s.getOrCreateOrganization(ctx, orgSlug)
+	if err != nil {
+		return nil, err
+	}
+
 	existingUser, err := s.repo.GetUserByEmail(ctx, email)
 	if existingUser != nil {
-		return nil, fmt.Errorf("email already in use")
+		member, err := s.ensureOrganizationMember(ctx, org.ID, existingUser.ID)
+		if err != nil {
+			return nil, err
+		}
+		return s.generateTokenPair(ctx, existingUser, org, member.Role)
 	}
 
 	passwordHash, err := hashPassword(password)
@@ -94,20 +117,25 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, pa
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	return s.generateTokenPair(ctx, user)
-}
-
-func (s *AuthService) generateTokenPair(ctx context.Context, user *models.User) (*models.TokenResponse, error) {
-	return s.generateTokenPairWithFamily(ctx, user, uuid.New(), nil)
-}
-
-func (s *AuthService) generateTokenPairWithFamily(ctx context.Context, user *models.User, familyID uuid.UUID, parentJTI *string) (*models.TokenResponse, error) {
-	signedToken, accessRecord, err := s.generateAccessToken(ctx, user, familyID)
+	member, err := s.ensureOrganizationMember(ctx, org.ID, user.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	rawRefresh, err := s.generateRefreshToken(ctx, uuid.MustParse(user.ID), familyID, parentJTI)
+	return s.generateTokenPair(ctx, user, org, member.Role)
+}
+
+func (s *AuthService) generateTokenPair(ctx context.Context, user *models.User, org *models.Organization, orgRole models.UserRole) (*models.TokenResponse, error) {
+	return s.generateTokenPairWithFamily(ctx, user, org, orgRole, uuid.New(), nil)
+}
+
+func (s *AuthService) generateTokenPairWithFamily(ctx context.Context, user *models.User, org *models.Organization, orgRole models.UserRole, familyID uuid.UUID, parentJTI *string) (*models.TokenResponse, error) {
+	signedToken, accessRecord, err := s.generateAccessToken(ctx, user, org, orgRole, familyID)
+	if err != nil {
+		return nil, err
+	}
+
+	rawRefresh, err := s.generateRefreshToken(ctx, uuid.MustParse(user.ID), uuid.MustParse(org.ID), familyID, parentJTI)
 	if err != nil {
 		return nil, err
 	}
@@ -124,22 +152,37 @@ func (s *AuthService) generateTokenPairWithFamily(ctx context.Context, user *mod
 			ID:       user.ID,
 			Email:    user.Email,
 			FullName: user.FullName,
-			Role:     user.Role,
+			Role:     orgRole,
+			Organization: &models.OrganizationInfo{
+				ID:   org.ID,
+				Name: org.Name,
+				Slug: org.Slug,
+				Role: orgRole,
+			},
+		},
+		Organization: models.OrganizationInfo{
+			ID:   org.ID,
+			Name: org.Name,
+			Slug: org.Slug,
+			Role: orgRole,
 		},
 	}, nil
 }
 
-func (s *AuthService) generateAccessToken(ctx context.Context, user *models.User, familyID uuid.UUID) (string, *models.Token, error) {
+func (s *AuthService) generateAccessToken(ctx context.Context, user *models.User, org *models.Organization, orgRole models.UserRole, familyID uuid.UUID) (string, *models.Token, error) {
 	jti := uuid.New().String()
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.accessTTL)
 
 	claims := models.TokenClaims{
-		UserID:   user.ID,
-		Email:    user.Email,
-		FullName: user.FullName,
-		Role:     user.Role,
-		JTI:      jti,
+		UserID:           user.ID,
+		Email:            user.Email,
+		FullName:         user.FullName,
+		Role:             orgRole,
+		OrganizationID:   org.ID,
+		OrganizationSlug: org.Slug,
+		OrganizationRole: orgRole,
+		JTI:              jti,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.jwtIssuer,
 			Audience:  []string{s.jwtAudience},
@@ -157,15 +200,16 @@ func (s *AuthService) generateAccessToken(ctx context.Context, user *models.User
 
 	fid := familyID
 	tokenRecord := &models.Token{
-		ID:        uuid.New(),
-		UserID:    uuid.MustParse(user.ID),
-		JTI:       jti,
-		TokenHash: hashToken(signedToken),
-		Type:      "access",
-		FamilyID:  &fid,
-		IsRevoked: false,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
+		ID:             uuid.New(),
+		UserID:         uuid.MustParse(user.ID),
+		OrganizationID: uuid.MustParse(org.ID),
+		JTI:            jti,
+		TokenHash:      hashToken(signedToken),
+		Type:           "access",
+		FamilyID:       &fid,
+		IsRevoked:      false,
+		CreatedAt:      now,
+		ExpiresAt:      expiresAt,
 	}
 
 	if err := s.repo.CreateToken(ctx, tokenRecord); err != nil {
@@ -175,7 +219,7 @@ func (s *AuthService) generateAccessToken(ctx context.Context, user *models.User
 	return signedToken, tokenRecord, nil
 }
 
-func (s *AuthService) generateRefreshToken(ctx context.Context, userID uuid.UUID, familyID uuid.UUID, parentJTI *string) (string, error) {
+func (s *AuthService) generateRefreshToken(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, familyID uuid.UUID, parentJTI *string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("failed to generate refresh token: %w", err)
@@ -185,16 +229,17 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, userID uuid.UUID
 	now := time.Now().UTC()
 	fid := familyID
 	tokenRecord := &models.Token{
-		ID:        uuid.New(),
-		UserID:    userID,
-		JTI:       uuid.New().String(),
-		TokenHash: hashToken(rawToken),
-		Type:      "refresh",
-		FamilyID:  &fid,
-		ParentJTI: parentJTI,
-		IsRevoked: false,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.refreshTTL),
+		ID:             uuid.New(),
+		UserID:         userID,
+		OrganizationID: orgID,
+		JTI:            uuid.New().String(),
+		TokenHash:      hashToken(rawToken),
+		Type:           "refresh",
+		FamilyID:       &fid,
+		ParentJTI:      parentJTI,
+		IsRevoked:      false,
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(s.refreshTTL),
 	}
 
 	if err := s.repo.CreateToken(ctx, tokenRecord); err != nil {
@@ -245,7 +290,16 @@ func (s *AuthService) RefreshTokens(ctx context.Context, rawRefreshToken string)
 		familyID = uuid.New()
 	}
 
-	return s.generateTokenPairWithFamily(ctx, user, familyID, &tokenRecord.JTI)
+	org, err := s.repo.GetOrganization(ctx, tokenRecord.OrganizationID.String())
+	if err != nil || org == nil {
+		return nil, fmt.Errorf("failed to retrieve organization: %w", err)
+	}
+	member, err := s.repo.GetOrganizationMember(ctx, org.ID, user.ID)
+	if err != nil || member == nil {
+		return nil, fmt.Errorf("failed to retrieve organization membership: %w", err)
+	}
+
+	return s.generateTokenPairWithFamily(ctx, user, org, member.Role, familyID, &tokenRecord.JTI)
 }
 
 func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*models.TokenClaims, error) {
@@ -307,6 +361,95 @@ func (s *AuthService) RevokeRefreshTokenFamily(ctx context.Context, rawRefreshTo
 		return s.repo.RevokeToken(ctx, tokenRecord.JTI, "logged out")
 	}
 	return s.repo.RevokeTokenFamily(ctx, *tokenRecord.FamilyID, "logged out")
+}
+
+func (s *AuthService) GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error) {
+	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(slug))
+	if err != nil {
+		return nil, err
+	}
+	if org == nil || !org.IsActive {
+		return nil, fmt.Errorf("invalid organization")
+	}
+	return org, nil
+}
+
+type refreshOrganization struct {
+	Organization *models.Organization
+	Role         models.UserRole
+}
+
+func (s *AuthService) getOrCreateOrganization(ctx context.Context, slug string) (*models.Organization, error) {
+	normalized := normalizeSlug(slug)
+	if normalized == "" {
+		return nil, fmt.Errorf("organization slug is required")
+	}
+
+	org, err := s.repo.GetOrganizationBySlug(ctx, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve organization: %w", err)
+	}
+	if org != nil {
+		return org, nil
+	}
+
+	org = &models.Organization{
+		ID:        uuid.New().String(),
+		Name:      normalized,
+		Slug:      normalized,
+		IsActive:  true,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := s.repo.CreateOrganization(ctx, org); err != nil {
+		return nil, fmt.Errorf("failed to create organization: %w", err)
+	}
+
+	cfg := &models.OrganizationConfig{
+		OrganizationID: org.ID,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	cfg.ApplyDefaults()
+	_ = s.repo.UpsertOrganizationConfig(ctx, cfg)
+
+	return org, nil
+}
+
+func (s *AuthService) ensureOrganizationMember(ctx context.Context, orgID, userID string) (*models.OrganizationMember, error) {
+	existing, err := s.repo.GetOrganizationMember(ctx, orgID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve organization membership: %w", err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	count, err := s.repo.CountOrganizationMembers(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	role := models.RoleDeveloper
+	if count == 0 {
+		role = models.RoleAdmin
+	}
+
+	member := &models.OrganizationMember{
+		OrganizationID: orgID,
+		UserID:         userID,
+		Role:           role,
+		IsActive:       true,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := s.repo.CreateOrganizationMember(ctx, member); err != nil {
+		return nil, err
+	}
+	return member, nil
+}
+
+func normalizeSlug(slug string) string {
+	return strings.ToLower(strings.TrimSpace(slug))
 }
 
 // ============================================
@@ -385,23 +528,24 @@ func (s *AuthService) RegisterProvider(provider oauth.OAuthProvider) {
 	s.providers[provider.Name()] = provider
 }
 
-func (s *AuthService) GetOAuthAuthURL(provider, state string) string {
-	p, ok := s.providers[provider]
-	if !ok {
+func (s *AuthService) GetOAuthAuthURL(ctx context.Context, orgSlug, provider, state string) string {
+	p, err := s.oauthProviderForOrganization(ctx, orgSlug, provider)
+	if err != nil {
 		return ""
 	}
 	return p.GetAuthURL(state)
 }
 
-func (s *AuthService) GenerateOAuthState() (string, error) {
+func (s *AuthService) GenerateOAuthState(orgID string) (string, error) {
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
 	payload := map[string]interface{}{
-		"nonce": base64.RawURLEncoding.EncodeToString(nonce),
-		"exp":   time.Now().Add(10 * time.Minute).Unix(),
+		"nonce":           base64.RawURLEncoding.EncodeToString(nonce),
+		"organization_id": orgID,
+		"exp":             time.Now().Add(10 * time.Minute).Unix(),
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -418,7 +562,7 @@ func (s *AuthService) GenerateOAuthState() (string, error) {
 	return payloadB64 + "." + signature, nil
 }
 
-func (s *AuthService) VerifyOAuthState(state string) error {
+func (s *AuthService) VerifyOAuthState(state, orgID string) error {
 	parts := len(state)
 	if parts < 100 {
 		return fmt.Errorf("invalid state format")
@@ -466,17 +610,27 @@ func (s *AuthService) VerifyOAuthState(state string) error {
 		return fmt.Errorf("state has expired")
 	}
 
+	stateOrgID, _ := payload["organization_id"].(string)
+	if stateOrgID == "" || stateOrgID != orgID {
+		return fmt.Errorf("invalid organization in state")
+	}
+
 	return nil
 }
 
-func (s *AuthService) LoginWithOAuth(ctx context.Context, provider, code, state string) (*models.TokenResponse, error) {
-	if err := s.VerifyOAuthState(state); err != nil {
+func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, code, state string) (*models.TokenResponse, error) {
+	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
+	if err != nil || org == nil || !org.IsActive {
+		return nil, fmt.Errorf("invalid organization")
+	}
+
+	if err := s.VerifyOAuthState(state, org.ID); err != nil {
 		return nil, fmt.Errorf("invalid oauth state: %w", err)
 	}
 
-	oauthProvider, ok := s.providers[provider]
-	if !ok {
-		return nil, fmt.Errorf("unknown oauth provider: %s", provider)
+	oauthProvider, err := s.oauthProviderForOrganization(ctx, orgSlug, provider)
+	if err != nil {
+		return nil, err
 	}
 
 	userInfo, err := oauthProvider.ExchangeCode(ctx, code)
@@ -506,12 +660,12 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, provider, code, state 
 
 		if user == nil {
 			user = &models.User{
-				ID:       uuid.New().String(),
-				Email:    userInfo.Email,
-				FullName: userInfo.Name,
-				Role:     models.RoleDeveloper,
-				IsActive: true,
-				Avatar:   "",
+				ID:        uuid.New().String(),
+				Email:     userInfo.Email,
+				FullName:  userInfo.Name,
+				Role:      models.RoleDeveloper,
+				IsActive:  true,
+				Avatar:    "",
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
 			}
@@ -543,5 +697,39 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, provider, code, state 
 		return nil, fmt.Errorf("account is inactive")
 	}
 
-	return s.generateTokenPair(ctx, user)
+	member, err := s.ensureOrganizationMember(ctx, org.ID, user.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.generateTokenPair(ctx, user, org, member.Role)
+}
+
+func (s *AuthService) oauthProviderForOrganization(ctx context.Context, orgSlug, provider string) (oauth.OAuthProvider, error) {
+	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
+	if err != nil || org == nil {
+		return nil, fmt.Errorf("invalid organization")
+	}
+	cfg, err := s.repo.GetOrganizationConfig(ctx, org.ID)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("organization oauth is not configured")
+	}
+
+	switch provider {
+	case "github":
+		if cfg.GitHubClientID == "" || cfg.GitHubClientSecret == "" {
+			return nil, fmt.Errorf("github oauth is not configured")
+		}
+		return oauth.NewGitHubProvider(cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.GitHubCallbackURL), nil
+	case "gitlab":
+		if cfg.GitLabClientID == "" || cfg.GitLabClientSecret == "" {
+			return nil, fmt.Errorf("gitlab oauth is not configured")
+		}
+		return oauth.NewGitLabProvider(cfg.GitLabClientID, cfg.GitLabClientSecret, cfg.GitLabCallbackURL), nil
+	default:
+		return nil, fmt.Errorf("unknown oauth provider: %s", provider)
+	}
 }

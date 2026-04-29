@@ -26,8 +26,8 @@ type User struct {
 	IsActive bool      `gorm:"default:true" json:"is_active"`
 	LastSeen time.Time `json:"last_seen,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
 	Tokens       []Token      `gorm:"foreignKey:UserID" json:"tokens,omitempty"`

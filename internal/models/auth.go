@@ -8,19 +8,23 @@ import (
 )
 
 type TokenClaims struct {
-	UserID   string   `json:"sub"`
-	Email    string   `json:"email"`
-	FullName string   `json:"full_name"`
-	Role     UserRole `json:"role"`
-	JTI      string   `json:"jti"`
+	UserID           string   `json:"sub"`
+	Email            string   `json:"email"`
+	FullName         string   `json:"full_name"`
+	Role             UserRole `json:"role"`
+	OrganizationID   string   `json:"organization_id"`
+	OrganizationSlug string   `json:"organization_slug"`
+	OrganizationRole UserRole `json:"organization_role"`
+	JTI              string   `json:"jti"`
 	jwt.RegisteredClaims
 }
 
 type Token struct {
-	ID        uuid.UUID `gorm:"primaryKey" json:"id"`
-	UserID    uuid.UUID `gorm:"index" json:"user_id"`
-	JTI       string    `gorm:"uniqueIndex" json:"jti"`
-	TokenHash string    `json:"-"`
+	ID             uuid.UUID `gorm:"primaryKey" json:"id"`
+	UserID         uuid.UUID `gorm:"index" json:"user_id"`
+	OrganizationID uuid.UUID `gorm:"index" json:"organization_id"`
+	JTI            string    `gorm:"uniqueIndex" json:"jti"`
+	TokenHash      string    `json:"-"`
 
 	Type      string     `json:"type"` // "access" or "refresh"
 	FamilyID  *uuid.UUID `gorm:"column:family_id;index" json:"family_id,omitempty"`
@@ -48,12 +52,13 @@ type RegisterRequest struct {
 }
 
 type TokenResponse struct {
-	AccessToken      string   `json:"access_token"`
-	TokenType        string   `json:"token_type"` // "Bearer"
-	ExpiresIn        int64    `json:"expires_in"` // seconds
-	RefreshToken     string   `json:"refresh_token"`
-	RefreshExpiresIn int64    `json:"refresh_expires_in"` // seconds
-	User             UserInfo `json:"user"`
+	AccessToken      string           `json:"access_token"`
+	TokenType        string           `json:"token_type"` // "Bearer"
+	ExpiresIn        int64            `json:"expires_in"` // seconds
+	RefreshToken     string           `json:"refresh_token"`
+	RefreshExpiresIn int64            `json:"refresh_expires_in"` // seconds
+	User             UserInfo         `json:"user"`
+	Organization     OrganizationInfo `json:"organization"`
 }
 
 type RefreshRequest struct {
@@ -65,10 +70,11 @@ type LogoutRequest struct {
 }
 
 type UserInfo struct {
-	ID       string   `json:"id"`
-	Email    string   `json:"email"`
-	FullName string   `json:"full_name"`
-	Role     UserRole `json:"role"`
+	ID           string            `json:"id"`
+	Email        string            `json:"email"`
+	FullName     string            `json:"full_name"`
+	Role         UserRole          `json:"role"`
+	Organization *OrganizationInfo `json:"organization,omitempty"`
 }
 
 type ErrorResponse struct {

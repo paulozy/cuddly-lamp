@@ -209,10 +209,10 @@ type WebhookConfig struct {
 	Repository   *Repository `gorm:"foreignKey:RepositoryID" json:"repository,omitempty"`
 
 	// Provider webhook settings
-	WebhookURL string   `gorm:"type:text" json:"webhook_url"`
-	Secret     string   `gorm:"type:bytea;serializer:enc" json:"-"`
+	WebhookURL string      `gorm:"type:text" json:"webhook_url"`
+	Secret     string      `gorm:"type:bytea;serializer:enc" json:"-"`
 	Events     StringArray `gorm:"type:text[];default:'{}'" json:"events"`
-	IsActive   bool     `gorm:"default:true" json:"is_active"`
+	IsActive   bool        `gorm:"default:true" json:"is_active"`
 
 	ProviderWebhookID string `gorm:"type:varchar(255)" json:"provider_webhook_id,omitempty"`
 	ProviderType      string `gorm:"type:varchar(50)" json:"provider_type"` // github, gitlab, gitea

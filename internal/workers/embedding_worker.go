@@ -18,24 +18,16 @@ import (
 const embeddingBatchSize = 64
 
 type EmbeddingWorker struct {
-	provider    embeddings.Provider
-	repo        storage.Repository
-	githubToken string
+	repo storage.Repository
 }
 
-func NewEmbeddingWorker(provider embeddings.Provider, repo storage.Repository, githubToken string) *EmbeddingWorker {
+func NewEmbeddingWorker(repo storage.Repository) *EmbeddingWorker {
 	return &EmbeddingWorker{
-		provider:    provider,
-		repo:        repo,
-		githubToken: githubToken,
+		repo: repo,
 	}
 }
 
 func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
-	if w.provider == nil {
-		return fmt.Errorf("embedding worker: provider not configured")
-	}
-
 	var payload tasks.GenerateEmbeddingsPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 		return fmt.Errorf("embedding worker: unmarshal payload: %w", err)
@@ -51,6 +43,14 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	if repository == nil {
 		return fmt.Errorf("embedding worker: repository not found: %s", payload.RepositoryID)
 	}
+	cfg, err := w.repo.GetOrganizationConfig(ctx, repository.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("embedding worker: get organization config: %w", err)
+	}
+	if cfg == nil || cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
+		return fmt.Errorf("embedding worker: provider not configured for organization")
+	}
+	provider := embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, cfg.EmbeddingsDimensions)
 
 	branch := payload.Branch
 	if branch == "" {
@@ -61,16 +61,16 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 
 	utils.Info("embedding worker: collecting chunks", "repo_id", repository.ID, "branch", branch)
-	chunks, err := embeddings.CollectRepositoryChunks(ctx, repository.URL, w.githubToken, branch)
+	chunks, err := embeddings.CollectRepositoryChunks(ctx, repository.URL, cfg.GithubToken, branch)
 	if err != nil {
 		return fmt.Errorf("embedding worker: collect chunks: %w", err)
 	}
 
 	deleteFilter := storage.EmbeddingDeleteFilter{
 		RepositoryID: repository.ID,
-		Provider:     w.provider.Provider(),
-		Model:        w.provider.Model(),
-		Dimension:    w.provider.Dimension(),
+		Provider:     provider.Provider(),
+		Model:        provider.Model(),
+		Dimension:    provider.Dimension(),
 		Branch:       branch,
 	}
 	if err := w.repo.DeleteEmbeddings(ctx, deleteFilter); err != nil {
@@ -94,7 +94,7 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 			input[i] = batch[i].Content
 		}
 
-		result, err := w.provider.Embed(ctx, input, embeddings.InputTypeDocument)
+		result, err := provider.Embed(ctx, input, embeddings.InputTypeDocument)
 		if err != nil {
 			return fmt.Errorf("embedding worker: embed batch: %w", err)
 		}
@@ -112,9 +112,9 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 				Language:     chunk.Language,
 				StartLine:    chunk.StartLine,
 				EndLine:      chunk.EndLine,
-				Provider:     w.provider.Provider(),
-				Model:        w.provider.Model(),
-				Dimension:    w.provider.Dimension(),
+				Provider:     provider.Provider(),
+				Model:        provider.Model(),
+				Dimension:    provider.Dimension(),
 				Branch:       branch,
 				CommitSHA:    payload.CommitSHA,
 				Embedding:    pgvector.NewVector(result.Embeddings[i]),
@@ -129,6 +129,6 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		}
 	}
 
-	utils.Info("embedding worker: completed", "repo_id", repository.ID, "chunks", len(chunks), "provider", w.provider.Provider(), "model", w.provider.Model())
+	utils.Info("embedding worker: completed", "repo_id", repository.ID, "chunks", len(chunks), "provider", provider.Provider(), "model", provider.Model())
 	return nil
 }

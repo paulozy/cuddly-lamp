@@ -75,6 +75,6 @@ func NewNoop() RedisClient {
 	return &noopClient{}
 }
 
-func (n *noopClient) Ping(_ context.Context) error    { return nil }
-func (n *noopClient) Close() error                     { return nil }
-func (n *noopClient) Client() *goredis.Client          { return nil }
+func (n *noopClient) Ping(_ context.Context) error { return nil }
+func (n *noopClient) Close() error                 { return nil }
+func (n *noopClient) Client() *goredis.Client      { return nil }

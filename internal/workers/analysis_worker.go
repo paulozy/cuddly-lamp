@@ -10,6 +10,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
+	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/metrics"
@@ -20,19 +21,17 @@ import (
 )
 
 type AnalysisWorker struct {
-	analyzer         ai.Analyzer
 	repo             storage.Repository
-	ghClient         github.ClientInterface
-	githubToken      string
+	analyzerFactory  func(apiKey string) ai.Analyzer
+	githubFactory    func(token string) github.ClientInterface
 	calculateMetrics func(ctx context.Context, repoURL, githubToken, branch string) (*ai.CodeMetrics, error)
 }
 
-func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient github.ClientInterface, githubToken string) *AnalysisWorker {
+func NewAnalysisWorker(repo storage.Repository) *AnalysisWorker {
 	return &AnalysisWorker{
-		analyzer:         analyzer,
 		repo:             repo,
-		ghClient:         ghClient,
-		githubToken:      githubToken,
+		analyzerFactory:  func(apiKey string) ai.Analyzer { return anthropicclient.NewClient(apiKey) },
+		githubFactory:    func(token string) github.ClientInterface { return github.NewClient(token) },
 		calculateMetrics: metrics.Calculate,
 	}
 }
@@ -96,6 +95,16 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	if repository == nil {
 		return fmt.Errorf("analysis worker: repository not found: %s", payload.RepositoryID)
 	}
+	cfg, err := w.repo.GetOrganizationConfig(ctx, repository.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("analysis worker: get organization config: %w", err)
+	}
+	if cfg == nil || cfg.AnthropicAPIKey == "" {
+		return w.failAnalysis(ctx, repository, "anthropic api key is not configured for organization", payload.TriggeredBy)
+	}
+	analyzer := w.analyzerFactory(cfg.AnthropicAPIKey)
+	githubToken := cfg.GithubToken
+	ghClient := w.githubFactory(githubToken)
 
 	// Update status
 	repository.AnalysisStatus = "in_progress"
@@ -125,21 +134,21 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 
 	// Calculate code metrics locally (lines of code, complexity)
 	// Note: test coverage is skipped as it's a CI artifact, not a git artifact
-	repoMetrics, err := w.calculateMetrics(ctx, repository.URL, w.githubToken, branch)
+	repoMetrics, err := w.calculateMetrics(ctx, repository.URL, githubToken, branch)
 	if err != nil {
-		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", w.githubToken != "", "error", err)
+		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", githubToken != "", "error", err)
 		repoMetrics = &ai.CodeMetrics{}
 	}
 
 	// Build analysis request with computed metrics
-	analysisReq := w.buildAnalysisRequest(ctx, repository, payload, owner, repo, repoMetrics)
+	analysisReq := w.buildAnalysisRequest(ctx, ghClient, repository, payload, owner, repo, repoMetrics)
 	if analysisReq == nil {
 		return w.failAnalysis(ctx, repository, "failed to build analysis request", payload.TriggeredBy)
 	}
 
 	// Call analyzer
 	startTime := time.Now()
-	analysisResult, err := w.analyzer.AnalyzeCode(ctx, analysisReq)
+	analysisResult, err := analyzer.AnalyzeCode(ctx, analysisReq)
 	processingMs := time.Since(startTime).Milliseconds()
 
 	if err != nil {
@@ -221,7 +230,7 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	return nil
 }
 
-func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
+func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
 	analysisType := ai.AnalysisType(payload.Type)
 	if analysisType == "" {
 		analysisType = ai.AnalysisTypeCodeReview
@@ -259,7 +268,7 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *m
 	}
 
 	// Fetch recent commits for context
-	commits, err := w.ghClient.GetCommits(ctx, owner, repoName, req.Branch, 10)
+	commits, err := ghClient.GetCommits(ctx, owner, repoName, req.Branch, 10)
 	if err != nil {
 		utils.Warn("analysis worker: fetch commits failed", "error", err)
 		// Don't fail, continue with empty commits

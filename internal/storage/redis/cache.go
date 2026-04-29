@@ -71,5 +71,5 @@ func (n *noopCache) Get(_ context.Context, _ string) (string, error) {
 }
 
 func (n *noopCache) Set(_ context.Context, _, _ string, _ time.Duration) error { return nil }
-func (n *noopCache) Del(_ context.Context, _ ...string) error                   { return nil }
-func (n *noopCache) Exists(_ context.Context, _ string) (bool, error)           { return false, nil }
+func (n *noopCache) Del(_ context.Context, _ ...string) error                  { return nil }
+func (n *noopCache) Exists(_ context.Context, _ string) (bool, error)          { return false, nil }

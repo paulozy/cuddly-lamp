@@ -49,8 +49,16 @@ func (h *RepositoryHandler) CreateRepository(c *gin.Context) {
 		})
 		return
 	}
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid organization",
+		})
+		return
+	}
 
-	resp, err := h.repoService.CreateRepository(c.Request.Context(), userID, req)
+	resp, err := h.repoService.CreateRepository(c.Request.Context(), orgID, userID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrRepositoryAlreadyExists) {
 			c.JSON(http.StatusConflict, models.ErrorResponse{
@@ -83,7 +91,7 @@ func (h *RepositoryHandler) CreateRepository(c *gin.Context) {
 func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 	id := c.Param("id")
 
-	userID, err := utils.GetUserIDFromContext(c)
+	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "unauthorized",
@@ -92,7 +100,7 @@ func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.repoService.GetRepository(c.Request.Context(), id, userID)
+	resp, err := h.repoService.GetRepository(c.Request.Context(), id, orgID)
 	if err != nil {
 		repoErrToJSON(c, err)
 		return
@@ -113,7 +121,7 @@ func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 // @Failure      500     {object}  models.ErrorResponse
 // @Router       /repositories [get]
 func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
-	userID, err := utils.GetUserIDFromContext(c)
+	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "unauthorized",
@@ -125,7 +133,7 @@ func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-	resp, err := h.repoService.ListRepositories(c.Request.Context(), userID, limit, offset)
+	resp, err := h.repoService.ListRepositories(c.Request.Context(), orgID, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "list_failed",
@@ -163,7 +171,7 @@ func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 		return
 	}
 
-	userID, err := utils.GetUserIDFromContext(c)
+	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "unauthorized",
@@ -172,7 +180,7 @@ func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.repoService.UpdateRepository(c.Request.Context(), id, userID, req)
+	resp, err := h.repoService.UpdateRepository(c.Request.Context(), id, orgID, req)
 	if err != nil {
 		repoErrToJSON(c, err)
 		return
@@ -194,7 +202,7 @@ func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 func (h *RepositoryHandler) DeleteRepository(c *gin.Context) {
 	id := c.Param("id")
 
-	userID, err := utils.GetUserIDFromContext(c)
+	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "unauthorized",
@@ -203,7 +211,7 @@ func (h *RepositoryHandler) DeleteRepository(c *gin.Context) {
 		return
 	}
 
-	if err := h.repoService.DeleteRepository(c.Request.Context(), id, userID); err != nil {
+	if err := h.repoService.DeleteRepository(c.Request.Context(), id, orgID); err != nil {
 		repoErrToJSON(c, err)
 		return
 	}

@@ -33,13 +33,13 @@ func NewRepositoryService(repo storage.Repository, cache redis.Cache, enqueuer j
 	return &RepositoryService{repo: repo, cache: cache, enqueuer: enqueuer}
 }
 
-func (s *RepositoryService) CreateRepository(ctx context.Context, ownerID string, req models.CreateRepositoryRequest) (*models.RepositoryResponse, error) {
+func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID, userID string, req models.CreateRepositoryRequest) (*models.RepositoryResponse, error) {
 	name, repoType, err := utils.ParseRepositoryURL(req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid repository URL: %w", err)
 	}
 
-	existing, err := s.repo.GetRepositoryByURL(ctx, req.URL)
+	existing, err := s.repo.GetRepositoryByURL(ctx, organizationID, req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate URL: %w", err)
 	}
@@ -48,12 +48,14 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, ownerID string
 	}
 
 	repo := &models.Repository{
-		Name:        name,
-		Description: req.Description,
-		URL:         req.URL,
-		Type:        repoType,
-		OwnerUserID: ownerID,
-		IsPublic:    req.IsPublic,
+		Name:            name,
+		Description:     req.Description,
+		URL:             req.URL,
+		Type:            repoType,
+		OrganizationID:  organizationID,
+		CreatedByUserID: userID,
+		OwnerUserID:     userID,
+		IsPublic:        req.IsPublic,
 	}
 
 	if err := s.repo.CreateRepository(ctx, repo); err != nil {
@@ -70,7 +72,7 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, ownerID string
 	return models.RepositoryToResponse(repo), nil
 }
 
-func (s *RepositoryService) GetRepository(ctx context.Context, id, requesterID string) (*models.RepositoryResponse, error) {
+func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationID string) (*models.RepositoryResponse, error) {
 	if s.cache != nil {
 		if cached, err := s.cache.Get(ctx, redis.RepoKey(id)); err == nil {
 			var resp models.RepositoryResponse
@@ -87,7 +89,7 @@ func (s *RepositoryService) GetRepository(ctx context.Context, id, requesterID s
 	if repo == nil {
 		return nil, ErrRepositoryNotFound
 	}
-	if repo.OwnerUserID != requesterID {
+	if repo.OrganizationID != organizationID {
 		return nil, ErrForbidden
 	}
 
@@ -102,15 +104,15 @@ func (s *RepositoryService) GetRepository(ctx context.Context, id, requesterID s
 	return resp, nil
 }
 
-func (s *RepositoryService) ListRepositories(ctx context.Context, ownerID string, limit, offset int) (*models.RepositoryListResponse, error) {
+func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID string, limit, offset int) (*models.RepositoryListResponse, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
 	repos, total, err := s.repo.ListRepositories(ctx, &storage.RepositoryFilter{
-		OwnerUserID: ownerID,
-		Limit:       limit,
-		Offset:      offset,
+		OrganizationID: organizationID,
+		Limit:          limit,
+		Offset:         offset,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list repositories: %w", err)
@@ -129,7 +131,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, ownerID string
 	}, nil
 }
 
-func (s *RepositoryService) UpdateRepository(ctx context.Context, id, requesterID string, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
+func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizationID string, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get repository: %w", err)
@@ -137,7 +139,7 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, requesterI
 	if repo == nil {
 		return nil, ErrRepositoryNotFound
 	}
-	if repo.OwnerUserID != requesterID {
+	if repo.OrganizationID != organizationID {
 		return nil, ErrForbidden
 	}
 
@@ -159,7 +161,7 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, requesterI
 	return models.RepositoryToResponse(repo), nil
 }
 
-func (s *RepositoryService) DeleteRepository(ctx context.Context, id, requesterID string) error {
+func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizationID string) error {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get repository: %w", err)
@@ -167,7 +169,7 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, id, requesterI
 	if repo == nil {
 		return ErrRepositoryNotFound
 	}
-	if repo.OwnerUserID != requesterID {
+	if repo.OrganizationID != organizationID {
 		return ErrForbidden
 	}
 

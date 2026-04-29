@@ -15,18 +15,22 @@ import (
 type mockRepo struct {
 	storage.Repository // embed to satisfy non-implemented methods at compile time
 
-	tokens map[string]*models.Token // keyed by token_hash
-	users  map[string]*models.User  // keyed by user_id
+	tokens  map[string]*models.Token // keyed by token_hash
+	users   map[string]*models.User  // keyed by user_id
+	orgs    map[string]*models.Organization
+	members map[string]*models.OrganizationMember
 
-	revokedJTIs    []string
+	revokedJTIs     []string
 	revokedFamilies []uuid.UUID
-	createError    error
+	createError     error
 }
 
 func newMockRepo() *mockRepo {
 	return &mockRepo{
-		tokens: make(map[string]*models.Token),
-		users:  make(map[string]*models.User),
+		tokens:  make(map[string]*models.Token),
+		users:   make(map[string]*models.User),
+		orgs:    make(map[string]*models.Organization),
+		members: make(map[string]*models.OrganizationMember),
 	}
 }
 
@@ -99,6 +103,22 @@ func (m *mockRepo) CreateUser(_ context.Context, user *models.User) error {
 	return nil
 }
 
+func (m *mockRepo) GetOrganization(_ context.Context, id string) (*models.Organization, error) {
+	org, ok := m.orgs[id]
+	if !ok {
+		return nil, nil
+	}
+	return org, nil
+}
+
+func (m *mockRepo) GetOrganizationMember(_ context.Context, orgID, userID string) (*models.OrganizationMember, error) {
+	member, ok := m.members[orgID+":"+userID]
+	if !ok {
+		return nil, nil
+	}
+	return member, nil
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func newTestService(repo *mockRepo) *AuthService {
@@ -123,11 +143,28 @@ func newTestUser() *models.User {
 	}
 }
 
+func newTestOrg() *models.Organization {
+	return &models.Organization{
+		ID:       uuid.New().String(),
+		Name:     "Test Org",
+		Slug:     "test-org",
+		IsActive: true,
+	}
+}
+
 // seedRefreshToken mints a real refresh token via the service and returns its raw value.
 func seedRefreshToken(t *testing.T, svc *AuthService, repo *mockRepo, user *models.User) string {
 	t.Helper()
+	org := newTestOrg()
 	repo.users[user.ID] = user
-	resp, err := svc.generateTokenPair(context.Background(), user)
+	repo.orgs[org.ID] = org
+	repo.members[org.ID+":"+user.ID] = &models.OrganizationMember{
+		OrganizationID: org.ID,
+		UserID:         user.ID,
+		Role:           models.RoleDeveloper,
+		IsActive:       true,
+	}
+	resp, err := svc.generateTokenPair(context.Background(), user, org, models.RoleDeveloper)
 	if err != nil {
 		t.Fatalf("seedRefreshToken: %v", err)
 	}
@@ -214,7 +251,10 @@ func TestRefreshTokens_AccessTokenUsedAsRefresh_ReturnsErrInvalidToken(t *testin
 	user := newTestUser()
 	repo.users[user.ID] = user
 
-	resp, err := svc.generateTokenPair(context.Background(), user)
+	org := newTestOrg()
+	repo.orgs[org.ID] = org
+	repo.members[org.ID+":"+user.ID] = &models.OrganizationMember{OrganizationID: org.ID, UserID: user.ID, Role: models.RoleDeveloper, IsActive: true}
+	resp, err := svc.generateTokenPair(context.Background(), user, org, models.RoleDeveloper)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -242,7 +282,10 @@ func TestValidateToken_RefreshTokenUsedAsBearer_ReturnsError(t *testing.T) {
 	user := newTestUser()
 	repo.users[user.ID] = user
 
-	resp, err := svc.generateTokenPair(context.Background(), user)
+	org := newTestOrg()
+	repo.orgs[org.ID] = org
+	repo.members[org.ID+":"+user.ID] = &models.OrganizationMember{OrganizationID: org.ID, UserID: user.ID, Role: models.RoleDeveloper, IsActive: true}
+	resp, err := svc.generateTokenPair(context.Background(), user, org, models.RoleDeveloper)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -294,7 +337,10 @@ func TestGenerateTokenPair_ResponseContainsRefreshFields(t *testing.T) {
 	user := newTestUser()
 	repo.users[user.ID] = user
 
-	resp, err := svc.generateTokenPair(context.Background(), user)
+	org := newTestOrg()
+	repo.orgs[org.ID] = org
+	repo.members[org.ID+":"+user.ID] = &models.OrganizationMember{OrganizationID: org.ID, UserID: user.ID, Role: models.RoleDeveloper, IsActive: true}
+	resp, err := svc.generateTokenPair(context.Background(), user, org, models.RoleDeveloper)
 	if err != nil {
 		t.Fatalf("generateTokenPair: %v", err)
 	}

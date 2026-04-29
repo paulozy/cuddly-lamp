@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,20 +20,16 @@ import (
 )
 
 type AnalysisHandler struct {
-	repo              storage.Repository
-	enqueuer          jobs.Enqueuer
-	tokenHourlyLimit  int64
-	embeddingProvider embeddings.Provider
+	repo     storage.Repository
+	enqueuer jobs.Enqueuer
 }
 
 const defaultSemanticMinScore = 0.55
 
-func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer, tokenLimit int64, embeddingProvider embeddings.Provider) *AnalysisHandler {
+func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *AnalysisHandler {
 	return &AnalysisHandler{
-		repo:              repo,
-		enqueuer:          enqueuer,
-		tokenHourlyLimit:  tokenLimit,
-		embeddingProvider: embeddingProvider,
+		repo:     repo,
+		enqueuer: enqueuer,
 	}
 }
 
@@ -59,21 +56,8 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 		return
 	}
 
-	// Verify repository exists
-	repo, err := h.repo.GetRepository(c.Request.Context(), repoID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error:            "internal_error",
-			ErrorDescription: "failed to fetch repository",
-		})
-		return
-	}
-
-	if repo == nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
-			Error:            "not_found",
-			ErrorDescription: "repository not found",
-		})
+	repo, ok := h.fetchAccessibleRepository(c, repoID)
+	if !ok {
 		return
 	}
 
@@ -107,11 +91,19 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 	}
 
 	// Check token budget
-	used, err := h.repo.SumTokensUsedSince(c.Request.Context(), time.Now().UTC().Add(-time.Hour))
-	if err == nil && used >= h.tokenHourlyLimit {
+	cfg, err := h.repo.GetOrganizationConfig(c.Request.Context(), repo.OrganizationID)
+	if err != nil || cfg == nil || cfg.AnthropicAPIKey == "" {
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:            "analysis_unavailable",
+			ErrorDescription: "anthropic api key is not configured for this organization",
+		})
+		return
+	}
+	used, err := h.repo.SumTokensUsedSince(c.Request.Context(), repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
+	if err == nil && used >= int64(cfg.AnthropicTokensPerHour) {
 		c.JSON(http.StatusTooManyRequests, models.ErrorResponse{
 			Error:            "rate_limit_exceeded",
-			ErrorDescription: fmt.Sprintf("token budget exhausted (%d/%d tokens used in last hour)", used, h.tokenHourlyLimit),
+			ErrorDescription: fmt.Sprintf("token budget exhausted (%d/%d tokens used in last hour)", used, cfg.AnthropicTokensPerHour),
 		})
 		return
 	}
@@ -217,7 +209,16 @@ func (h *AnalysisHandler) ListAnalyses(c *gin.Context) {
 // @Failure      503      {object}  models.ErrorResponse
 // @Router       /repositories/{id}/embeddings [post]
 func (h *AnalysisHandler) GenerateEmbeddings(c *gin.Context) {
-	if h.embeddingProvider == nil {
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid organization",
+		})
+		return
+	}
+	embeddingProvider, err := h.embeddingProviderForOrganization(c.Request.Context(), orgID)
+	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
 			Error:            "embeddings_unavailable",
 			ErrorDescription: "embedding provider is not configured",
@@ -253,8 +254,8 @@ func (h *AnalysisHandler) GenerateEmbeddings(c *gin.Context) {
 		Branch:       req.Branch,
 		CommitSHA:    req.CommitSHA,
 	}
-	taskID := fmt.Sprintf("embeddings:generate:%s:%s:%s:%d", repoID, req.Branch, h.embeddingProvider.Model(), h.embeddingProvider.Dimension())
-	err := h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeGenerateEmbeddings, payload,
+	taskID := fmt.Sprintf("embeddings:generate:%s:%s:%s:%d", repoID, req.Branch, embeddingProvider.Model(), embeddingProvider.Dimension())
+	err = h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeGenerateEmbeddings, payload,
 		asynq.TaskID(taskID),
 		asynq.Retention(10*time.Minute),
 	)
@@ -297,7 +298,16 @@ func (h *AnalysisHandler) GenerateEmbeddings(c *gin.Context) {
 // @Failure      503      {object}  models.ErrorResponse
 // @Router       /repositories/{id}/search [get]
 func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
-	if h.embeddingProvider == nil {
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid organization",
+		})
+		return
+	}
+	embeddingProvider, err := h.embeddingProviderForOrganization(c.Request.Context(), orgID)
+	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
 			Error:            "embeddings_unavailable",
 			ErrorDescription: "embedding provider is not configured",
@@ -333,7 +343,7 @@ func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
 		branch = "main"
 	}
 
-	embedding, err := h.embeddingProvider.Embed(c.Request.Context(), []string{query}, embeddings.InputTypeQuery)
+	embedding, err := embeddingProvider.Embed(c.Request.Context(), []string{query}, embeddings.InputTypeQuery)
 	if err != nil {
 		utils.Error("semantic search: embed query failed", "repo_id", repoID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
@@ -354,9 +364,9 @@ func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
 		RepositoryID: repoID,
 		Query:        query,
 		Vector:       embedding.Embeddings[0],
-		Provider:     h.embeddingProvider.Provider(),
-		Model:        h.embeddingProvider.Model(),
-		Dimension:    h.embeddingProvider.Dimension(),
+		Provider:     embeddingProvider.Provider(),
+		Model:        embeddingProvider.Model(),
+		Dimension:    embeddingProvider.Dimension(),
 		Branch:       branch,
 		Limit:        limit,
 		MinScore:     minScore,
@@ -428,7 +438,7 @@ func (h *AnalysisHandler) fetchAccessibleRepository(c *gin.Context, repoID strin
 		return nil, false
 	}
 
-	userID, err := utils.GetUserIDFromContext(c)
+	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "unauthorized",
@@ -436,7 +446,7 @@ func (h *AnalysisHandler) fetchAccessibleRepository(c *gin.Context, repoID strin
 		})
 		return nil, false
 	}
-	if repository.OwnerUserID != userID {
+	if repository.OrganizationID != orgID {
 		c.JSON(http.StatusForbidden, models.ErrorResponse{
 			Error:            "forbidden",
 			ErrorDescription: "you do not have access to this repository",
@@ -445,4 +455,15 @@ func (h *AnalysisHandler) fetchAccessibleRepository(c *gin.Context, repoID strin
 	}
 
 	return repository, true
+}
+
+func (h *AnalysisHandler) embeddingProviderForOrganization(ctx context.Context, orgID string) (embeddings.Provider, error) {
+	cfg, err := h.repo.GetOrganizationConfig(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
+		return nil, fmt.Errorf("embedding provider is not configured")
+	}
+	return embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, cfg.EmbeddingsDimensions), nil
 }

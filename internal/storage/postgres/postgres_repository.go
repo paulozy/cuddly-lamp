@@ -83,6 +83,103 @@ func (pr *PostgresRepository) ListUsers(ctx context.Context, limit, offset int) 
 	return users, nil
 }
 
+// ============ Organization Operations ============
+
+func (pr *PostgresRepository) GetOrganization(ctx context.Context, id string) (*models.Organization, error) {
+	var org models.Organization
+	if err := pr.db.WithContext(ctx).First(&org, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get organization: %w", err)
+	}
+	return &org, nil
+}
+
+func (pr *PostgresRepository) GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error) {
+	var org models.Organization
+	if err := pr.db.WithContext(ctx).First(&org, "slug = ?", slug).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get organization by slug: %w", err)
+	}
+	return &org, nil
+}
+
+func (pr *PostgresRepository) CreateOrganization(ctx context.Context, org *models.Organization) error {
+	if !org.IsValid() {
+		return errors.New("invalid organization data")
+	}
+	if err := pr.db.WithContext(ctx).Create(org).Error; err != nil {
+		return fmt.Errorf("create organization: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) GetOrganizationMember(ctx context.Context, orgID, userID string) (*models.OrganizationMember, error) {
+	var member models.OrganizationMember
+	if err := pr.db.WithContext(ctx).
+		Where("organization_id = ? AND user_id = ? AND is_active = true", orgID, userID).
+		First(&member).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get organization member: %w", err)
+	}
+	return &member, nil
+}
+
+func (pr *PostgresRepository) CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error {
+	if err := pr.db.WithContext(ctx).Create(member).Error; err != nil {
+		return fmt.Errorf("create organization member: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) CountOrganizationMembers(ctx context.Context, orgID string) (int64, error) {
+	var total int64
+	if err := pr.db.WithContext(ctx).
+		Model(&models.OrganizationMember{}).
+		Where("organization_id = ?", orgID).
+		Count(&total).Error; err != nil {
+		return 0, fmt.Errorf("count organization members: %w", err)
+	}
+	return total, nil
+}
+
+func (pr *PostgresRepository) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+	var cfg models.OrganizationConfig
+	if err := pr.db.WithContext(ctx).First(&cfg, "organization_id = ?", orgID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get organization config: %w", err)
+	}
+	cfg.ApplyDefaults()
+	return &cfg, nil
+}
+
+func (pr *PostgresRepository) UpsertOrganizationConfig(ctx context.Context, cfg *models.OrganizationConfig) error {
+	cfg.ApplyDefaults()
+	if err := pr.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "organization_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"anthropic_api_key", "anthropic_tokens_per_hour", "github_token",
+				"github_pr_review_enabled", "webhook_base_url", "embeddings_provider",
+				"voyage_api_key", "embeddings_model", "embeddings_dimensions",
+				"github_client_id", "github_client_secret", "github_callback_url",
+				"gitlab_client_id", "gitlab_client_secret", "gitlab_callback_url",
+				"updated_at",
+			}),
+		}).
+		Create(cfg).Error; err != nil {
+		return fmt.Errorf("upsert organization config: %w", err)
+	}
+	return nil
+}
+
 // ============ Repository Operations ============
 
 func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
@@ -99,9 +196,13 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 	return &repo, nil
 }
 
-func (pr *PostgresRepository) GetRepositoryByURL(ctx context.Context, url string) (*models.Repository, error) {
+func (pr *PostgresRepository) GetRepositoryByURL(ctx context.Context, organizationID, url string) (*models.Repository, error) {
 	var repo models.Repository
-	if err := pr.db.WithContext(ctx).First(&repo, "url = ?", url).Error; err != nil {
+	query := pr.db.WithContext(ctx).Where("url = ?", url)
+	if organizationID != "" {
+		query = query.Where("organization_id = ?", organizationID)
+	}
+	if err := query.First(&repo).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -139,6 +240,9 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 	query := pr.db.WithContext(ctx)
 
 	// Apply filters
+	if filter.OrganizationID != "" {
+		query = query.Where("organization_id = ?", filter.OrganizationID)
+	}
 	if filter.OwnerUserID != "" {
 		query = query.Where("owner_user_id = ?", filter.OwnerUserID)
 	}
@@ -588,11 +692,16 @@ func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *m
 }
 
 // SumTokensUsedSince returns the total tokens used for completed analyses since the given time
-func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, since time.Time) (int64, error) {
+func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error) {
 	var total int64
-	if err := pr.db.WithContext(ctx).
+	query := pr.db.WithContext(ctx).
 		Model(&models.CodeAnalysis{}).
-		Where("created_at >= ? AND status = ?", since, "completed").
+		Joins("JOIN repositories ON repositories.id = code_analyses.repository_id").
+		Where("code_analyses.created_at >= ? AND code_analyses.status = ?", since, "completed")
+	if organizationID != "" {
+		query = query.Where("repositories.organization_id = ?", organizationID)
+	}
+	if err := query.
 		Select("COALESCE(SUM(tokens_used), 0)").
 		Scan(&total).Error; err != nil {
 		return 0, fmt.Errorf("sum tokens used since: %w", err)

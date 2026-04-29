@@ -18,6 +18,7 @@ type mockRepository struct {
 	getRepoFunc        func(ctx context.Context, id string) (*models.Repository, error)
 	updateRepoFunc     func(ctx context.Context, repo *models.Repository) error
 	createAnalysisFunc func(ctx context.Context, analysis *models.CodeAnalysis) error
+	getConfigFunc      func(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
 }
 
 func (m *mockRepository) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
@@ -41,6 +42,13 @@ func (m *mockRepository) CreateCodeAnalysis(ctx context.Context, analysis *model
 	return nil
 }
 
+func (m *mockRepository) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+	if m.getConfigFunc != nil {
+		return m.getConfigFunc(ctx, orgID)
+	}
+	return nil, nil
+}
+
 type mockGithubClient struct {
 	github.ClientInterface
 	getCommitsFunc func(ctx context.Context, owner, repo, branch string, limit int) ([]github.Commit, error)
@@ -57,9 +65,10 @@ func TestAnalysisWorker_Handle(t *testing.T) {
 	mockRepo := &mockRepository{
 		getRepoFunc: func(ctx context.Context, id string) (*models.Repository, error) {
 			return &models.Repository{
-				ID:   id,
-				Name: "test-repo",
-				URL:  "https://github.com/owner/repo",
+				ID:             id,
+				OrganizationID: "org-1",
+				Name:           "test-repo",
+				URL:            "https://github.com/owner/repo",
 				Metadata: models.RepositoryMetadata{
 					DefaultBranch: "develop",
 				},
@@ -70,6 +79,13 @@ func TestAnalysisWorker_Handle(t *testing.T) {
 		},
 		createAnalysisFunc: func(ctx context.Context, analysis *models.CodeAnalysis) error {
 			return nil
+		},
+		getConfigFunc: func(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+			return &models.OrganizationConfig{
+				OrganizationID:  orgID,
+				AnthropicAPIKey: "anthropic-key",
+				GithubToken:     "github-token",
+			}, nil
 		},
 	}
 
@@ -102,7 +118,19 @@ func TestAnalysisWorker_Handle(t *testing.T) {
 		},
 	}
 
-	worker := NewAnalysisWorker(mockAnalyzer, mockRepo, mockGH, "github-token")
+	worker := NewAnalysisWorker(mockRepo)
+	worker.analyzerFactory = func(apiKey string) ai.Analyzer {
+		if apiKey != "anthropic-key" {
+			t.Fatalf("analyzer apiKey = %q, want configured key", apiKey)
+		}
+		return mockAnalyzer
+	}
+	worker.githubFactory = func(token string) github.ClientInterface {
+		if token != "github-token" {
+			t.Fatalf("github token = %q, want configured token", token)
+		}
+		return mockGH
+	}
 	worker.calculateMetrics = func(ctx context.Context, repoURL, githubToken, branch string) (*ai.CodeMetrics, error) {
 		if repoURL != "https://github.com/owner/repo" {
 			t.Fatalf("metrics repoURL = %q, want repository URL", repoURL)
@@ -133,8 +161,7 @@ func TestAnalysisWorker_Handle(t *testing.T) {
 }
 
 func TestAnalysisWorker_Handle_InvalidPayload(t *testing.T) {
-	mockAnalyzer := &ai.MockAnalyzer{}
-	worker := NewAnalysisWorker(mockAnalyzer, nil, nil, "")
+	worker := NewAnalysisWorker(nil)
 
 	task := asynq.NewTask(tasks.TypeAnalyzeRepo, []byte("invalid json"))
 

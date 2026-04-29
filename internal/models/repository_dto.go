@@ -14,16 +14,18 @@ type UpdateRepositoryRequest struct {
 }
 
 type RepositoryResponse struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	URL         string             `json:"url"`
-	Type        RepositoryType     `json:"type"`
-	OwnerUserID string             `json:"owner_user_id"`
-	IsPublic    bool               `json:"is_public"`
-	Metadata    RepositoryMetadata `json:"metadata"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	URL             string             `json:"url"`
+	Type            RepositoryType     `json:"type"`
+	OrganizationID  string             `json:"organization_id"`
+	OwnerUserID     string             `json:"owner_user_id,omitempty"`
+	CreatedByUserID string             `json:"created_by_user_id,omitempty"`
+	IsPublic        bool               `json:"is_public"`
+	Metadata        RepositoryMetadata `json:"metadata"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
 }
 
 type RepositoryListResponse struct {
@@ -35,15 +37,17 @@ type RepositoryListResponse struct {
 
 func RepositoryToResponse(r *Repository) *RepositoryResponse {
 	return &RepositoryResponse{
-		ID:          r.ID,
-		Name:        r.Name,
-		Description: r.Description,
-		URL:         r.URL,
-		Type:        r.Type,
-		OwnerUserID: r.OwnerUserID,
-		IsPublic:    r.IsPublic,
-		Metadata:    r.Metadata,
-		CreatedAt:   r.CreatedAt,
-		UpdatedAt:   r.UpdatedAt,
+		ID:              r.ID,
+		Name:            r.Name,
+		Description:     r.Description,
+		URL:             r.URL,
+		Type:            r.Type,
+		OrganizationID:  r.OrganizationID,
+		OwnerUserID:     r.OwnerUserID,
+		CreatedByUserID: r.CreatedByUserID,
+		IsPublic:        r.IsPublic,
+		Metadata:        r.Metadata,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
 	}
 }

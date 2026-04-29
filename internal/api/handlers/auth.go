@@ -40,7 +40,7 @@ func (h *AuthHandler) LoginWithEmail(c *gin.Context) {
 		return
 	}
 
-	tokenResponse, err := h.authService.LoginWithEmail(c.Request.Context(), req.Email, req.Password)
+	tokenResponse, err := h.authService.LoginWithEmail(c.Request.Context(), c.Param("slug"), req.Email, req.Password)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "authentication_failed",
@@ -72,7 +72,7 @@ func (h *AuthHandler) RegisterWithEmail(c *gin.Context) {
 		return
 	}
 
-	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), req.Email, req.FullName, req.Password)
+	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), c.Param("slug"), req.Email, req.FullName, req.Password)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
 			Error:            "registration_failed",
@@ -178,6 +178,11 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		Email:    claims.Email,
 		FullName: claims.FullName,
 		Role:     claims.Role,
+		Organization: &models.OrganizationInfo{
+			ID:   claims.OrganizationID,
+			Slug: claims.OrganizationSlug,
+			Role: claims.OrganizationRole,
+		},
 	})
 }
 
@@ -191,8 +196,18 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 // @Router       /auth/{provider} [get]
 func (h *AuthHandler) OAuthLogin(c *gin.Context) {
 	provider := c.Param("provider")
+	orgSlug := c.Param("slug")
 
-	state, err := h.authService.GenerateOAuthState()
+	org, err := h.authService.GetOrganizationBySlug(c.Request.Context(), orgSlug)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_organization",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	state, err := h.authService.GenerateOAuthState(org.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "oauth_error",
@@ -201,7 +216,7 @@ func (h *AuthHandler) OAuthLogin(c *gin.Context) {
 		return
 	}
 
-	authURL := h.authService.GetOAuthAuthURL(provider, state)
+	authURL := h.authService.GetOAuthAuthURL(c.Request.Context(), orgSlug, provider, state)
 	if authURL == "" {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
 			Error:            "invalid_provider",
@@ -237,7 +252,7 @@ func (h *AuthHandler) OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	tokenResponse, err := h.authService.LoginWithOAuth(c.Request.Context(), provider, code, state)
+	tokenResponse, err := h.authService.LoginWithOAuth(c.Request.Context(), c.Param("slug"), provider, code, state)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "oauth_authentication_failed",
