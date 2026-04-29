@@ -78,15 +78,16 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Auto-trigger: analyze repositories on `push` events, create PR comments on `pull_request` events
 - ✅ Deduplication: manual trigger deduplication via asynq.TaskID (returns 409 on conflict)
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
-- ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis
+- ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis, using `GITHUB_TOKEN` for private repositories when configured
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
 
 ### Semantic Code Search
 - ✅ Voyage AI embeddings with provider abstraction (`internal/embeddings`)
 - ✅ Default model: `voyage-code-3` with 1024-dimensional vectors
 - ✅ `embeddings:generate` worker — temporary repository clone, source-code chunking, batched embedding generation
-- ✅ pgvector cosine search over persisted code chunks
-- ✅ HTTP endpoints: `POST /repositories/:id/embeddings`, `GET /repositories/:id/search?q=...`
+- ✅ Hybrid semantic search: pgvector cosine ranking plus textual boosts for content, file path, and language matches
+- ✅ Relevance cutoff via `min_score` so weak searches can return zero results instead of noisy matches
+- ✅ HTTP endpoints: `POST /repositories/:id/embeddings`, `GET /repositories/:id/search?q=...&min_score=0.55`
 - ✅ Provider/model/dimension/branch metadata persisted for future provider swaps
 
 ### Code Quality
@@ -132,7 +133,7 @@ The server will:
 curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/embeddings \
   -H "Authorization: Bearer $TOKEN"
 
-curl "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=where%20is%20token%20rotation%20handled" \
+curl "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=where%20is%20token%20rotation%20handled&limit=10&min_score=0.55" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -380,7 +381,7 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **EMBEDDINGS_PROVIDER** - Embedding provider selector (default: voyage)
 - **EMBEDDINGS_MODEL** - Embedding model (default: voyage-code-3)
 - **EMBEDDINGS_DIMENSIONS** - Embedding vector dimension (default: 1024)
-- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration and PR operations)
+- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR operations, and private repository clones for metrics/embeddings)
 - **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
 - **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -534,9 +535,10 @@ Indexing:
   Replaces old embeddings for same repo/provider/model/dimension/branch
 
 Query:
-  GET /api/v1/repositories/:id/search?q=<query>&limit=10
+  GET /api/v1/repositories/:id/search?q=<query>&limit=10&min_score=0.55
   Embeds query with input_type=query
-  Searches code_embeddings with pgvector cosine distance
+  Searches code_embeddings with pgvector cosine distance plus textual boosts for content, file path, and language
+  Filters out low-confidence matches below min_score; default min_score is 0.55
   Returns file path, content snippet, line range, language, score, provider, model, branch
 ```
 
@@ -575,7 +577,7 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 ---
 
 **Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Sync + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Última atualização**: April 29, 2026 (Semantic Search with Voyage AI)
+**Última atualização**: April 29, 2026 (Hybrid semantic search relevance + authenticated metrics clone)
 
 ### 📖 Accessing the API Documentation
 ```bash

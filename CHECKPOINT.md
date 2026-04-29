@@ -62,8 +62,9 @@
 - **Current Provider**: Voyage AI via `internal/embeddings/voyage.go`, default model `voyage-code-3`, 1024-dimensional vectors.
 - **Code Chunking**: `internal/embeddings/chunker.go` clones repositories temporarily, skips generated/binary/vendor/build files, and creates deterministic source-code chunks with line ranges and content hashes.
 - **Embedding Worker**: `TypeGenerateEmbeddings` asynq handler in `internal/workers/embedding_worker.go`; batches Voyage requests and replaces stale embeddings per repository/provider/model/dimension/branch.
-- **HTTP Endpoints**: `POST /repositories/:id/embeddings` queues indexing; `GET /repositories/:id/search?q=...` embeds the query and returns ranked code snippets.
-- **pgvector Storage**: Uses `pgvector-go`, cosine ranking, and `code_embeddings` metadata for provider/model/dimension/branch/commit tracking.
+- **HTTP Endpoints**: `POST /repositories/:id/embeddings` queues indexing; `GET /repositories/:id/search?q=...&min_score=0.55` embeds the query and returns ranked code snippets.
+- **Hybrid Ranking**: Search combines pgvector cosine similarity with textual boosts for content, file path, and language, then filters below `min_score` so weak queries can return zero results.
+- **pgvector Storage**: Uses `pgvector-go`, cosine candidate ranking, and `code_embeddings` metadata for provider/model/dimension/branch/commit tracking.
 
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
@@ -199,6 +200,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Technology**: go-git shallow clone (`Depth:1`, no submodules) for security
 - **Metrics computed**: Lines of code (total, code, blank), cyclomatic complexity estimate
 - **Integration**: Calculated before Claude call, passed in prompt with "do not recalculate" instruction
+- **Private repositories**: Uses configured `GITHUB_TOKEN` for clone auth and omits `Auth` entirely when the token is empty
 - **Graceful degradation**: Continues with zero metrics if clone fails (warns but doesn't fail analysis)
 - **Files**: `internal/metrics/calculator.go` (new), `internal/workers/analysis_worker.go`, `internal/ai/provider.go`, `internal/integrations/anthropic/client.go`
 
@@ -206,7 +208,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Provider**: Voyage AI (`voyage-code-3`, 1024 dimensions) behind `embeddings.Provider`
 - **Indexing**: `POST /repositories/:id/embeddings` enqueues `TypeGenerateEmbeddings`
 - **Worker**: Temporary git clone, deterministic chunking, batched Voyage document embeddings, pgvector persistence
-- **Search**: `GET /repositories/:id/search?q=...` embeds query with Voyage and ranks chunks by pgvector cosine similarity
+- **Search**: `GET /repositories/:id/search?q=...&min_score=0.55` embeds query with Voyage, ranks candidates by pgvector cosine similarity, applies textual boosts, and filters below the relevance cutoff
 - **Schema**: Migration `007` adds provider/model/dimension/branch/commit metadata and converts embeddings to `VECTOR(1024)`
 - **Files**: `internal/embeddings/`, `internal/workers/embedding_worker.go`, `internal/api/handlers/analysis.go`, `migrations/007-add-voyage-embeddings-metadata.sql`
 
@@ -264,7 +266,7 @@ LOG_LEVEL                    # debug / info / warn / error
 ---
 
 **Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Repo + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Commits this phase**: 4 (deduplication, token rate limiting, local metrics, semantic search)  
+**Commits this phase**: 6 (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance)  
 **Total commits (AI + pipeline)**: 12  
 **Production Readiness**: ~90% (auth + repo + webhook + encryption + AI analysis + semantic search done; needs handler tests, integration tests, key rotation)
 
