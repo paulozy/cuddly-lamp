@@ -94,6 +94,18 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 		req.Type = "code_review"
 	}
 
+	// Validate analysis type
+	allowedTypes := map[string]bool{
+		"code_review": true, "security": true, "architecture": true,
+	}
+	if !allowedTypes[req.Type] {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_analysis_type",
+			ErrorDescription: "type must be one of: code_review, security, architecture",
+		})
+		return
+	}
+
 	// Check token budget
 	used, err := h.repo.SumTokensUsedSince(c.Request.Context(), time.Now().UTC().Add(-time.Hour))
 	if err == nil && used >= h.tokenHourlyLimit {

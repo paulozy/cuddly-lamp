@@ -37,6 +37,23 @@ func NewAnalysisWorker(analyzer ai.Analyzer, repo storage.Repository, ghClient g
 	}
 }
 
+// normalizeSeverity maps ai.CodeIssue.Severity ("critical", "high", "medium", "low", "info")
+// to models.SeverityLevel ("critical", "error", "warning", "info")
+func normalizeSeverity(s string) models.SeverityLevel {
+	switch s {
+	case "critical":
+		return models.SeverityCritical
+	case "high":
+		return models.SeverityError // high → error
+	case "medium":
+		return models.SeverityWarning // medium → warning
+	case "low", "info":
+		return models.SeverityInfo
+	default:
+		return models.SeverityInfo
+	}
+}
+
 // mapIssues converts ai.CodeIssue to models.CodeIssue
 func mapIssues(aiIssues []ai.CodeIssue) []models.CodeIssue {
 	out := make([]models.CodeIssue, 0, len(aiIssues))
@@ -45,7 +62,7 @@ func mapIssues(aiIssues []ai.CodeIssue) []models.CodeIssue {
 			File:          issue.FilePath,
 			Line:          issue.Line,
 			Column:        issue.Column,
-			Severity:      models.SeverityLevel(issue.Severity),
+			Severity:      normalizeSeverity(issue.Severity),
 			Category:      issue.Category,
 			Title:         issue.Title,
 			Description:   issue.Description,
@@ -135,9 +152,13 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	if triggeredBy == "" {
 		triggeredBy = "webhook" // backward compatibility
 	}
+	codeAnalysisType := models.AnalysisType(payload.Type)
+	if codeAnalysisType == "" {
+		codeAnalysisType = models.AnalysisTypeCodeReview
+	}
 	codeAnalysis := &models.CodeAnalysis{
 		RepositoryID: repository.ID,
-		Type:         models.AnalysisTypeCodeReview,
+		Type:         codeAnalysisType,
 		Status:       "completed",
 		CommitSHA:    payload.CommitSHA,
 		Branch:       payload.Branch,
@@ -201,12 +222,17 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 }
 
 func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
+	analysisType := ai.AnalysisType(payload.Type)
+	if analysisType == "" {
+		analysisType = ai.AnalysisTypeCodeReview
+	}
+
 	req := &ai.AnalysisRequest{
 		RepositoryID: repository.ID,
 		RepoName:     repository.Name,
 		Branch:       payload.Branch,
 		CommitSHA:    payload.CommitSHA,
-		AnalysisType: ai.AnalysisTypeCodeReview,
+		AnalysisType: analysisType,
 		Metrics:      repoMetrics, // computed metrics passed to Claude
 	}
 

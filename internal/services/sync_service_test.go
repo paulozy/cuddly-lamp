@@ -44,6 +44,18 @@ func (m *mockGitHubClient) DeleteWebhook(_ context.Context, _, _ string, _ int64
 	return nil
 }
 
+func (m *mockGitHubClient) GetPullRequest(_ context.Context, _, _ string, _ int64) (*githubclient.PullRequest, error) {
+	return nil, nil
+}
+
+func (m *mockGitHubClient) GetPullRequestFiles(_ context.Context, _, _ string, _ int64) ([]githubclient.PRFile, error) {
+	return nil, nil
+}
+
+func (m *mockGitHubClient) CreatePullRequestReview(_ context.Context, _, _ string, _ int64, _, _ string, _ []githubclient.ReviewCommentInput) (int64, error) {
+	return 0, nil
+}
+
 // ── extended mock repo store for SyncService ─────────────────────────────────
 
 type mockSyncRepoStore struct {

@@ -55,6 +55,14 @@ type CodeIssue struct {
 
 	URL           string   `json:"url,omitempty"` // Link to docs/example
 	RelatedIssues []string `json:"related_issues,omitempty"`
+
+	// Security-specific fields (optional)
+	CWEID         string `json:"cwe_id,omitempty"`         // e.g., "CWE-89"
+	OWASPCategory string `json:"owasp_category,omitempty"` // e.g., "A03:2021"
+
+	// Architecture-specific fields (optional)
+	Pattern      string `json:"pattern,omitempty"`       // e.g., "SOLID-SRP"
+	DebtCategory string `json:"debt_category,omitempty"` // e.g., "coupling"
 }
 
 type CodeMetrics struct {
