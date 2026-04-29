@@ -41,7 +41,7 @@
 - **Library**: swaggo/swag (code-first, annotation-based)
 - **Format**: OpenAPI 2.0 (Swagger)
 - **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
-- **Coverage**: All 17 endpoints documented (5 auth, 5 repository, 1 webhook, 2 analysis, 1 health, 3 swagger)
+- **Coverage**: All 19 endpoints documented (5 auth, 5 repository, 1 webhook, 2 analysis, 2 semantic search, 1 health, 3 swagger)
 - **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
 - **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
 - **Generation**: `make swagger` rebuilds docs/ from annotations
@@ -57,6 +57,14 @@
 - **Provider Swap**: To use OpenAI instead of Anthropic — create new struct implementing `ai.Analyzer`, update one line in `main.go`
 - **Token Tracking**: Analysis results include model name and token usage for cost monitoring
 
+### Semantic Code Search ✅
+- **Provider Architecture**: `embeddings.Provider` interface isolates provider-specific embedding logic for future swaps.
+- **Current Provider**: Voyage AI via `internal/embeddings/voyage.go`, default model `voyage-code-3`, 1024-dimensional vectors.
+- **Code Chunking**: `internal/embeddings/chunker.go` clones repositories temporarily, skips generated/binary/vendor/build files, and creates deterministic source-code chunks with line ranges and content hashes.
+- **Embedding Worker**: `TypeGenerateEmbeddings` asynq handler in `internal/workers/embedding_worker.go`; batches Voyage requests and replaces stale embeddings per repository/provider/model/dimension/branch.
+- **HTTP Endpoints**: `POST /repositories/:id/embeddings` queues indexing; `GET /repositories/:id/search?q=...` embeds the query and returns ranked code snippets.
+- **pgvector Storage**: Uses `pgvector-go`, cosine ranking, and `code_embeddings` metadata for provider/model/dimension/branch/commit tracking.
+
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
@@ -67,13 +75,14 @@
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 6 SQL migrations applied and tracked via `schema_migrations`
+- 7 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
   - `004`: Refresh token rotation — `family_id`, `parent_jti` columns on tokens
   - `005`: Sync status — added `'synced'` to `repositories.sync_status` check constraint
   - `006`: Encrypted fields — `access_token_encrypted` (bytea) on `oauth_connections`, `secret_encrypted` (bytea) on `webhook_configs`
+  - `007`: Voyage embeddings — provider/model/dimension/branch metadata and `VECTOR(1024)` pgvector storage
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -104,6 +113,8 @@
 | DELETE | `/repositories/:id` | Delete repository |
 | POST | `/repositories/:id/analyze` | Trigger manual code analysis (returns 202 Accepted) |
 | GET | `/repositories/:id/analyses` | List code analyses for repository |
+| POST | `/repositories/:id/embeddings` | Queue semantic embedding generation |
+| GET | `/repositories/:id/search` | Semantic code search over generated embeddings |
 
 ---
 
@@ -118,7 +129,7 @@
 | `webhook_configs` | Per-repo webhook registrations with HMAC secret (encrypted) |
 | `webhooks` | Incoming webhook events with status, retry, idempotency |
 | `code_analyses` | Code review results with issues (JSONB), metrics, model name, token usage |
-| `code_embeddings` | pgvector embeddings for semantic search (reserved for TypeGenerateEmbeddings) |
+| `code_embeddings` | Voyage/pgvector source-code embeddings for semantic search |
 | `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
@@ -191,13 +202,21 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Graceful degradation**: Continues with zero metrics if clone fails (warns but doesn't fail analysis)
 - **Files**: `internal/metrics/calculator.go` (new), `internal/workers/analysis_worker.go`, `internal/ai/provider.go`, `internal/integrations/anthropic/client.go`
 
+### Phase 4: Semantic Code Search ✅
+- **Provider**: Voyage AI (`voyage-code-3`, 1024 dimensions) behind `embeddings.Provider`
+- **Indexing**: `POST /repositories/:id/embeddings` enqueues `TypeGenerateEmbeddings`
+- **Worker**: Temporary git clone, deterministic chunking, batched Voyage document embeddings, pgvector persistence
+- **Search**: `GET /repositories/:id/search?q=...` embeds query with Voyage and ranks chunks by pgvector cosine similarity
+- **Schema**: Migration `007` adds provider/model/dimension/branch/commit metadata and converts embeddings to `VECTOR(1024)`
+- **Files**: `internal/embeddings/`, `internal/workers/embedding_worker.go`, `internal/api/handlers/analysis.go`, `migrations/007-add-voyage-embeddings-metadata.sql`
+
 ---
 
 ## 🎯 Next Steps
 
 - [x] **AI Integration** — Claude API for code analysis; pluggable `ai.Analyzer` interface with PR review posting
 - [x] **Analysis Pipeline** — Deduplication, token rate limiting, local metrics computation
-- [ ] **Semantic search** — pgvector embeddings; wire `TypeGenerateEmbeddings` job
+- [x] **Semantic search** — Voyage AI embeddings, pgvector storage, `TypeGenerateEmbeddings` job, search endpoints
 - [ ] **Handler tests** — unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -232,16 +251,22 @@ WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in loc
 ANTHROPIC_API_KEY            # Anthropic API key for Claude code analysis (optional)
 ANTHROPIC_TOKENS_PER_HOUR=20000  # Hourly token budget for Anthropic API
 
+# Semantic Search
+VOYAGE_API_KEY               # Voyage AI key for semantic code search (optional)
+EMBEDDINGS_PROVIDER=voyage
+EMBEDDINGS_MODEL=voyage-code-3
+EMBEDDINGS_DIMENSIONS=1024
+
 # Logging
 LOG_LEVEL                    # debug / info / warn / error
 ```
 
 ---
 
-**Status**: 🤖 AI Integration + Pipeline Optimization Complete (Auth + Repo + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics)  
-**Commits this phase**: 3 (deduplication, token rate limiting, local metrics)  
-**Total commits (AI + pipeline)**: 11  
-**Production Readiness**: ~85% (auth + repo + webhook + encryption + AI analysis + pipeline safety done; needs embeddings, handler tests, integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Repo + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
+**Commits this phase**: 4 (deduplication, token rate limiting, local metrics, semantic search)  
+**Total commits (AI + pipeline)**: 12  
+**Production Readiness**: ~90% (auth + repo + webhook + encryption + AI analysis + semantic search done; needs handler tests, integration tests, key rotation)
 
 ---
 
@@ -253,10 +278,11 @@ make dev
 # Open: http://localhost:3000/swagger/index.html
 ```
 
-**17 documented endpoints:**
+**19 documented endpoints:**
 - 5 Auth endpoints (register, login, refresh, OAuth, logout, /users/me)
 - 5 Repository endpoints (CRUD)
 - 2 Analysis endpoints (trigger, list)
+- 2 Semantic search endpoints (generate embeddings, search)
 - 1 Webhook endpoint (GitHub receiver)
 - 1 Health endpoint
 - 3 Swagger UI routes

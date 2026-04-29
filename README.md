@@ -63,7 +63,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 ### API Documentation
 - ✅ Swagger/OpenAPI 2.0 with swaggo/swag
 - ✅ Interactive Swagger UI at `/swagger/index.html`
-- ✅ Comprehensive annotations on all 17 endpoints (auth, repository, webhook, analysis)
+- ✅ Comprehensive annotations on all 19 endpoints (auth, repository, webhook, analysis, semantic search)
 - ✅ JWT security scheme documented
 - ✅ Automatic generation with `make swagger`
 
@@ -80,6 +80,14 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
 - ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
+
+### Semantic Code Search
+- ✅ Voyage AI embeddings with provider abstraction (`internal/embeddings`)
+- ✅ Default model: `voyage-code-3` with 1024-dimensional vectors
+- ✅ `embeddings:generate` worker — temporary repository clone, source-code chunking, batched embedding generation
+- ✅ pgvector cosine search over persisted code chunks
+- ✅ HTTP endpoints: `POST /repositories/:id/embeddings`, `GET /repositories/:id/search?q=...`
+- ✅ Provider/model/dimension/branch metadata persisted for future provider swaps
 
 ### Code Quality
 - ✅ Structured logging (zap)
@@ -118,7 +126,17 @@ The server will:
 - Register OAuth providers (GitHub if configured)
 - Start HTTP server on port 3000
 
-### 4. Test the server
+### 4. Generate and query semantic embeddings
+```bash
+# Requires VOYAGE_API_KEY and Redis/asynq enabled
+curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/embeddings \
+  -H "Authorization: Bearer $TOKEN"
+
+curl "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=where%20is%20token%20rotation%20handled" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 5. Test the server
 ```bash
 # Health check
 curl http://localhost:3000/api/v1/health
@@ -228,7 +246,7 @@ backend/
 │   │   │   ├── auth.go            # Login, register, OAuth, logout, /users/me
 │   │   │   ├── repository.go      # Repository CRUD endpoints
 │   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
-│   │   │   └── analysis.go        # Code analysis endpoints (trigger + list)
+│   │   │   └── analysis.go        # Code analysis + semantic search endpoints
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
 │   │   │   ├── logger.go          # Request logging
@@ -244,6 +262,10 @@ backend/
 │   ├── ai/                        # Pluggable AI provider interface
 │   │   ├── provider.go            # Analyzer interface + request/response types
 │   │   └── mock_analyzer.go       # Mock implementation for testing
+│   ├── embeddings/                # Semantic-search provider abstraction + chunking
+│   │   ├── provider.go            # Embedding Provider interface
+│   │   ├── voyage.go              # Voyage AI implementation
+│   │   └── chunker.go             # Temporary clone + source-code chunk extraction
 │   ├── crypto/                    # Field-level encryption (AES-256-GCM)
 │   │   ├── cipher.go              # Encrypt/decrypt functions
 │   │   ├── cipher_test.go         # Cipher tests
@@ -269,6 +291,7 @@ backend/
 │   │   ├── sync_worker.go         # Handles repo:sync asynq task
 │   │   ├── webhook_processor.go   # Handles webhook:process asynq task
 │   │   ├── analysis_worker.go     # Handles repo:analyze asynq task (code + PR analysis)
+│   │   ├── embedding_worker.go    # Handles embeddings:generate asynq task
 │   │   └── analysis_worker_test.go # Analysis worker tests
 │   ├── models/
 │   │   ├── user.go                # User with roles
@@ -307,7 +330,8 @@ backend/
 │   ├── 003-add-oauth-connections.sql  # OAuth connections, migrate from users table
 │   ├── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
 │   ├── 005-add-synced-status.sql  # Add 'synced' to sync_status check constraint
-│   └── 006-encrypt-sensitive-fields.sql  # Add encrypted columns (access_token_encrypted, secret_encrypted)
+│   ├── 006-encrypt-sensitive-fields.sql  # Add encrypted columns (access_token_encrypted, secret_encrypted)
+│   └── 007-add-voyage-embeddings-metadata.sql  # Voyage/pgvector semantic search metadata + VECTOR(1024)
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -352,6 +376,10 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
 - **ANTHROPIC_API_KEY** - Claude API key for code analysis (optional — skips analysis if not set)
 - **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
+- **VOYAGE_API_KEY** - Voyage AI API key for semantic code search (optional — skips embedding provider if not set)
+- **EMBEDDINGS_PROVIDER** - Embedding provider selector (default: voyage)
+- **EMBEDDINGS_MODEL** - Embedding model (default: voyage-code-3)
+- **EMBEDDINGS_DIMENSIONS** - Embedding vector dimension (default: 1024)
 - **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration and PR operations)
 - **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
 - **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
@@ -427,7 +455,7 @@ GetCodeAnalysis, CreateCodeAnalysis, UpdateCodeAnalysis, ListAnalyses,
 GetLatestAnalysis, GetRepositoriesNeedingAnalysis
 
 // Code Embeddings
-CreateCodeEmbedding, SearchEmbeddings, DeleteEmbeddingsByRepository
+CreateCodeEmbedding, CreateCodeEmbeddings, SearchEmbeddings, DeleteEmbeddings
 ```
 
 ## ⚙️ Important Implementation Details
@@ -492,6 +520,26 @@ Key builders (internal/storage/redis/keys.go):
   TokenKey(jti), UserKey(id), RepoKey(id), SessionKey(id)
 ```
 
+### Semantic Search
+```
+Provider:
+  Voyage AI through internal/embeddings.Provider
+  Default model: voyage-code-3
+  Default dimension: 1024
+
+Indexing:
+  POST /api/v1/repositories/:id/embeddings
+  Enqueues TypeGenerateEmbeddings
+  Worker clones repository temporarily, chunks source files, embeds chunks with input_type=document
+  Replaces old embeddings for same repo/provider/model/dimension/branch
+
+Query:
+  GET /api/v1/repositories/:id/search?q=<query>&limit=10
+  Embeds query with input_type=query
+  Searches code_embeddings with pgvector cosine distance
+  Returns file path, content snippet, line range, language, score, provider, model, branch
+```
+
 ### pgx/v5 Migration Quirk
 - pgx/v5 does NOT support multiple SQL statements in `db.Exec()`
 - Solution: Use underlying `*sql.DB` from `db.DB()` to run full migration files
@@ -508,7 +556,7 @@ Key builders (internal/storage/redis/keys.go):
 - [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
 - [x] API documentation (Swagger/OpenAPI)
 - [x] Code analysis API + Claude integration — `TypeAnalyzeRepo` job with pluggable AI providers
-- [ ] Semantic search with pgvector embeddings — wire `TypeGenerateEmbeddings` job
+- [x] Semantic search with Voyage AI + pgvector embeddings — `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
 
@@ -526,8 +574,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Pipeline Optimization Complete (Auth + Sync + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics)  
-**Última atualização**: April 29, 2026 (Phase 1-3: Analysis Pipeline Improvements)
+**Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Sync + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
+**Última atualização**: April 29, 2026 (Semantic Search with Voyage AI)
 
 ### 📖 Accessing the API Documentation
 ```bash
