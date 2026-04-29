@@ -134,7 +134,7 @@ type CodeAnalysis struct {
 	InfoCount     int `json:"info_count"`
 
 	TriggeredBy   string `gorm:"type:varchar(255)" json:"triggered_by"` // user, webhook, schedule
-	TriggeredByID string `gorm:"type:uuid" json:"triggered_by_id,omitempty"`
+	TriggeredByID *string `gorm:"type:uuid" json:"triggered_by_id,omitempty"`
 
 	IsAIAnalysis bool   `gorm:"default:true" json:"is_ai_analysis"`
 	AIModel      string `gorm:"type:varchar(100)" json:"ai_model,omitempty"` // claude-3-sonnet, etc

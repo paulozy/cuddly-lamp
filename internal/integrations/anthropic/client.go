@@ -136,25 +136,12 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 
 // parseResponse parses Claude's JSON response into AnalysisResult
 func (c *Client) parseResponse(text string, tokensUsed int) (*ai.AnalysisResult, error) {
-	// Try to extract JSON from the response
-	jsonStr := text
-	if strings.Contains(text, "```json") {
-		start := strings.Index(text, "```json") + len("```json")
-		end := strings.LastIndex(text, "```")
-		if start > len("```json") && end > start {
-			jsonStr = text[start:end]
-		}
-	} else if strings.Contains(text, "```") {
-		start := strings.Index(text, "```") + len("```")
-		end := strings.LastIndex(text, "```")
-		if start > len("```") && end > start {
-			jsonStr = text[start:end]
-		}
-	}
+	// Try to extract JSON from the response (Claude may wrap in markdown code blocks)
+	jsonStr := extractJSON(text)
 
 	var rawResp map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &rawResp); err != nil {
-		return nil, fmt.Errorf("failed to parse claude response as json: %w", err)
+		return nil, fmt.Errorf("failed to parse claude response as json: %w (text: %s)", err, text[:min(len(text), 200)])
 	}
 
 	result := &ai.AnalysisResult{
@@ -219,6 +206,39 @@ func (c *Client) parseResponse(text string, tokensUsed int) (*ai.AnalysisResult,
 	}
 
 	return result, nil
+}
+
+// extractJSON extracts JSON from text that may be wrapped in markdown code blocks
+func extractJSON(text string) string {
+	// Try to extract JSON from markdown code blocks
+	if strings.Contains(text, "```json") {
+		start := strings.Index(text, "```json") + len("```json")
+		end := strings.Index(text[start:], "```")
+		if end != -1 {
+			return strings.TrimSpace(text[start : start+end])
+		}
+	}
+	if strings.Contains(text, "```") {
+		start := strings.Index(text, "```") + len("```")
+		// Skip language identifier if present
+		if newline := strings.Index(text[start:], "\n"); newline != -1 {
+			start += newline + 1
+		}
+		end := strings.Index(text[start:], "```")
+		if end != -1 {
+			return strings.TrimSpace(text[start : start+end])
+		}
+	}
+	// No code block found, return the text as-is
+	return strings.TrimSpace(text)
+}
+
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // truncatePatch limits patch length to avoid token limits
