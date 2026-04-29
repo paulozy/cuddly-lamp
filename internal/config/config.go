@@ -8,12 +8,13 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	API      APIConfig
-	OAuth    OAuthConfig
-	Log      LogConfig
+	Server     ServerConfig
+	Database   DatabaseConfig
+	Redis      RedisConfig
+	API        APIConfig
+	Embeddings EmbeddingsConfig
+	OAuth      OAuthConfig
+	Log        LogConfig
 }
 
 type ServerConfig struct {
@@ -45,11 +46,18 @@ type RedisConfig struct {
 }
 
 type APIConfig struct {
-	AnthropicAPIKey         string
-	AnthropicTokensPerHour  int
-	GithubToken             string
-	WebhookBaseURL          string // public base URL for webhook endpoints, e.g. https://api.example.com
-	GitHubPRReviewEnabled   bool   // whether to post PR reviews
+	AnthropicAPIKey        string
+	AnthropicTokensPerHour int
+	GithubToken            string
+	WebhookBaseURL         string // public base URL for webhook endpoints, e.g. https://api.example.com
+	GitHubPRReviewEnabled  bool   // whether to post PR reviews
+}
+
+type EmbeddingsConfig struct {
+	Provider     string
+	VoyageAPIKey string
+	Model        string
+	Dimensions   int
 }
 
 type LogConfig struct {
@@ -91,6 +99,12 @@ func Load() *Config {
 			GithubToken:            getEnv("GITHUB_TOKEN", ""),
 			WebhookBaseURL:         getEnv("WEBHOOK_BASE_URL", ""),
 			GitHubPRReviewEnabled:  getEnvBool("GITHUB_PR_REVIEW_ENABLED", false),
+		},
+		Embeddings: EmbeddingsConfig{
+			Provider:     getEnv("EMBEDDINGS_PROVIDER", "voyage"),
+			VoyageAPIKey: getEnv("VOYAGE_API_KEY", ""),
+			Model:        getEnv("EMBEDDINGS_MODEL", "voyage-code-3"),
+			Dimensions:   getEnvInt("EMBEDDINGS_DIMENSIONS", 1024),
 		},
 		OAuth: OAuthConfig{
 			Providers: map[string]OAuthProviderConfig{

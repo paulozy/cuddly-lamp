@@ -18,6 +18,7 @@ Backend of an Identity Provider (IDP) platform that integrates AI for code analy
 - **Password Hashing**: Argon2 (golang.org/x/crypto/argon2)
 - **Encryption**: AES-256-GCM (crypto/aes, crypto/cipher)
 - **AI Integration**: Anthropic API (Claude for code analysis)
+- **Embeddings**: Voyage AI (`voyage-code-3`) + pgvector for semantic code search
 
 ## Architecture
 
@@ -28,11 +29,12 @@ internal/
 │   ├── middleware/       # JWT auth, CORS, logging
 │   ├── routes.go         # Route definitions
 │   └── factories/        # Dependency injection setup
+├── embeddings/           # Embedding provider abstraction + Voyage implementation + code chunking
 ├── integrations/
 │   └── github/           # GitHub API client + webhook HMAC validation
 ├── models/               # GORM models (User, Repository, Token, WebhookConfig, etc.)
 ├── services/             # Business logic (AuthService, RepositoryService, SyncService)
-├── workers/              # asynq task handlers (SyncWorker, WebhookProcessor)
+├── workers/              # asynq task handlers (SyncWorker, WebhookProcessor, AnalysisWorker, EmbeddingWorker)
 ├── storage/
 │   ├── postgres/         # PostgreSQL repository implementation
 │   └── redis/            # Redis client, Cache interface, key builders
@@ -77,10 +79,10 @@ internal/
 3. **Repository management**: Complete — CRUD endpoints, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
 4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
 5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
-6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, 17 endpoints documented, interactive UI at `/swagger/index.html`
+6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, 19 endpoints documented, interactive UI at `/swagger/index.html`
 7. **AI Integration**: Complete — Pluggable `ai.Analyzer` interface, Claude (Anthropic) implementation, code analysis worker, PR analysis + optional review posting, auto-trigger on webhooks
 8. **Analysis Pipeline Improvements**: Complete — Deduplication (manual triggers), token rate limiting (20K/hour), local metrics computation
-9. **Next: Semantic Search** — Implement `TypeGenerateEmbeddings` job with pgvector search backend
+9. **Semantic Search**: Complete — Voyage AI embeddings, `TypeGenerateEmbeddings` worker, hybrid pgvector/text ranking, protected indexing/search endpoints
 
 ## Known Issues & Constraints
 
@@ -123,8 +125,19 @@ internal/
 - **Auto-Trigger**: Webhook processor enqueues `TypeAnalyzeRepo` on `push` events (if `AnalysisStatus != "in_progress"`) and on `pull_request` events (always, with PR ID)
 - **Deduplication**: Manual trigger deduplication via `asynq.TaskID("analyze:manual:{repoID}")` with 10-minute retention — returns 409 Conflict if already pending
 - **Rate Limiting**: Token-based rate limiting (default 20K tokens/hour, configurable via `ANTHROPIC_TOKENS_PER_HOUR`) — checks accumulated tokens in last hour via DB SUM query
-- **Local Metrics**: Computed before Claude call via shallow git clone (`Depth:1`) with go-git, no submodules — counts lines of code, estimates cyclomatic complexity
-- **Future Enhancements**: Embeddings via `TypeGenerateEmbeddings` job (next phase); configurable analysis types ("code_review", "security", "architecture")
+- **Local Metrics**: Computed before Claude call via shallow git clone (`Depth:1`) with go-git, no submodules — counts lines of code, estimates cyclomatic complexity, and uses configured `GITHUB_TOKEN` for private repository access.
+- **Future Enhancements**: configurable analysis types ("code_review", "security", "architecture")
+
+## Semantic Search Notes
+
+- **Architecture**: `embeddings.Provider` interface in `internal/embeddings/provider.go` keeps provider-specific code isolated; the MVP implements Voyage only.
+- **Current Provider**: Voyage AI via `internal/embeddings/voyage.go`, default model `voyage-code-3`, default dimension `1024`.
+- **Indexing Flow**: `EmbeddingWorker` handles `TypeGenerateEmbeddings`; it clones the target repository temporarily using configured `GITHUB_TOKEN` when present, chunks source files deterministically, sends batches to Voyage with `input_type=document`, and stores vectors in `code_embeddings`.
+- **Search Flow**: `GET /api/v1/repositories/:id/search?q=...&min_score=0.55` embeds the query with `input_type=query`, ranks stored code chunks with pgvector cosine distance, applies textual boosts for `content`, `file_path`, and `language`, then filters out matches below `min_score`.
+- **Endpoints**: `POST /api/v1/repositories/:id/embeddings` enqueues indexing; `GET /api/v1/repositories/:id/search` returns matching file snippets with line range and similarity score.
+- **Storage**: `code_embeddings.embedding` is `VECTOR(1024)` using `pgvector-go`; rows include provider, model, dimension, branch, commit SHA, content hash, file path, language, and line range.
+- **Relevance Controls**: Semantic search defaults to `min_score=0.55`; callers can tune `min_score` from `0` to `1`. Low-confidence searches can legitimately return `total: 0`.
+- **Provider Swap**: Add a new implementation of `embeddings.Provider`, extend config/bootstrap provider selection in `cmd/server/main.go`, and keep worker/handler/storage unchanged.
 
 ## Swagger/OpenAPI Documentation
 
@@ -133,7 +146,7 @@ internal/
 - **UI**: gin-swagger serving `/swagger/*any` route (Swagger UI embedded)
 - **Generation**: `make swagger` or `go run github.com/swaggo/swag/cmd/swag@v1.8.12 init -g cmd/server/main.go -o docs --parseInternal --parseDependency`
 - **Generated files**: `docs/docs.go` (committed), `docs/swagger.json` and `docs/swagger.yaml` (ignored in .gitignore)
-- **Annotations**: All 17 endpoints documented with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers (auth 5, repository 5, webhook 1, analysis 2, health 1, swagger 3)
+- **Annotations**: All 19 endpoints documented with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers (auth 5, repository 5, webhook 1, analysis 2, semantic search 2, health 1, swagger 3)
 - **General API Info**: Defined in comments above `func main()` in `cmd/server/main.go` — includes title, version, description, host, base path, security definitions
 - **Security**: BearerAuth scheme documented for JWT-protected endpoints; header parameters documented for webhook HMAC validation
 - **Regeneration**: After adding/modifying handler annotations, run `make swagger` to regenerate docs
@@ -146,7 +159,11 @@ internal/
 - `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`: JWT configuration
 - `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`: Token expiration (in minutes)
 - `ENCRYPTION_KEY`: Base64-encoded 32-byte AES-256-GCM key for field encryption (generate with `openssl rand -base64 32`)
-- `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys
+- `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys; `GITHUB_TOKEN` is also used for private repository clones during metrics and embedding generation.
+- `VOYAGE_API_KEY`: Voyage AI key for semantic code search (optional — skips embedding worker/search if not set)
+- `EMBEDDINGS_PROVIDER`: Embedding provider selector, default `voyage`
+- `EMBEDDINGS_MODEL`: Embedding model, default `voyage-code-3`
+- `EMBEDDINGS_DIMENSIONS`: Embedding vector dimension, default `1024`
 - `WEBHOOK_BASE_URL`: Public base URL for webhook registration (e.g. ngrok URL); omit or use localhost to skip GitHub webhook registration
 - `LOG_LEVEL`: Logging verbosity (info, debug, error)
 
@@ -241,6 +258,14 @@ internal/
    - Counts total lines, blank lines, code lines, and estimates cyclomatic complexity
    - Integrated into analysis worker — metrics computed before Claude call
    - Claude receives computed metrics in prompt with instruction not to recalculate
+   - Uses `GITHUB_TOKEN` when configured and only sets clone auth when the token is non-empty
    - Graceful degradation: continues with zero metrics if clone fails
 
-**Ready for next phase**: Semantic search with `TypeGenerateEmbeddings` job (pgvector embeddings) for intelligent code search
+4. ✅ **Semantic Code Search** (`internal/embeddings/`, `internal/workers/embedding_worker.go`):
+   - Voyage AI provider implementation using `voyage-code-3`
+   - `TypeGenerateEmbeddings` worker with temporary git clone, deterministic chunking, batched embedding generation, and pgvector persistence
+   - Protected endpoints for indexing and semantic search
+   - Hybrid search combines vector similarity with textual boosts and `min_score` cutoff
+   - Migration `007` updates `code_embeddings` to `VECTOR(1024)` and adds provider/model/dimension/branch metadata
+
+**Ready for next phase**: Handler/integration test hardening and production key rotation

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 )
@@ -16,7 +17,7 @@ import (
 // Calculate clones a repository and computes code metrics (lines of code, complexity)
 // It returns the metrics or an error if cloning/analysis fails.
 // Note: Test coverage is not calculated as it is a CI artifact, not a git artifact.
-func Calculate(ctx context.Context, repoURL, githubToken string) (*ai.CodeMetrics, error) {
+func Calculate(ctx context.Context, repoURL, githubToken, branch string) (*ai.CodeMetrics, error) {
 	// Create temporary directory for clone
 	dir, err := os.MkdirTemp("", "analysis-*")
 	if err != nil {
@@ -25,15 +26,7 @@ func Calculate(ctx context.Context, repoURL, githubToken string) (*ai.CodeMetric
 	defer os.RemoveAll(dir)
 
 	// Clone repository with shallow depth (single commit, no history)
-	_, err = git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{
-		URL:   repoURL,
-		Depth: 1, // shallow clone to minimize network/disk usage
-		Auth: &githttp.BasicAuth{
-			Username: "x-token",
-			Password: githubToken,
-		},
-		// RecurseSubmodules is git.NoRecurseSubmodules by default (safe default)
-	})
+	_, err = git.PlainCloneContext(ctx, dir, false, buildCloneOptions(repoURL, githubToken, branch))
 	if err != nil {
 		return nil, fmt.Errorf("clone repo: %w", err)
 	}
@@ -78,6 +71,25 @@ func Calculate(ctx context.Context, repoURL, githubToken string) (*ai.CodeMetric
 		CodeDuplication:      0, // Not implemented
 		MaintainabilityIndex: 0, // Not implemented
 	}, nil
+}
+
+func buildCloneOptions(repoURL, githubToken, branch string) *git.CloneOptions {
+	opts := &git.CloneOptions{
+		URL:   repoURL,
+		Depth: 1, // shallow clone to minimize network/disk usage
+		// RecurseSubmodules is git.NoRecurseSubmodules by default (safe default)
+	}
+	if branch != "" {
+		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
+		opts.SingleBranch = true
+	}
+	if githubToken != "" {
+		opts.Auth = &githttp.BasicAuth{
+			Username: "x-access-token",
+			Password: githubToken,
+		}
+	}
+	return opts
 }
 
 // shouldSkipFile returns true for files/dirs that are not source code

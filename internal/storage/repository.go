@@ -49,8 +49,9 @@ type Repository interface {
 
 	// Code Embedding operations
 	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
-	SearchEmbeddings(ctx context.Context, repoID string, vector []float32, limit int) ([]models.CodeEmbedding, error)
-	DeleteEmbeddingsByRepository(ctx context.Context, repoID string) error
+	CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error
+	SearchEmbeddings(ctx context.Context, filter EmbeddingSearchFilter) ([]models.CodeEmbedding, error)
+	DeleteEmbeddings(ctx context.Context, filter EmbeddingDeleteFilter) error
 
 	// Token operations
 	CreateToken(ctx context.Context, token *models.Token) error
@@ -73,4 +74,24 @@ type RepositoryFilter struct {
 	SearchQuery    string
 	Limit          int
 	Offset         int
+}
+
+type EmbeddingSearchFilter struct {
+	RepositoryID string
+	Query        string
+	Vector       []float32
+	Provider     string
+	Model        string
+	Dimension    int
+	Branch       string
+	Limit        int
+	MinScore     float64
+}
+
+type EmbeddingDeleteFilter struct {
+	RepositoryID string
+	Provider     string
+	Model        string
+	Dimension    int
+	Branch       string
 }

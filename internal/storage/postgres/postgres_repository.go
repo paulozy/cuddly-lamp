@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -378,24 +380,112 @@ func (pr *PostgresRepository) CreateCodeEmbedding(ctx context.Context, embedding
 	return nil
 }
 
-func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, repoID string, vector []float32, limit int) ([]models.CodeEmbedding, error) {
-	var embeddings []models.CodeEmbedding
+func (pr *PostgresRepository) CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error {
+	if len(embeddings) == 0 {
+		return nil
+	}
+	if err := pr.db.WithContext(ctx).CreateInBatches(embeddings, 100).Error; err != nil {
+		return fmt.Errorf("create code embeddings: %w", err)
+	}
+	return nil
+}
 
-	// Use PostgreSQL pgvector similarity search
-	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ?", repoID).
-		Order(clause.Expr{SQL: "embedding <-> ?", Vars: []interface{}{vector}}).
-		Limit(limit).
-		Find(&embeddings).Error; err != nil {
+func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, filter storage.EmbeddingSearchFilter) ([]models.CodeEmbedding, error) {
+	var embeddings []models.CodeEmbedding
+	if filter.Limit <= 0 || filter.Limit > 50 {
+		filter.Limit = 10
+	}
+	if filter.MinScore < 0 || filter.MinScore > 1 {
+		filter.MinScore = 0.55
+	}
+
+	queryVector := pgvector.NewVector(filter.Vector)
+	where := []string{"repository_id = ?"}
+	args := []interface{}{filter.RepositoryID}
+	if filter.Provider != "" {
+		where = append(where, "provider = ?")
+		args = append(args, filter.Provider)
+	}
+	if filter.Model != "" {
+		where = append(where, "model = ?")
+		args = append(args, filter.Model)
+	}
+	if filter.Dimension > 0 {
+		where = append(where, "dimension = ?")
+		args = append(args, filter.Dimension)
+	}
+	if filter.Branch != "" {
+		where = append(where, "branch = ?")
+		args = append(args, filter.Branch)
+	}
+
+	searchText := strings.TrimSpace(filter.Query)
+	searchPattern := "%" + escapeLike(searchText) + "%"
+	candidateLimit := filter.Limit * 5
+	if candidateLimit < 50 {
+		candidateLimit = 50
+	}
+
+	sql := fmt.Sprintf(`
+		SELECT *
+		FROM (
+			SELECT
+				code_embeddings.*,
+				LEAST(
+					1.0,
+					(1 - (embedding <=> ?)) +
+					CASE WHEN ? <> '' AND content ILIKE ? ESCAPE '\' THEN 0.15 ELSE 0 END +
+					CASE WHEN ? <> '' AND file_path ILIKE ? ESCAPE '\' THEN 0.10 ELSE 0 END +
+					CASE WHEN ? <> '' AND language ILIKE ? ESCAPE '\' THEN 0.05 ELSE 0 END
+				) AS score
+			FROM code_embeddings
+			WHERE %s
+			ORDER BY embedding <=> ?
+			LIMIT ?
+		) ranked
+		WHERE score >= ?
+		ORDER BY score DESC, file_path ASC, start_line ASC
+		LIMIT ?
+	`, strings.Join(where, " AND "))
+
+	queryArgs := []interface{}{
+		queryVector,
+		searchText, searchPattern,
+		searchText, searchPattern,
+		searchText, searchPattern,
+	}
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, queryVector, candidateLimit, filter.MinScore, filter.Limit)
+
+	if err := pr.db.WithContext(ctx).Raw(sql, queryArgs...).Scan(&embeddings).Error; err != nil {
 		return nil, fmt.Errorf("search embeddings: %w", err)
 	}
 
 	return embeddings, nil
 }
 
-func (pr *PostgresRepository) DeleteEmbeddingsByRepository(ctx context.Context, repoID string) error {
-	if err := pr.db.WithContext(ctx).
-		Delete(&models.CodeEmbedding{}, "repository_id = ?", repoID).Error; err != nil {
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
+}
+
+func (pr *PostgresRepository) DeleteEmbeddings(ctx context.Context, filter storage.EmbeddingDeleteFilter) error {
+	query := pr.db.WithContext(ctx).Where("repository_id = ?", filter.RepositoryID)
+	if filter.Provider != "" {
+		query = query.Where("provider = ?", filter.Provider)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.Dimension > 0 {
+		query = query.Where("dimension = ?", filter.Dimension)
+	}
+	if filter.Branch != "" {
+		query = query.Where("branch = ?", filter.Branch)
+	}
+	if err := query.Delete(&models.CodeEmbedding{}).Error; err != nil {
 		return fmt.Errorf("delete embeddings by repository: %w", err)
 	}
 	return nil
