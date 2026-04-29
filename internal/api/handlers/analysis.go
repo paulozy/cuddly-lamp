@@ -25,6 +25,8 @@ type AnalysisHandler struct {
 	embeddingProvider embeddings.Provider
 }
 
+const defaultSemanticMinScore = 0.55
+
 func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer, tokenLimit int64, embeddingProvider embeddings.Provider) *AnalysisHandler {
 	return &AnalysisHandler{
 		repo:              repo,
@@ -310,6 +312,7 @@ func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
+	minScore := parseSemanticMinScore(c.Query("min_score"))
 	branch := c.Query("branch")
 	if branch == "" {
 		branch = repository.Metadata.DefaultBranch
@@ -337,12 +340,14 @@ func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
 
 	matches, err := h.repo.SearchEmbeddings(c.Request.Context(), storage.EmbeddingSearchFilter{
 		RepositoryID: repoID,
+		Query:        query,
 		Vector:       embedding.Embeddings[0],
 		Provider:     h.embeddingProvider.Provider(),
 		Model:        h.embeddingProvider.Model(),
 		Dimension:    h.embeddingProvider.Dimension(),
 		Branch:       branch,
 		Limit:        limit,
+		MinScore:     minScore,
 	})
 	if err != nil {
 		utils.Error("semantic search: storage search failed", "repo_id", repoID, "error", err)
@@ -373,6 +378,17 @@ func (h *AnalysisHandler) SemanticSearch(c *gin.Context) {
 		Total:   len(results),
 		Results: results,
 	})
+}
+
+func parseSemanticMinScore(raw string) float64 {
+	if raw == "" {
+		return defaultSemanticMinScore
+	}
+	score, err := strconv.ParseFloat(raw, 64)
+	if err != nil || score < 0 || score > 1 {
+		return defaultSemanticMinScore
+	}
+	return score
 }
 
 func (h *AnalysisHandler) fetchAccessibleRepository(c *gin.Context, repoID string) (*models.Repository, bool) {

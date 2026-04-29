@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -394,33 +395,80 @@ func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, filter stora
 	if filter.Limit <= 0 || filter.Limit > 50 {
 		filter.Limit = 10
 	}
+	if filter.MinScore < 0 || filter.MinScore > 1 {
+		filter.MinScore = 0.55
+	}
 
 	queryVector := pgvector.NewVector(filter.Vector)
-	query := pr.db.WithContext(ctx).
-		Select("code_embeddings.*, 1 - (embedding <=> ?) AS score", queryVector).
-		Where("repository_id = ?", filter.RepositoryID)
-
+	where := []string{"repository_id = ?"}
+	args := []interface{}{filter.RepositoryID}
 	if filter.Provider != "" {
-		query = query.Where("provider = ?", filter.Provider)
+		where = append(where, "provider = ?")
+		args = append(args, filter.Provider)
 	}
 	if filter.Model != "" {
-		query = query.Where("model = ?", filter.Model)
+		where = append(where, "model = ?")
+		args = append(args, filter.Model)
 	}
 	if filter.Dimension > 0 {
-		query = query.Where("dimension = ?", filter.Dimension)
+		where = append(where, "dimension = ?")
+		args = append(args, filter.Dimension)
 	}
 	if filter.Branch != "" {
-		query = query.Where("branch = ?", filter.Branch)
+		where = append(where, "branch = ?")
+		args = append(args, filter.Branch)
 	}
 
-	if err := query.
-		Order(clause.Expr{SQL: "embedding <=> ?", Vars: []interface{}{queryVector}}).
-		Limit(filter.Limit).
-		Find(&embeddings).Error; err != nil {
+	searchText := strings.TrimSpace(filter.Query)
+	searchPattern := "%" + escapeLike(searchText) + "%"
+	candidateLimit := filter.Limit * 5
+	if candidateLimit < 50 {
+		candidateLimit = 50
+	}
+
+	sql := fmt.Sprintf(`
+		SELECT *
+		FROM (
+			SELECT
+				code_embeddings.*,
+				LEAST(
+					1.0,
+					(1 - (embedding <=> ?)) +
+					CASE WHEN ? <> '' AND content ILIKE ? ESCAPE '\' THEN 0.15 ELSE 0 END +
+					CASE WHEN ? <> '' AND file_path ILIKE ? ESCAPE '\' THEN 0.10 ELSE 0 END +
+					CASE WHEN ? <> '' AND language ILIKE ? ESCAPE '\' THEN 0.05 ELSE 0 END
+				) AS score
+			FROM code_embeddings
+			WHERE %s
+			ORDER BY embedding <=> ?
+			LIMIT ?
+		) ranked
+		WHERE score >= ?
+		ORDER BY score DESC, file_path ASC, start_line ASC
+		LIMIT ?
+	`, strings.Join(where, " AND "))
+
+	queryArgs := []interface{}{
+		queryVector,
+		searchText, searchPattern,
+		searchText, searchPattern,
+		searchText, searchPattern,
+	}
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, queryVector, candidateLimit, filter.MinScore, filter.Limit)
+
+	if err := pr.db.WithContext(ctx).Raw(sql, queryArgs...).Scan(&embeddings).Error; err != nil {
 		return nil, fmt.Errorf("search embeddings: %w", err)
 	}
 
 	return embeddings, nil
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
 }
 
 func (pr *PostgresRepository) DeleteEmbeddings(ctx context.Context, filter storage.EmbeddingDeleteFilter) error {

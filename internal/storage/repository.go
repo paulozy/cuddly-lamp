@@ -78,12 +78,14 @@ type RepositoryFilter struct {
 
 type EmbeddingSearchFilter struct {
 	RepositoryID string
+	Query        string
 	Vector       []float32
 	Provider     string
 	Model        string
 	Dimension    int
 	Branch       string
 	Limit        int
+	MinScore     float64
 }
 
 type EmbeddingDeleteFilter struct {
