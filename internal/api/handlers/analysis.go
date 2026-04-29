@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -81,16 +85,29 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 		req.Type = "code_review"
 	}
 
-	// Enqueue analysis job
+	// Enqueue analysis job with deduplication: manual triggers get a deterministic TaskID
 	payload := tasks.AnalyzeRepoPayload{
 		RepositoryID: repoID,
 		Branch:       req.Branch,
 		CommitSHA:    req.CommitSHA,
 		Type:         req.Type,
+		TriggeredBy:  "user",
 	}
 
-	err = h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeAnalyzeRepo, payload)
+	// Use TaskID to prevent duplicate manual triggers (one per repo at a time)
+	taskID := fmt.Sprintf("analyze:manual:%s", repoID)
+	err = h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeAnalyzeRepo, payload,
+		asynq.TaskID(taskID),
+		asynq.Retention(10*time.Minute), // keep record for 10m after completion so ID stays locked
+	)
 	if err != nil {
+		if errors.Is(err, asynq.ErrTaskIDConflict) {
+			c.JSON(http.StatusConflict, models.ErrorResponse{
+				Error:            "analysis_in_progress",
+				ErrorDescription: "an analysis for this repository is already queued or running",
+			})
+			return
+		}
 		utils.Error("analysis handler: enqueue failed", "repo_id", repoID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "queue_error",

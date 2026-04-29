@@ -23,6 +23,7 @@ type AnalyzeRepoPayload struct {
 	CommitSHA     string `json:"commit_sha,omitempty"`
 	PullRequestID int64  `json:"pull_request_id,omitempty"`
 	Type          string `json:"type,omitempty"`
+	TriggeredBy   string `json:"triggered_by,omitempty"`
 }
 
 type GenerateEmbeddingsPayload struct {

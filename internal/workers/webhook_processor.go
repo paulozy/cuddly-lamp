@@ -97,6 +97,7 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 				Branch:       webhook.EventPayload.Branch,
 				CommitSHA:    webhook.EventPayload.CommitSHA,
 				Type:         "code_review",
+				TriggeredBy:  "webhook",
 			}
 			if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
 				utils.Warn("webhook processor: failed to enqueue analysis", "repo_id", repoID, "error", err)
@@ -117,6 +118,7 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 			CommitSHA:     webhook.EventPayload.CommitSHA,
 			PullRequestID: prID,
 			Type:          "code_review",
+			TriggeredBy:   "webhook",
 		}
 		if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
 			return fmt.Errorf("enqueue analysis job: %w", err)
