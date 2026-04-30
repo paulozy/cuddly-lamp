@@ -1,6 +1,6 @@
 # IDP Backend - Identity Provider with AI Integration
 
-Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
+Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, intelligent code templates, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
 
 ## ✨ Features Implemented
 
@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 9 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies)
+- ✅ 10 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -34,6 +34,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Audit triggers (created_at, updated_at automation)
 - ✅ Encrypted fields: OAuth tokens (access_token_encrypted), webhook secrets (secret_encrypted)
 - ✅ Package dependency inventory with CVE/update metadata
+- ✅ Code template storage with generated files as JSONB and pinning metadata
 
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
@@ -66,12 +67,13 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 ### API Documentation
 - ✅ Swagger/OpenAPI 2.0 with swaggo/swag
 - ✅ Interactive Swagger UI at `/swagger/index.html`
-- ✅ Comprehensive annotations for auth, repository, webhook, analysis, semantic search, and health endpoints
+- ✅ Comprehensive annotations for auth, repository, webhook, analysis, dependency, template, semantic search, and health endpoints
 - ✅ JWT security scheme documented
 - ✅ Automatic generation with `make swagger`
 
 ### AI Integration
 - ✅ Pluggable `ai.Analyzer` interface for code analysis
+- ✅ Pluggable `ai.Generator` interface for code template generation
 - ✅ Anthropic (Claude) implementation with Anthropic SDK
 - ✅ Analysis worker (`TypeAnalyzeRepo` job) — triggers on push/PR webhook events
 - ✅ Pull request analysis with real GitHub PR metadata/files, diff filtering, token budgeting, and file-level commenting
@@ -83,6 +85,17 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
 - ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis, using `GITHUB_TOKEN` for private repositories when configured
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
+
+### Intelligent Code Templates
+- ✅ AI-powered code scaffold generation via Claude (`ai.Generator`)
+- ✅ Repository-scoped generation using detected stack metadata (`languages`, `frameworks`, `topics`, CI/tests)
+- ✅ Organization-level generation with optional `stack_hint`
+- ✅ Async flow: create `code_templates` row → enqueue `template:generate` → poll result
+- ✅ Generated multi-file output stored inline as JSONB (`files[]` with path/content/language)
+- ✅ Pin/unpin templates for team reuse with optional display name
+- ✅ HTTP endpoints: `POST /templates`, `POST /repositories/:id/templates`, `GET /templates/:id`, `GET /templates`, `PATCH /templates/:id/pin`
+- ✅ Shared Anthropic token budget with code analysis and dependency analysis
+- ✅ Swagger annotations and unit tests for generator parsing and worker transitions
 
 ### Dependency Tracking
 - ✅ Manifest parsers for `go.mod`, `package.json`, `requirements.txt`, and `Cargo.toml`
@@ -194,6 +207,23 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/repositories
 curl -L "http://localhost:3000/api/v1/auth/github?organization_name=Acme%20Inc"
 ```
 
+### 7. Generate an intelligent code template
+```bash
+# Requires ANTHROPIC_API_KEY and Redis/asynq enabled
+curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/templates \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Create a CRUD API with JWT auth","stack_hint":"Go, Gin, GORM"}'
+
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/v1/templates/$TEMPLATE_ID
+
+curl -X PATCH http://localhost:3000/api/v1/templates/$TEMPLATE_ID/pin \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"is_pinned":true,"name":"Go CRUD with JWT"}'
+```
+
 > For webhook testing with ngrok see [`tests/GITHUB_SYNC_TESTING.md`](tests/GITHUB_SYNC_TESTING.md).
 
 ## 📚 Documentação
@@ -277,7 +307,8 @@ backend/
 │   │   │   ├── repository.go      # Repository CRUD endpoints
 │   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
 │   │   │   ├── analysis.go        # Code analysis + semantic search endpoints
-│   │   │   └── dependency_handler.go # Dependency scan/list endpoints
+│   │   │   ├── dependency_handler.go # Dependency scan/list endpoints
+│   │   │   └── template.go        # AI code template generation/list/pin endpoints
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
 │   │   │   ├── logger.go          # Request logging
@@ -289,11 +320,14 @@ backend/
 │   │   │   ├── make_repository_handler.go  # DI: repository service
 │   │   │   ├── make_webhook_handler.go     # DI: webhook handler
 │   │   │   ├── make_analysis_handler.go    # DI: analysis handler
-│   │   │   └── make_dependency_handler.go  # DI: dependency handler
+│   │   │   ├── make_dependency_handler.go  # DI: dependency handler
+│   │   │   └── make_template_handler.go    # DI: template handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
-│   ├── ai/                        # Pluggable AI provider interface
+│   ├── ai/                        # Pluggable AI provider interfaces
 │   │   ├── provider.go            # Analyzer interface + request/response types
-│   │   └── mock_analyzer.go       # Mock implementation for testing
+│   │   ├── generator.go           # Generator interface + template request/result types
+│   │   ├── mock_analyzer.go       # Mock analyzer for testing
+│   │   └── mock_generator.go      # Mock generator for testing
 │   ├── dependencies/              # Package manifest parsers
 │   │   ├── parser.go              # go.mod, package.json, requirements.txt, Cargo.toml parsers
 │   │   └── parser_test.go         # Parser unit tests
@@ -307,8 +341,9 @@ backend/
 │   │   └── serializer.go          # GORM hooks for transparent encryption
 │   ├── integrations/
 │   │   ├── anthropic/             # Anthropic (Claude) AI implementation
-│   │   │   ├── client.go          # HTTP client implementing ai.Analyzer
-│   │   │   └── client_test.go     # Anthropic client tests
+│   │   │   ├── client.go          # Client implementing ai.Analyzer
+│   │   │   ├── generator.go       # Client implementing ai.Generator
+│   │   │   └── *_test.go          # Anthropic analyzer/generator tests
 │   │   └── github/                # GitHub API client (repos, branches, commits, PRs, webhooks)
 │   │       ├── client.go          # HTTP client + ClientInterface
 │   │       ├── pr.go              # PR-specific operations (fetch, review posting)
@@ -328,6 +363,7 @@ backend/
 │   │   ├── analysis_worker.go     # Handles repo:analyze asynq task (code + PR analysis)
 │   │   ├── embedding_worker.go    # Handles embeddings:generate asynq task
 │   │   ├── dependency_worker.go   # Handles dependency:scan asynq task
+│   │   ├── template_worker.go     # Handles template:generate asynq task
 │   │   └── analysis_worker_test.go # Analysis worker tests
 │   ├── models/
 │   │   ├── user.go                # User with roles
@@ -335,6 +371,8 @@ backend/
 │   │   ├── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
 │   │   ├── repository.go          # Repository + RepositoryMetadata + StringArray
 │   │   ├── dependency.go          # PackageDependency model
+│   │   ├── code_template.go       # CodeTemplate model
+│   │   ├── code_template_dto.go   # Template request/response DTOs
 │   │   ├── repository_dto.go      # CreateRepositoryRequest, UpdateRepositoryRequest
 │   │   ├── webhook.go             # Webhook events + WebhookConfig + StringArray type
 │   │   ├── code_analysis.go       # Code analysis results (issues, metrics, model used)
@@ -370,7 +408,8 @@ backend/
 │   ├── 006-encrypt-sensitive-fields.sql  # Add encrypted columns (access_token_encrypted, secret_encrypted)
 │   ├── 007-add-voyage-embeddings-metadata.sql  # Voyage/pgvector semantic search metadata + VECTOR(1024)
 │   ├── 008-add-organizations-multitenancy.sql  # Organizations, memberships, org config
-│   └── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
+│   ├── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
+│   └── 010-add-code-templates.sql  # Code template storage and pinning metadata
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -413,7 +452,7 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
 - **JWT_SECRET** - Secret for JWT signing and state token validation
 - **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
-- **ANTHROPIC_API_KEY** - Claude API key for code and dependency analysis (optional — skips analysis if not set)
+- **ANTHROPIC_API_KEY** - Claude API key for code analysis, dependency analysis, and template generation (optional — AI features return unavailable or fail queued jobs if not set)
 - **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
 - **VOYAGE_API_KEY** - Voyage AI API key for semantic code search (optional — skips embedding provider if not set)
 - **EMBEDDINGS_PROVIDER** - Embedding provider selector (default: voyage)
@@ -464,9 +503,10 @@ docker-compose exec postgres psql -U postgres -d idp_dev -c "SELECT * FROM schem
 - **CodeAnalysis** - Análises de código com issues, métricas e embeddings
 - **CodeEmbedding** - Embeddings vetoriais para busca semântica (pgvector)
 - **PackageDependency** - Dependências de pacotes com versões, ecossistema, CVEs e status de atualização
+- **CodeTemplate** - Templates de código gerados por IA com arquivos JSONB, snapshot de stack, status e metadados de pinning
 
 ### Database
-- **Tabelas principais** com indexes otimizados para auth, repositórios, webhooks, análises, embeddings e dependências
+- **Tabelas principais** com indexes otimizados para auth, repositórios, webhooks, análises, embeddings, dependências e templates
 - **JSONB** para dados flexíveis (metadata, issues, métricas)
 - **pgvector** para semantic search
 - **Soft deletes** (deleted_at column)
@@ -500,6 +540,9 @@ CreateCodeEmbedding, CreateCodeEmbeddings, SearchEmbeddings, DeleteEmbeddings
 // Package Dependencies
 UpsertPackageDependency, ListPackageDependencies,
 UpdatePackageDependencyVulnStatus, DeletePackageDependencies
+
+// Code Templates
+CreateCodeTemplate, GetCodeTemplate, UpdateCodeTemplate, ListCodeTemplates
 ```
 
 ## ⚙️ Important Implementation Details
@@ -569,13 +612,39 @@ Job queue (internal/jobs):
   No-op fallback — NewNoopEnqueuer() logs and discards jobs silently
 
 Task type constants (internal/jobs/tasks):
-  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings, TypeScanDependencies
+  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings, TypeScanDependencies, TypeGenerateTemplate
 
 Key builders (internal/storage/redis/keys.go):
   TokenKey(jti), UserKey(id), RepoKey(id), SessionKey(id)
 ```
 
 ### Dependency Tracking
+```
+
+### Intelligent Code Templates
+```
+Generate:
+  POST /api/v1/templates
+  POST /api/v1/repositories/:id/templates
+  Body: {"prompt":"Create CRUD in Next.js with auth","stack_hint":"Next.js 14, Tailwind"}
+  Creates a pending CodeTemplate and enqueues TypeGenerateTemplate with manual TaskID deduplication per template
+
+Poll:
+  GET /api/v1/templates/:id
+  Status values: pending, generating, completed, failed
+  Completed templates include summary, files[], ai_model, tokens_used, processing_ms, and stack_snapshot
+
+List:
+  GET /api/v1/templates?pinned=true&status=completed&limit=20&offset=0
+  Lists templates scoped to the authenticated organization
+
+Pin:
+  PATCH /api/v1/templates/:id/pin
+  Body: {"is_pinned":true,"name":"Go CRUD Template"}
+
+Storage:
+  code_templates.files is JSONB containing generated files with path, content, and language
+  code_templates tokens are included in the shared Anthropic hourly budget
 ```
 Supported manifests:
   go.mod, package.json, requirements.txt, Cargo.toml

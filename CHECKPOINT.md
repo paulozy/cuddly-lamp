@@ -43,7 +43,7 @@
 - **Library**: swaggo/swag (code-first, annotation-based)
 - **Format**: OpenAPI 2.0 (Swagger)
 - **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
-- **Coverage**: Auth, repository, webhook, analysis, semantic search, health, and Swagger UI routes documented
+- **Coverage**: Auth, repository, webhook, analysis, dependency, template, semantic search, health, and Swagger UI routes documented
 - **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
 - **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
 - **Generation**: `make swagger` rebuilds docs/ from annotations using pinned `swag@v1.8.12` via `go run`
@@ -58,6 +58,17 @@
 - **HTTP Endpoints**: `POST /repositories/:id/analyze` (trigger, 202 Accepted), `GET /repositories/:id/analyses` (list results)
 - **Provider Swap**: To use OpenAI instead of Anthropic — create new struct implementing `ai.Analyzer`, update one line in `main.go`
 - **Token Tracking**: Analysis results include model name and token usage for cost monitoring
+
+### Intelligent Code Templates ✅
+- **Pluggable Architecture**: `ai.Generator` interface in `internal/ai/generator.go`, separate from `ai.Analyzer` so analysis and generation can evolve independently.
+- **Current Provider**: Anthropic (Claude) implements template generation via `internal/integrations/anthropic/generator.go`.
+- **Template Worker**: `TypeGenerateTemplate` (`template:generate`) asynq job handler loads organization config, builds repository stack context when available, calls Claude, and persists generated files.
+- **Repository-Scoped Generation**: `POST /repositories/:id/templates` uses repository metadata (`languages`, `frameworks`, `topics`, CI/tests) plus optional `stack_hint`.
+- **Organization-Level Generation**: `POST /templates` generates from prompt and optional stack hint without repo context.
+- **Polling & Reuse**: `GET /templates/:id` polls status/results, `GET /templates` lists org templates, and `PATCH /templates/:id/pin` pins/unpins a reusable team template.
+- **Storage**: `code_templates.files` stores generated files inline as JSONB (`path`, `content`, `language`) with summary, stack snapshot, model, token usage, processing time, and error message.
+- **Token Budget**: `SumTokensUsedSince` now includes both completed `code_analyses` and completed `code_templates`.
+- **Swagger**: All template endpoints include handler annotations and exported request/response DTOs.
 
 ### Semantic Code Search ✅
 - **Provider Architecture**: `embeddings.Provider` interface isolates provider-specific embedding logic for future swaps.
@@ -81,13 +92,13 @@
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
 - asynq job queue — `Enqueuer` interface, priority queues (critical/default/low), dead-letter
-- Background workers registered in-process: `SyncWorker` (`repo:sync`), `WebhookProcessor` (`webhook:process`), `AnalysisWorker` (`repo:analyze`), `EmbeddingWorker` (`embeddings:generate`), `DependencyWorker` (`dependency:scan`)
+- Background workers registered in-process: `SyncWorker` (`repo:sync`), `WebhookProcessor` (`webhook:process`), `AnalysisWorker` (`repo:analyze`), `EmbeddingWorker` (`embeddings:generate`), `DependencyWorker` (`dependency:scan`), `TemplateWorker` (`template:generate`)
 - GitHub API client (`internal/integrations/github/`) — repos, branches, commits, PRs, webhooks
 - GORM logger configured: `IgnoreRecordNotFoundError: true`, 200ms slow query threshold
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 9 SQL migrations applied and tracked via `schema_migrations`
+- 10 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -97,6 +108,7 @@
   - `007`: Voyage embeddings — provider/model/dimension/branch metadata and `VECTOR(1024)` pgvector storage
   - `008`: Organizations/multitenancy — organization tables, memberships, organization config
   - `009`: Package dependencies — `package_dependencies` inventory with CVE/update metadata
+  - `010`: Code templates — `code_templates` generation results with JSONB files and pinning metadata
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -132,6 +144,11 @@
 | GET | `/repositories/:id/search` | Semantic code search over generated embeddings |
 | POST | `/repositories/:id/dependencies/scan` | Queue dependency manifest scan |
 | GET | `/repositories/:id/dependencies` | List repository package dependencies (`?vulnerable=true`) |
+| POST | `/repositories/:id/templates` | Queue repository-scoped AI template generation |
+| POST | `/templates` | Queue organization-level AI template generation |
+| GET | `/templates/:id` | Poll/retrieve generated template |
+| GET | `/templates` | List organization templates (`?pinned=true&status=completed`) |
+| PATCH | `/templates/:id/pin` | Pin/unpin template for team reuse |
 
 ---
 
@@ -148,6 +165,7 @@
 | `code_analyses` | Code review results with issues (JSONB), metrics, model name, token usage |
 | `code_embeddings` | Voyage/pgvector source-code embeddings for semantic search |
 | `package_dependencies` | Package inventory with ecosystem, manifest path, vulnerability CVEs, update suggestions |
+| `code_templates` | AI-generated scaffold templates with JSONB files, status, stack snapshot, and pinning metadata |
 | `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
@@ -191,6 +209,14 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Vulnerability mapping**: Worker matches AI issues back to package rows by manifest path and package names, extracts `CVE-YYYY-NNNN` values, and stores latest recommended version when present
 - **Manual deduplication**: `asynq.TaskID("dependency:scan:manual:{repoID}")` with 10-minute retention returns 409 while a manual scan is already queued/running
 
+### Intelligent Code Templates
+- **Generation request**: `prompt` is required; `stack_hint` is optional and can override or refine detected repository stack context.
+- **Async state machine**: `pending → generating → completed / failed`; failures persist `error_message` on the `code_templates` row.
+- **Manual deduplication**: `asynq.TaskID("template:manual:{templateID}")` with 10-minute retention guards duplicate queueing for the same template record.
+- **Stack detection**: Repository-scoped jobs derive `ai.StackProfile` from `Repository.Metadata` and store it in `stack_snapshot`.
+- **Generated files**: Stored as JSONB array with `{path, content, language}`; no object storage is required for the current scope.
+- **Pinned templates**: `is_pinned`, `name`, `pinned_by_user_id`, and `pinned_at` support team reuse and filtered listing.
+
 ---
 
 ## 📊 Test Coverage
@@ -203,6 +229,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 | `internal/dependencies` | Unit tests ✅ | manifest parser coverage |
 | `internal/workers` | Unit tests ✅ | analysis and dependency worker coverage |
 | `internal/api/handlers` | Unit tests ✅ | analysis helpers and dependency handler coverage |
+| `internal/integrations/anthropic` | Unit tests ✅ | analyzer and template generator prompt/parser coverage |
 | `internal/storage/postgres` | Integration tests ⏳ | requires `TEST_DATABASE_URL` |
 
 ---
@@ -248,6 +275,16 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Tests**: Added parser tests, Anthropic dependency prompt/response tests, dependency worker test, and dependency handler tests
 - **Files**: `internal/dependencies/`, `internal/models/dependency.go`, `internal/workers/dependency_worker.go`, `internal/api/handlers/dependency_handler.go`, `migrations/009-add-package-dependencies.sql`
 
+### Phase 6: Intelligent Code Templates ✅
+- **Provider interface**: Added `ai.Generator`, `TemplateRequest`, `TemplateResult`, `GeneratedFile`, and `StackProfile`.
+- **Anthropic generation**: Added Claude template prompt construction, JSON response parsing, 8192 max-token generation call, and tests.
+- **Storage**: Added `CodeTemplate` model, exported template DTOs, repository interface methods, Postgres CRUD/list implementations, and migration `010`.
+- **Worker**: Added `TemplateWorker` for pending/generating/completed/failed transitions, repository stack snapshot extraction, token/model persistence, and tests.
+- **Routes**: Added protected template generation, polling, listing, and pin/unpin endpoints with Swagger decorators.
+- **Token budget**: Extended hourly Anthropic token sum to include completed template generations.
+- **Wiring**: Registered `TypeGenerateTemplate` in task types, route setup, handler factory, and server worker bootstrap.
+- **Files**: `internal/ai/generator.go`, `internal/integrations/anthropic/generator.go`, `internal/models/code_template.go`, `internal/models/code_template_dto.go`, `internal/workers/template_worker.go`, `internal/api/handlers/template.go`, `migrations/010-add-code-templates.sql`
+
 ---
 
 ## 🎯 Next Steps
@@ -256,6 +293,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - [x] **Analysis Pipeline** — Deduplication, token rate limiting, local metrics computation
 - [x] **Semantic search** — Voyage AI embeddings, pgvector storage, `TypeGenerateEmbeddings` job, search endpoints
 - [x] **Dependency tracking** — package manifest parsing, Claude CVE/update analysis, `TypeScanDependencies`, dependency endpoints
+- [x] **Intelligent code templates** — Claude scaffold generation, `TypeGenerateTemplate`, template endpoints, JSONB file storage, pinning
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support

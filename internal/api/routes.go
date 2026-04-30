@@ -32,9 +32,10 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
 	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
 	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
+	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler, dependencyHandler, orgConfigHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, orgConfigHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -52,6 +53,7 @@ func setupAPIRoutes(
 	webhookHandler *handlers.WebhookHandler,
 	analysisHandler *handlers.AnalysisHandler,
 	dependencyHandler *handlers.DependencyHandler,
+	templateHandler *handlers.TemplateHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 ) {
 	// Swagger UI
@@ -97,5 +99,11 @@ func setupAPIRoutes(
 		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
 		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)
 		protected.GET("/repositories/:id/dependencies", dependencyHandler.ListDependencies)
+		protected.POST("/repositories/:id/templates", templateHandler.GenerateForRepository)
+
+		protected.POST("/templates", templateHandler.GenerateForOrganization)
+		protected.GET("/templates", templateHandler.ListTemplates)
+		protected.GET("/templates/:id", templateHandler.GetTemplate)
+		protected.PATCH("/templates/:id/pin", templateHandler.PinTemplate)
 	}
 }

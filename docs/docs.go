@@ -1068,6 +1068,335 @@ const docTemplate = `{
                 }
             }
         },
+        "/repositories/{id}/templates": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Generate repository code template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Template generation prompt",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GenerateTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TemplateAcceptedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "List code templates",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Filter pinned templates",
+                        "name": "pinned",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by status: pending, generating, completed, failed",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result limit (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result offset (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TemplateListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Generate organization code template",
+                "parameters": [
+                    {
+                        "description": "Template generation prompt",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GenerateTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TemplateAcceptedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/templates/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Get code template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeTemplate"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/templates/{id}/pin": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Pin code template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Pin settings",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.PinTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeTemplate"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/me": {
             "get": {
                 "security": [
@@ -1167,7 +1496,13 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "datatypes.JSONType-array_github_com_paulozy_idp-with-ai-backend_internal_ai_GeneratedFile": {
+            "type": "object"
+        },
         "datatypes.JSONType-array_github_com_paulozy_idp-with-ai-backend_internal_models_CodeIssue": {
+            "type": "object"
+        },
+        "datatypes.JSONType-github_com_paulozy_idp-with-ai-backend_internal_ai_StackProfile": {
             "type": "object"
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse": {
@@ -1422,6 +1757,86 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CodeTemplate": {
+            "type": "object",
+            "properties": {
+                "ai_model": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_user": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                },
+                "created_by_user_id": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "files": {
+                    "$ref": "#/definitions/datatypes.JSONType-array_github_com_paulozy_idp-with-ai-backend_internal_ai_GeneratedFile"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_pinned": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organization": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Organization"
+                },
+                "organization_id": {
+                    "type": "string"
+                },
+                "pinned_at": {
+                    "type": "string"
+                },
+                "pinned_by_user": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                },
+                "pinned_by_user_id": {
+                    "type": "string"
+                },
+                "processing_ms": {
+                    "type": "integer"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "stack_hint": {
+                    "type": "string"
+                },
+                "stack_snapshot": {
+                    "$ref": "#/definitions/datatypes.JSONType-github_com_paulozy_idp-with-ai-backend_internal_ai_StackProfile"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TemplateStatus"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.CreateRepositoryRequest": {
             "type": "object",
             "required": [
@@ -1457,6 +1872,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "commit_sha": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.GenerateTemplateRequest": {
+            "type": "object",
+            "required": [
+                "prompt"
+            ],
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                },
+                "stack_hint": {
                     "type": "string"
                 }
             }
@@ -1718,6 +2147,17 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.PinTemplateRequest": {
+            "type": "object",
+            "properties": {
+                "is_pinned": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },
@@ -2120,6 +2560,52 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TemplateAcceptedResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TemplateStatus"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TemplateListResponse": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "templates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeTemplate"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TemplateStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "generating",
+                "completed",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "TemplateStatusPending",
+                "TemplateStatusGenerating",
+                "TemplateStatusCompleted",
+                "TemplateStatusFailed"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.Token": {
             "type": "object",

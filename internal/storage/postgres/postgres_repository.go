@@ -492,6 +492,70 @@ func (pr *PostgresRepository) GetRepositoriesNeedingAnalysis(ctx context.Context
 	return repos, nil
 }
 
+// ============ Code Template Operations ============
+
+func (pr *PostgresRepository) CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error {
+	if !template.IsValid() {
+		return errors.New("invalid code template data")
+	}
+	if err := pr.db.WithContext(ctx).Create(template).Error; err != nil {
+		return fmt.Errorf("create code template: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error) {
+	var template models.CodeTemplate
+	if err := pr.db.WithContext(ctx).First(&template, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get code template: %w", err)
+	}
+	return &template, nil
+}
+
+func (pr *PostgresRepository) UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error {
+	if !template.IsValid() {
+		return errors.New("invalid code template data")
+	}
+	if err := pr.db.WithContext(ctx).Save(template).Error; err != nil {
+		return fmt.Errorf("update code template: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) ListCodeTemplates(ctx context.Context, filter storage.CodeTemplateFilter) ([]models.CodeTemplate, int64, error) {
+	var templates []models.CodeTemplate
+	var total int64
+
+	query := pr.db.WithContext(ctx).Model(&models.CodeTemplate{})
+	if filter.OrganizationID != "" {
+		query = query.Where("organization_id = ?", filter.OrganizationID)
+	}
+	if filter.RepositoryID != "" {
+		query = query.Where("repository_id = ?", filter.RepositoryID)
+	}
+	if filter.IsPinned != nil {
+		query = query.Where("is_pinned = ?", *filter.IsPinned)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count code templates: %w", err)
+	}
+	if err := query.
+		Limit(filter.Limit).
+		Offset(filter.Offset).
+		Order("created_at DESC").
+		Find(&templates).Error; err != nil {
+		return nil, 0, fmt.Errorf("list code templates: %w", err)
+	}
+	return templates, total, nil
+}
+
 // ============ Package Dependency Operations ============
 
 func (pr *PostgresRepository) UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error {
@@ -764,19 +828,41 @@ func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *m
 	return nil
 }
 
-// SumTokensUsedSince returns the total tokens used for completed analyses since the given time
+// SumTokensUsedSince returns the total tokens used for completed AI work since the given time.
 func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error) {
 	var total int64
-	query := pr.db.WithContext(ctx).
-		Model(&models.CodeAnalysis{}).
-		Joins("JOIN repositories ON repositories.id = code_analyses.repository_id").
-		Where("code_analyses.created_at >= ? AND code_analyses.status = ?", since, "completed")
+	query := `
+		SELECT COALESCE(SUM(tokens_used), 0)
+		FROM (
+			SELECT ca.tokens_used
+			FROM code_analyses ca
+			JOIN repositories r ON r.id = ca.repository_id
+			WHERE ca.created_at >= ? AND ca.status = 'completed'
+	`
 	if organizationID != "" {
-		query = query.Where("repositories.organization_id = ?", organizationID)
+		query += " AND r.organization_id = ?"
 	}
-	if err := query.
-		Select("COALESCE(SUM(tokens_used), 0)").
-		Scan(&total).Error; err != nil {
+	query += `
+			UNION ALL
+			SELECT ct.tokens_used
+			FROM code_templates ct
+			WHERE ct.created_at >= ? AND ct.status = 'completed'
+	`
+	if organizationID != "" {
+		query += " AND ct.organization_id = ?"
+	}
+	query += ") AS combined"
+
+	args := []any{since}
+	if organizationID != "" {
+		args = append(args, organizationID)
+	}
+	args = append(args, since)
+	if organizationID != "" {
+		args = append(args, organizationID)
+	}
+
+	if err := pr.db.WithContext(ctx).Raw(query, args...).Scan(&total).Error; err != nil {
 		return 0, fmt.Errorf("sum tokens used since: %w", err)
 	}
 	return total, nil

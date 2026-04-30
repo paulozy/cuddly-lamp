@@ -8,6 +8,7 @@ const (
 	TypeProcessWebhook     = "webhook:process"
 	TypeGenerateEmbeddings = "embeddings:generate"
 	TypeScanDependencies   = "dependency:scan"
+	TypeGenerateTemplate   = "template:generate"
 )
 
 type SyncRepoPayload struct {
@@ -40,4 +41,13 @@ type ScanDependenciesPayload struct {
 	CommitSHA     string `json:"commit_sha,omitempty"`
 	PullRequestID int    `json:"pull_request_id,omitempty"`
 	TriggeredBy   string `json:"triggered_by"`
+}
+
+type GenerateTemplatePayload struct {
+	TemplateID     string `json:"template_id"`
+	OrganizationID string `json:"organization_id"`
+	RepositoryID   string `json:"repository_id,omitempty"`
+	Prompt         string `json:"prompt"`
+	StackHint      string `json:"stack_hint,omitempty"`
+	TriggeredByID  string `json:"triggered_by_id"`
 }

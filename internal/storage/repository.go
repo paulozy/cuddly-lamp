@@ -59,6 +59,12 @@ type Repository interface {
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
 	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
+	// Code Template operations
+	CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
+	GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error)
+	UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
+	ListCodeTemplates(ctx context.Context, filter CodeTemplateFilter) ([]models.CodeTemplate, int64, error)
+
 	// Package Dependency operations
 	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
 	ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
@@ -91,6 +97,15 @@ type RepositoryFilter struct {
 	IsPublic       bool
 	AnalysisStatus string
 	SearchQuery    string
+	Limit          int
+	Offset         int
+}
+
+type CodeTemplateFilter struct {
+	OrganizationID string
+	RepositoryID   string
+	IsPinned       *bool
+	Status         string
 	Limit          int
 	Offset         int
 }
