@@ -1,6 +1,6 @@
 # IDP Backend - Identity Provider with AI Integration
 
-Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, auto-generated repository documentation, intelligent code templates, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
+Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, spatial repository relationship mapping, auto-generated repository documentation, intelligent code templates, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
 
 ## ✨ Features Implemented
 
@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 11 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations)
+- ✅ 12 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -34,6 +34,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Audit triggers (created_at, updated_at automation)
 - ✅ Encrypted fields: OAuth tokens (access_token_encrypted), webhook secrets (secret_encrypted)
 - ✅ Package dependency inventory with CVE/update metadata
+- ✅ Repository relationship graph storage for spatial navigation maps
 - ✅ Code template storage with generated files as JSONB and pinning metadata
 - ✅ Doc generation storage with generated Markdown content as JSONB and PR metadata
 
@@ -43,6 +44,14 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Sync status lifecycle — `idle → syncing → synced / error`
 - ✅ WebhookConfig — registers GitHub webhook on sync, stores HMAC secret
 - ✅ Webhook registration skipped automatically on localhost (use ngrok for local dev)
+
+### Spatial Repository Navigation
+- ✅ Canonical `repository_relationships` model for directed repo-to-repo relationships
+- ✅ Relationship kinds: `http`, `async`, `library`, `data`, `infra`, `manual`, `other`
+- ✅ Relationship source/confidence fields for manual data now and inferred data later
+- ✅ Graph endpoint: `GET /repositories/graph` returns all organization repositories as nodes, including independent repos
+- ✅ Relationship CRUD endpoints: `POST/PATCH/DELETE /repository-relationships`
+- ✅ Legacy `repository_dependencies` backfilled into relationship edges by migration `012`
 
 ### Webhook Pipeline
 - ✅ HMAC-SHA256 signature validation (X-Hub-Signature-256)
@@ -216,6 +225,16 @@ curl -X POST http://localhost:3000/api/v1/repositories \
 # List repositories
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/repositories
 
+# Create a repository relationship for the spatial map
+curl -X POST http://localhost:3000/api/v1/repository-relationships \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"source_repository_id":"REPO_A","target_repository_id":"REPO_B","kind":"http","label":"REST API","metadata":{"protocol":"rest","endpoint":"/v1/payments"}}'
+
+# Fetch graph nodes/edges for spatial navigation
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/v1/repositories/graph?include_metadata=true"
+
 # OAuth onboarding: redirect to GitHub (if configured)
 curl -L "http://localhost:3000/api/v1/auth/github?organization_name=Acme%20Inc"
 ```
@@ -327,6 +346,7 @@ backend/
 │   │   ├── handlers/
 │   │   │   ├── auth.go            # Login, register, OAuth, logout, /users/me
 │   │   │   ├── repository.go      # Repository CRUD endpoints
+│   │   │   ├── repository_relationship.go # Spatial graph + repo relationship endpoints
 │   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
 │   │   │   ├── analysis.go        # Code analysis + semantic search endpoints
 │   │   │   ├── dependency_handler.go # Dependency scan/list endpoints
@@ -341,6 +361,7 @@ backend/
 │   │   ├── factories/
 │   │   │   ├── make_auth_handler.go        # DI: auth service + providers
 │   │   │   ├── make_repository_handler.go  # DI: repository service
+│   │   │   ├── make_repository_relationship_handler.go # DI: relationship service
 │   │   │   ├── make_webhook_handler.go     # DI: webhook handler
 │   │   │   ├── make_analysis_handler.go    # DI: analysis handler
 │   │   │   ├── make_dependency_handler.go  # DI: dependency handler
@@ -382,6 +403,7 @@ backend/
 │   ├── services/
 │   │   ├── auth_service.go        # JWT, password hashing (Argon2), OAuth, refresh tokens
 │   │   ├── repository_service.go  # Repository business logic (ownership, dedup)
+│   │   ├── repository_relationship_service.go # Spatial graph relationship validation and assembly
 │   │   ├── sync_service.go        # GitHub sync (metadata + webhook registration)
 │   │   └── *_test.go              # Unit tests (auth refresh, repository, sync)
 │   ├── workers/
@@ -398,6 +420,8 @@ backend/
 │   │   ├── oauth_connection.go    # OAuth connections (provider links)
 │   │   ├── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
 │   │   ├── repository.go          # Repository + RepositoryMetadata + StringArray
+│   │   ├── repository_relationship.go # RepositoryRelationship model and enums
+│   │   ├── repository_relationship_dto.go # Graph and relationship DTOs
 │   │   ├── dependency.go          # PackageDependency model
 │   │   ├── code_template.go       # CodeTemplate model
 │   │   ├── code_template_dto.go   # Template request/response DTOs
@@ -441,7 +465,8 @@ backend/
 │   ├── 008-add-organizations-multitenancy.sql  # Organizations, memberships, org config
 │   ├── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
 │   ├── 010-add-code-templates.sql  # Code template storage and pinning metadata
-│   └── 011-add-doc-generations.sql  # Doc generation jobs, content JSONB, and PR metadata
+│   ├── 011-add-doc-generations.sql  # Doc generation jobs, content JSONB, and PR metadata
+│   └── 012-add-repository-relationships.sql  # Spatial repo relationship graph
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -535,6 +560,7 @@ docker-compose exec postgres psql -U postgres -d idp_dev -c "SELECT * FROM schem
 - **CodeAnalysis** - Análises de código com issues, métricas e embeddings
 - **CodeEmbedding** - Embeddings vetoriais para busca semântica (pgvector)
 - **PackageDependency** - Dependências de pacotes com versões, ecossistema, CVEs e status de atualização
+- **RepositoryRelationship** - Relacionamentos direcionais entre repositórios para mapa espacial
 - **CodeTemplate** - Templates de código gerados por IA com arquivos JSONB, snapshot de stack, status e metadados de pinning
 - **DocGeneration** - Geração de documentação com conteúdo Markdown JSONB, branch/PR criado, status, tokens e erros
 
@@ -555,6 +581,11 @@ GetUser, GetUserByEmail, GetUserByGitHubID, CreateUser, UpdateUser, ListUsers
 // Repositories
 GetRepository, GetRepositoryByURL, CreateRepository, UpdateRepository,
 ListRepositories, DeleteRepository, SearchRepositories
+
+// Repository Relationships
+CreateRepositoryRelationship, GetRepositoryRelationship,
+UpdateRepositoryRelationship, DeleteRepositoryRelationship,
+ListRepositoryRelationships
 
 // WebhookConfigs
 GetWebhookConfigByRepoID, CreateWebhookConfig, UpdateWebhookConfig
@@ -720,6 +751,26 @@ Webhook auto-trigger:
   push and pull_request events enqueue dependency scans only when supported manifest files changed
 ```
 
+### Spatial Repository Navigation
+```
+Graph:
+  GET /api/v1/repositories/graph?kind=http&repository_id=<repo>&include_metadata=true
+  Returns all organization repositories as nodes and matching repository_relationships as edges
+  Independent repositories are included as nodes even when they have no edges
+
+Create relationship:
+  POST /api/v1/repository-relationships
+  Body: {"source_repository_id":"repo-a","target_repository_id":"repo-b","kind":"http","label":"REST API","metadata":{"protocol":"rest"}}
+  Direction is source -> target. Manual creates use source=manual and confidence=1.0.
+
+Kinds:
+  http, async, library, data, infra, manual, other
+
+Storage:
+  repository_relationships is the canonical graph table
+  repository_dependencies remains legacy; migration 012 backfills it as source=legacy_dependency
+```
+
 ### Semantic Search
 ```
 Provider:
@@ -762,6 +813,7 @@ Query:
 - [x] Semantic search with Voyage AI + pgvector embeddings — `TypeGenerateEmbeddings` job
 - [x] Dependency tracking — manifest parsing, `TypeScanDependencies` job, Claude CVE/update analysis, dependency endpoints
 - [x] Auto-generated documentation — `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
+- [x] Spatial repository navigation — `repository_relationships`, graph endpoint, relationship CRUD, legacy dependency backfill
 - [x] Rate limiting & request throttling for Anthropic-backed manual triggers
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
 
@@ -779,8 +831,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs)
-**Última atualização**: April 30, 2026 (Auto docs: doc generation worker, endpoint, storage, GitHub Contents/PR delivery, doc-aware analysis prompts)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation)
+**Última atualização**: April 30, 2026 (Spatial navigation: repository relationship model, graph endpoint, relationship CRUD, legacy dependency backfill)
 
 ### 📖 Accessing the API Documentation
 ```bash

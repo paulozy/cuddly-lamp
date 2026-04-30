@@ -36,6 +36,13 @@ type Repository interface {
 	DeleteRepository(ctx context.Context, id string) error
 	SearchRepositories(ctx context.Context, query string, limit, offset int) ([]models.Repository, error)
 
+	// Repository relationship operations
+	CreateRepositoryRelationship(ctx context.Context, rel *models.RepositoryRelationship) error
+	GetRepositoryRelationship(ctx context.Context, id string) (*models.RepositoryRelationship, error)
+	UpdateRepositoryRelationship(ctx context.Context, rel *models.RepositoryRelationship) error
+	DeleteRepositoryRelationship(ctx context.Context, id string) error
+	ListRepositoryRelationships(ctx context.Context, filter RepositoryRelationshipFilter) ([]models.RepositoryRelationship, error)
+
 	// Webhook operations
 	GetWebhook(ctx context.Context, id string) (*models.Webhook, error)
 	GetWebhookByDeliveryID(ctx context.Context, deliveryID string) (*models.Webhook, error)
@@ -106,6 +113,13 @@ type RepositoryFilter struct {
 	SearchQuery    string
 	Limit          int
 	Offset         int
+}
+
+type RepositoryRelationshipFilter struct {
+	OrganizationID string
+	RepositoryID   string
+	Kind           models.RepositoryRelationshipKind
+	Source         models.RepositoryRelationshipSource
 }
 
 type CodeTemplateFilter struct {

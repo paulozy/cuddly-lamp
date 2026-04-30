@@ -271,10 +271,14 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 		return nil, 0, fmt.Errorf("count repositories: %w", err)
 	}
 
-	// Apply pagination and fetch
+	if filter.Limit > 0 {
+		query = query.Limit(filter.Limit)
+	}
+	if filter.Offset > 0 {
+		query = query.Offset(filter.Offset)
+	}
+
 	if err := query.
-		Limit(filter.Limit).
-		Offset(filter.Offset).
 		Order("created_at DESC").
 		Find(&repos).Error; err != nil {
 		return nil, 0, fmt.Errorf("list repositories: %w", err)
@@ -301,6 +305,82 @@ func (pr *PostgresRepository) SearchRepositories(ctx context.Context, query stri
 		return nil, fmt.Errorf("search repositories: %w", err)
 	}
 	return repos, nil
+}
+
+// ============ Repository Relationship Operations ============
+
+func (pr *PostgresRepository) CreateRepositoryRelationship(ctx context.Context, rel *models.RepositoryRelationship) error {
+	if !rel.IsValid() {
+		return errors.New("invalid repository relationship data")
+	}
+	if rel.Metadata == nil {
+		rel.Metadata = map[string]interface{}{}
+	}
+	if err := pr.db.WithContext(ctx).Create(rel).Error; err != nil {
+		return fmt.Errorf("create repository relationship: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) GetRepositoryRelationship(ctx context.Context, id string) (*models.RepositoryRelationship, error) {
+	var rel models.RepositoryRelationship
+	if err := pr.db.WithContext(ctx).
+		Where("deleted_at IS NULL").
+		First(&rel, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get repository relationship: %w", err)
+	}
+	return &rel, nil
+}
+
+func (pr *PostgresRepository) UpdateRepositoryRelationship(ctx context.Context, rel *models.RepositoryRelationship) error {
+	if !rel.IsValid() {
+		return errors.New("invalid repository relationship data")
+	}
+	if rel.Metadata == nil {
+		rel.Metadata = map[string]interface{}{}
+	}
+	if err := pr.db.WithContext(ctx).Save(rel).Error; err != nil {
+		return fmt.Errorf("update repository relationship: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) DeleteRepositoryRelationship(ctx context.Context, id string) error {
+	updates := map[string]interface{}{
+		"deleted_at": time.Now().UTC(),
+		"updated_at": time.Now().UTC(),
+	}
+	if err := pr.db.WithContext(ctx).
+		Model(&models.RepositoryRelationship{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(updates).Error; err != nil {
+		return fmt.Errorf("delete repository relationship: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) ListRepositoryRelationships(ctx context.Context, filter storage.RepositoryRelationshipFilter) ([]models.RepositoryRelationship, error) {
+	var relationships []models.RepositoryRelationship
+	query := pr.db.WithContext(ctx).Where("deleted_at IS NULL")
+	if filter.OrganizationID != "" {
+		query = query.Where("organization_id = ?", filter.OrganizationID)
+	}
+	if filter.RepositoryID != "" {
+		query = query.Where("(source_repository_id = ? OR target_repository_id = ?)", filter.RepositoryID, filter.RepositoryID)
+	}
+	if filter.Kind != "" {
+		query = query.Where("kind = ?", filter.Kind)
+	}
+	if filter.Source != "" {
+		query = query.Where("source = ?", filter.Source)
+	}
+	if err := query.Order("created_at ASC").Find(&relationships).Error; err != nil {
+		return nil, fmt.Errorf("list repository relationships: %w", err)
+	}
+	return relationships, nil
 }
 
 // ============ Webhook Operations ============

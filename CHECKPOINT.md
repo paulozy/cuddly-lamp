@@ -24,6 +24,15 @@
 - WebhookConfig — registers GitHub webhook via API, stores HMAC secret per repo
 - Webhook registration skipped automatically when `WEBHOOK_BASE_URL` is localhost
 
+### Spatial Repository Navigation ✅
+- Canonical `repository_relationships` table for directed repo-to-repo graph edges
+- Relationship kinds: `http`, `async`, `library`, `data`, `infra`, `manual`, `other`
+- Relationship source/confidence fields support manual curation now and inferred relationships later
+- Multiple relationships between the same two repositories are allowed
+- Same-organization validation and self-relationship rejection enforced in service layer
+- Graph endpoint returns all organization repositories as nodes, including independent repositories
+- Legacy `repository_dependencies` is preserved and backfilled into the new graph table by migration `012`
+
 ### Webhook Pipeline ✅
 - HMAC-SHA256 signature validation (`X-Hub-Signature-256`)
 - Idempotency via `X-GitHub-Delivery` — duplicate deliveries return 200 without reprocessing
@@ -109,7 +118,7 @@
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 11 SQL migrations applied and tracked via `schema_migrations`
+- 12 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -121,6 +130,7 @@
   - `009`: Package dependencies — `package_dependencies` inventory with CVE/update metadata
   - `010`: Code templates — `code_templates` generation results with JSONB files and pinning metadata
   - `011`: Doc generations — `doc_generations` job metadata, content JSONB, generated branch, PR URL/number, tokens, errors
+  - `012`: Repository relationships — spatial graph edges with kind/source/confidence/metadata and legacy dependency backfill
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -147,9 +157,13 @@
 | GET | `/users/me` | Current user info |
 | POST | `/repositories` | Create repository + trigger sync |
 | GET | `/repositories` | List user's repositories |
+| GET | `/repositories/graph` | Spatial repository graph with nodes and relationship edges |
 | GET | `/repositories/:id` | Get repository by ID |
 | PUT | `/repositories/:id` | Update repository |
 | DELETE | `/repositories/:id` | Delete repository |
+| POST | `/repository-relationships` | Create directed repository relationship |
+| PATCH | `/repository-relationships/:id` | Update repository relationship metadata |
+| DELETE | `/repository-relationships/:id` | Soft-delete repository relationship |
 | POST | `/repositories/:id/analyze` | Trigger manual code analysis (returns 202 Accepted) |
 | GET | `/repositories/:id/analyses` | List code analyses for repository |
 | POST | `/repositories/:id/embeddings` | Queue semantic embedding generation |
@@ -173,6 +187,7 @@
 | `oauth_connections` | OAuth provider links (provider + provider_user_id unique) with encrypted tokens |
 | `tokens` | JWT records with revocation, family_id, parent_jti |
 | `repositories` | Git repos with sync_status, analysis_status, metadata (JSONB) |
+| `repository_relationships` | Directed repo-to-repo graph edges for spatial navigation |
 | `webhook_configs` | Per-repo webhook registrations with HMAC secret (encrypted) |
 | `webhooks` | Incoming webhook events with status, retry, idempotency |
 | `code_analyses` | Code review results with issues (JSONB), metrics, model name, token usage |
@@ -223,6 +238,14 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Vulnerability mapping**: Worker matches AI issues back to package rows by manifest path and package names, extracts `CVE-YYYY-NNNN` values, and stores latest recommended version when present
 - **Manual deduplication**: `asynq.TaskID("dependency:scan:manual:{repoID}")` with 10-minute retention returns 409 while a manual scan is already queued/running
 
+### Spatial Repository Navigation
+- **Canonical model**: `repository_relationships` stores typed, directed repo-to-repo edges for spatial maps; legacy `repository_dependencies` is only compatibility/backfill input.
+- **Graph endpoint**: `GET /api/v1/repositories/graph?kind=http&repository_id=<repo>&include_metadata=true` returns all organization repositories as nodes and matching relationships as edges.
+- **Relationship CRUD**: `POST /api/v1/repository-relationships`, `PATCH /api/v1/repository-relationships/:id`, and `DELETE /api/v1/repository-relationships/:id`.
+- **Direction**: `source_repository_id -> target_repository_id`; examples include `web-checkout -> payments-api` for HTTP and `payments-api -> shared-libs` for library usage.
+- **Kinds**: `http`, `async`, `library`, `data`, `infra`, `manual`, `other`; type-specific details live in JSONB `metadata`.
+- **Validation**: Self-relationships and cross-organization relationships are rejected; multiple relationships between the same pair are allowed.
+
 ### Intelligent Code Templates
 - **Generation request**: `prompt` is required; `stack_hint` is optional and can override or refine detected repository stack context.
 - **Async state machine**: `pending → generating → completed / failed`; failures persist `error_message` on the `code_templates` row.
@@ -259,7 +282,7 @@ Generated paths:
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, sync pipeline |
+| `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, relationship graph, sync pipeline |
 | `internal/storage/redis` | Unit tests ✅ | cache get/set/del/exists, no-op fallback |
 | `internal/utils` | Unit tests ✅ | URL parsing |
 | `internal/dependencies` | Unit tests ✅ | manifest parser coverage |
@@ -332,6 +355,15 @@ Generated paths:
 - **Tests**: Added GitHub Contents/PR tests, Anthropic prompt injection test, analysis request cross-reference test, and docs worker test.
 - **Files**: `internal/ai/provider.go`, `internal/integrations/anthropic/documentation.go`, `internal/integrations/github/content.go`, `internal/integrations/github/pull_request_create.go`, `internal/models/doc_generation.go`, `internal/models/doc_generation_dto.go`, `internal/workers/docs_worker.go`, `internal/api/handlers/docs.go`, `migrations/011-add-doc-generations.sql`
 
+### Phase 8: Spatial Repository Navigation ✅
+- **Storage**: Added `RepositoryRelationship` model, graph DTOs, repository interface methods, Postgres CRUD/list implementations, and migration `012`.
+- **Schema**: `repository_relationships` stores `kind`, `source`, `confidence`, `metadata`, direction (`source_repository_id`, `target_repository_id`), organization scope, audit fields, and soft delete.
+- **Backfill**: Migration `012` converts same-organization legacy `repository_dependencies` rows into relationship edges with `source=legacy_dependency`.
+- **Service**: Added validation for same-organization endpoints, self-relationship rejection, valid kind/source values, graph assembly, and independent-node inclusion.
+- **Routes**: Added protected `GET /repositories/graph` and `POST/PATCH/DELETE /repository-relationships`.
+- **Tests**: Added service tests for independent repositories in graph, multiple relationships between the same repos, self-relationship rejection, and cross-organization rejection.
+- **Files**: `internal/models/repository_relationship.go`, `internal/models/repository_relationship_dto.go`, `internal/services/repository_relationship_service.go`, `internal/api/handlers/repository_relationship.go`, `migrations/012-add-repository-relationships.sql`
+
 ---
 
 ## 🎯 Next Steps
@@ -342,6 +374,7 @@ Generated paths:
 - [x] **Dependency tracking** — package manifest parsing, Claude CVE/update analysis, `TypeScanDependencies`, dependency endpoints
 - [x] **Intelligent code templates** — Claude scaffold generation, `TypeGenerateTemplate`, template endpoints, JSONB file storage, pinning
 - [x] **Auto-generated documentation** — Claude Markdown generation, `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
+- [x] **Spatial repository navigation** — typed repo relationship graph, graph endpoint, relationship CRUD, legacy dependency backfill
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -388,10 +421,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs)
-**Commits this phase**: 10 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs)
-**Total commits (AI + pipeline)**: 14
-**Production Readiness**: ~93% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking + docs generation done; needs broader integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation)
+**Commits this phase**: 11 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph)
+**Total commits (AI + pipeline)**: 15
+**Production Readiness**: ~94% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking + docs generation + spatial graph done; needs broader integration tests, key rotation)
 
 ---
 
@@ -405,7 +438,8 @@ make dev
 
 **Documented endpoints include:**
 - Auth endpoints (register, login, select organization, refresh, OAuth, logout, /users/me)
-- 5 Repository endpoints (CRUD)
+- 6 Repository endpoints (CRUD + graph)
+- 3 Repository relationship endpoints (create, update, delete)
 - 2 Analysis endpoints (trigger, list)
 - 2 Semantic search endpoints (generate embeddings, search)
 - 2 Dependency endpoints (scan, list)

@@ -29,6 +29,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repository := postgres.NewPostgresRepository(params.DB)
 	authConfig := factories.MakeAuthConfig(repository, params.Config)
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
+	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
 	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
 	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
@@ -36,7 +37,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -51,6 +52,7 @@ func setupAPIRoutes(
 	authHandler *handlers.AuthHandler,
 	authMiddleware gin.HandlerFunc,
 	repoHandler *handlers.RepositoryHandler,
+	relationshipHandler *handlers.RepositoryRelationshipHandler,
 	webhookHandler *handlers.WebhookHandler,
 	analysisHandler *handlers.AnalysisHandler,
 	dependencyHandler *handlers.DependencyHandler,
@@ -90,9 +92,13 @@ func setupAPIRoutes(
 
 		protected.POST("/repositories", repoHandler.CreateRepository)
 		protected.GET("/repositories", repoHandler.ListRepositories)
+		protected.GET("/repositories/graph", relationshipHandler.GetGraph)
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
 		protected.PUT("/repositories/:id", repoHandler.UpdateRepository)
 		protected.DELETE("/repositories/:id", repoHandler.DeleteRepository)
+		protected.POST("/repository-relationships", relationshipHandler.CreateRelationship)
+		protected.PATCH("/repository-relationships/:id", relationshipHandler.UpdateRelationship)
+		protected.DELETE("/repository-relationships/:id", relationshipHandler.DeleteRelationship)
 
 		// Analysis routes
 		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Backend of an Identity Provider (IDP) platform that integrates AI for code analysis, documentation generation, and code scaffolding. Provides JWT-based authentication, OAuth integration (GitHub/GitLab), repository management, AI dependency tracking, auto-generated repository documentation with PR delivery, intelligent code templates, and semantic code search powered by embeddings.
+Backend of an Identity Provider (IDP) platform that integrates AI for code analysis, documentation generation, and code scaffolding. Provides JWT-based authentication, OAuth integration (GitHub/GitLab), repository management, spatial repository relationship mapping, AI dependency tracking, auto-generated repository documentation with PR delivery, intelligent code templates, and semantic code search powered by embeddings.
 
 ## Tech Stack
 
@@ -25,7 +25,7 @@ Backend of an Identity Provider (IDP) platform that integrates AI for code analy
 ```
 internal/
 ├── api/
-│   ├── handlers/         # HTTP request handlers (auth, repository, webhook, analysis, dependencies, docs, templates)
+│   ├── handlers/         # HTTP request handlers (auth, repository, relationships, webhook, analysis, dependencies, docs, templates)
 │   ├── middleware/       # JWT auth, CORS, logging
 │   ├── routes.go         # Route definitions
 │   └── factories/        # Dependency injection setup
@@ -35,7 +35,7 @@ internal/
 │   ├── anthropic/        # Claude analysis, docs, and generation prompts
 │   └── github/           # GitHub API client + webhook HMAC validation + Contents/PR APIs
 ├── models/               # GORM models (User, Repository, Token, WebhookConfig, etc.)
-├── services/             # Business logic (AuthService, RepositoryService, SyncService)
+├── services/             # Business logic (AuthService, RepositoryService, RepositoryRelationshipService, SyncService)
 ├── workers/              # asynq task handlers (SyncWorker, WebhookProcessor, AnalysisWorker, EmbeddingWorker, DependencyWorker, DocsWorker, TemplateWorker)
 ├── storage/
 │   ├── postgres/         # PostgreSQL repository implementation
@@ -88,6 +88,7 @@ internal/
 10. **Dependency Tracking**: Complete — manifest parsing for Go/npm/pip/Cargo, `TypeScanDependencies` worker, Claude dependency analysis, vulnerable package persistence, manual endpoints, and webhook auto-trigger when manifests change
 11. **Intelligent Code Templates**: Complete — `ai.Generator` interface, Claude template generation, async `TypeGenerateTemplate` worker, `code_templates` JSONB storage, pinning/listing endpoints, Swagger annotations, and shared Anthropic token budget
 12. **Auto-Generated Documentation + Cross-Reference**: Complete — `TypeGenerateDocs` worker, `doc_generations` JSONB storage, GitHub branch/file/PR creation, `POST /repositories/:id/docs/generate`, and generated docs injected into future analysis prompts as project standards
+13. **Spatial Repository Navigation**: Complete — `repository_relationships` graph model, directed typed repo-to-repo edges, `GET /repositories/graph`, relationship CRUD endpoints, and legacy `repository_dependencies` backfill
 
 ## Known Issues & Constraints
 
@@ -98,6 +99,7 @@ internal/
 - **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
 - **StringArray**: `models.StringArray` is a custom type for PostgreSQL `text[]` — use it instead of `[]string` on any GORM model field mapped to a `text[]` column
 - **Package dependencies**: `package_dependencies` uses unique `(repository_id, name, ecosystem)` upserts. Keep `ManifestFile` as the repo-relative path and use `models.StringArray` for `VulnerabilityCVEs`.
+- **Repository relationships**: `repository_relationships` is the canonical graph model for spatial navigation. Do not add new map behavior to legacy `repository_dependencies` except compatibility/backfill. Relationships are directed, same-organization only, allow multiple edges between the same repositories, and use `kind` values `http`, `async`, `library`, `data`, `infra`, `manual`, `other`.
 - **Webhook registration on localhost**: skipped automatically when `WEBHOOK_BASE_URL` contains `localhost`/`127.0.0.1` — use ngrok for local webhook testing
 - **Field-level encryption**: Encrypted fields require `ENCRYPTION_KEY` at startup; existing unencrypted data must be migrated using `cmd/migrate-encrypt/` tool; decryption happens transparently via GORM `AfterFind` hooks
 - **Code templates**: Template generation is asynchronous and requires Redis/asynq. The API creates a `code_templates` row with `pending` status, enqueues `TypeGenerateTemplate`, and clients poll `GET /api/v1/templates/:id`.
@@ -177,6 +179,16 @@ internal/
 - **Storage**: `package_dependencies` stores current/latest versions, ecosystem, manifest path, direct/transitive flag, vulnerability status, CVEs, update availability, and last scan timestamp.
 - **Scope**: Updates are suggestion-based only. The system stores recommended versions and may comment on PRs; it does not create Dependabot-style update PRs.
 
+## Spatial Repository Navigation Notes
+
+- **Canonical model**: Use `RepositoryRelationship` / `repository_relationships` for repo-to-repo map edges. `repository_dependencies` remains legacy compatibility data.
+- **Graph API**: `GET /api/v1/repositories/graph` returns all repositories in the authenticated organization as `nodes`, including independent repositories, plus matching relationship `edges`.
+- **Relationship CRUD**: `POST /api/v1/repository-relationships`, `PATCH /api/v1/repository-relationships/:id`, and `DELETE /api/v1/repository-relationships/:id`.
+- **Direction**: `source_repository_id -> target_repository_id`. For example, `web-checkout -> payments-api` for HTTP calls and `payments-api -> shared-libs` for library usage.
+- **Kinds**: `http`, `async`, `library`, `data`, `infra`, `manual`, `other`. Store kind-specific details in JSONB `metadata` rather than adding columns prematurely.
+- **Source/confidence**: Manual creates use `source=manual` and `confidence=1.0`. Future inference can use `analysis`, `manifest`, `import`, or `webhook` without changing the API shape.
+- **Validation**: Reject self-relationships and relationships across organizations. Multiple relationships between the same two repos are valid when they represent distinct mechanisms.
+
 ## Semantic Search Notes
 
 - **Architecture**: `embeddings.Provider` interface in `internal/embeddings/provider.go` keeps provider-specific code isolated; the MVP implements Voyage only.
@@ -229,7 +241,7 @@ internal/
 
 ## Checkpoint — April 30, 2026
 
-**Status**: ✅ All core features complete — Auth + Repo Sync + Webhook Pipeline + Encryption + AI Integration + Semantic Search + Dependency Tracking + Auto Docs
+**Status**: ✅ All core features complete — Auth + Repo Sync + Webhook Pipeline + Encryption + AI Integration + Semantic Search + Dependency Tracking + Auto Docs + Spatial Repository Graph
 
 **Completed in previous session** (April 28):
 1. ✅ **Field-level encryption** (`internal/crypto/`):
@@ -338,5 +350,14 @@ internal/
    - Protected endpoint: `POST /repositories/:id/docs/generate`
    - Completed generated docs are injected into future analysis prompts as `PROJECT STANDARDS / DOCUMENTATION`
    - Tests added for GitHub Contents/PR methods, Anthropic prompt injection, analysis cross-reference, and docs worker
+
+4. ✅ **Spatial Repository Navigation** (`internal/services/repository_relationship_service.go`, `internal/api/handlers/repository_relationship.go`):
+   - `RepositoryRelationship` model and graph DTOs for directed repo-to-repo edges
+   - `repository_relationships` storage via migration `012-add-repository-relationships.sql`
+   - Relationship kinds: `http`, `async`, `library`, `data`, `infra`, `manual`, `other`
+   - Protected endpoint: `GET /repositories/graph` returns all organization repos as nodes plus relationship edges
+   - Protected relationship CRUD: `POST/PATCH/DELETE /repository-relationships`
+   - Legacy `repository_dependencies` backfilled with `source=legacy_dependency`
+   - Tests added for graph node inclusion, multiple edges, self-relationship rejection, and cross-org rejection
 
 **Ready for next phase**: Broader handler/integration test hardening and production key rotation
