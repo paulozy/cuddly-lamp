@@ -87,5 +87,5 @@ mod-tidy:
 
 swagger:
 	@echo "Generating Swagger/OpenAPI documentation..."
-	@swag init -g cmd/server/main.go -o docs --parseInternal --parseDependency
+	@go run github.com/swaggo/swag/cmd/swag@v1.8.12 init -g cmd/server/main.go -o docs --parseInternal --parseDependency
 	@echo "Swagger documentation generated in docs/"

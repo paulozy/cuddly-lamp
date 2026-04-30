@@ -46,6 +46,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TokenResponse"
                         }
                     },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationSelectionResponse"
+                        }
+                    },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
@@ -191,6 +197,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/select-organization": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Select organization after login",
+                "parameters": [
+                    {
+                        "description": "Organization selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.SelectOrganizationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TokenResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/{provider}": {
             "get": {
                 "tags": [
@@ -204,6 +255,18 @@ const docTemplate = `{
                         "name": "provider",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization name for onboarding without an existing organization",
+                        "name": "organization_name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional organization slug for onboarding",
+                        "name": "organization_slug",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -546,6 +609,268 @@ const docTemplate = `{
                 }
             }
         },
+        "/repositories/{id}/analyses": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "List repository analyses",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result limit (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result offset (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/{id}/analyze": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Analyze repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Analysis options",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalyzeRepositoryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/{id}/embeddings": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "search"
+                ],
+                "summary": "Generate repository embeddings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Embedding options",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GenerateEmbeddingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/{id}/search": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "search"
+                ],
+                "summary": "Semantic repository search",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Search query",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result limit",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Branch",
+                        "name": "branch",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.SemanticSearchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/me": {
             "get": {
                 "security": [
@@ -645,6 +970,261 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "datatypes.JSONType-array_github_com_paulozy_idp-with-ai-backend_internal_models_CodeIssue": {
+            "type": "object"
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse": {
+            "type": "object",
+            "properties": {
+                "analyses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeAnalysis"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "processing",
+                "completed",
+                "failed",
+                "partial"
+            ],
+            "x-enum-varnames": [
+                "AnalysisStatusPending",
+                "AnalysisStatusProcessing",
+                "AnalysisStatusCompleted",
+                "AnalysisStatusFailed",
+                "AnalysisStatusPartial"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisType": {
+            "type": "string",
+            "enum": [
+                "code_review",
+                "metrics",
+                "dependency",
+                "security",
+                "architecture"
+            ],
+            "x-enum-varnames": [
+                "AnalysisTypeCodeReview",
+                "AnalysisTypeMetrics",
+                "AnalysisTypeDependency",
+                "AnalysisTypeSecurity",
+                "AnalysisTypeArchitecture"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AnalyzeRepositoryRequest": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "description": "branch to analyze (default: main/master)",
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "description": "specific commit to analyze",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "code_review, security, architecture",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CodeAnalysis": {
+            "type": "object",
+            "properties": {
+                "ai_model": {
+                    "description": "claude-3-sonnet, etc",
+                    "type": "string"
+                },
+                "branch": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "description": "Scope",
+                    "type": "string"
+                },
+                "created_at": {
+                    "description": "Audit",
+                    "type": "string"
+                },
+                "critical_count": {
+                    "type": "integer"
+                },
+                "deleted_at": {
+                    "description": "soft delete",
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "embedding_id": {
+                    "description": "Link to code embedding if created",
+                    "type": "string"
+                },
+                "error_count": {
+                    "type": "integer"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "file_path": {
+                    "description": "If analysis is for specific file",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "info_count": {
+                    "type": "integer"
+                },
+                "is_ai_analysis": {
+                    "type": "boolean"
+                },
+                "issue_count": {
+                    "type": "integer"
+                },
+                "issues": {
+                    "description": "Array of CodeIssue",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/datatypes.JSONType-array_github_com_paulozy_idp-with-ai-backend_internal_models_CodeIssue"
+                        }
+                    ]
+                },
+                "metrics": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeMetrics"
+                },
+                "processing_ms": {
+                    "type": "integer"
+                },
+                "pull_request_id": {
+                    "type": "integer"
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisStatus"
+                },
+                "summary_text": {
+                    "description": "Human readable summary",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                },
+                "triggered_by": {
+                    "description": "user, webhook, schedule",
+                    "type": "string"
+                },
+                "triggered_by_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisType"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "warning_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CodeMetrics": {
+            "type": "object",
+            "properties": {
+                "avg_cyclomatic_complexity": {
+                    "type": "number"
+                },
+                "blank_lines": {
+                    "type": "integer"
+                },
+                "code_lines": {
+                    "type": "integer"
+                },
+                "cognitive_complexity": {
+                    "type": "number"
+                },
+                "comment_lines": {
+                    "type": "integer"
+                },
+                "comment_ratio": {
+                    "description": "Comments / Total lines",
+                    "type": "number"
+                },
+                "cyclomatic_complexity": {
+                    "description": "Complexity",
+                    "type": "number"
+                },
+                "duplicated_lines": {
+                    "type": "integer"
+                },
+                "duplication_ratio": {
+                    "description": "Duplicated / Total",
+                    "type": "number"
+                },
+                "halstead_metrics": {
+                    "description": "Maintainability",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.HalsteadMetrics"
+                        }
+                    ]
+                },
+                "languages": {
+                    "description": "{language: line_count}",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "maintainability_index": {
+                    "description": "0-100",
+                    "type": "number"
+                },
+                "test_coverage": {
+                    "description": "0-100",
+                    "type": "number"
+                },
+                "test_pass_rate": {
+                    "type": "number"
+                },
+                "tested_lines": {
+                    "type": "integer"
+                },
+                "tests_count": {
+                    "type": "integer"
+                },
+                "total_lines": {
+                    "type": "integer"
+                },
+                "uncovered_lines": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.CreateRepositoryRequest": {
             "type": "object",
             "required": [
@@ -673,6 +1253,70 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.GenerateEmbeddingsRequest": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.HalsteadMetrics": {
+            "type": "object",
+            "properties": {
+                "bugs_estimate": {
+                    "type": "number"
+                },
+                "difficulty": {
+                    "type": "number"
+                },
+                "distinct_operands": {
+                    "type": "integer"
+                },
+                "distinct_operators": {
+                    "type": "integer"
+                },
+                "effort": {
+                    "type": "number"
+                },
+                "program_length": {
+                    "type": "integer"
+                },
+                "program_volume": {
+                    "type": "number"
+                },
+                "time_to_understand": {
+                    "description": "Minutes",
+                    "type": "number"
+                },
+                "total_operands": {
+                    "type": "integer"
+                },
+                "total_operators": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "description": "queued, processing, completed, failed",
+                    "type": "string"
+                },
+                "target": {
+                    "description": "resource being processed",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "job type (e.g., repo:analyze)",
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.LoginRequest": {
             "type": "object",
             "required": [
@@ -694,6 +1338,69 @@ const docTemplate = `{
             "properties": {
                 "refresh_token": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.Organization": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationInfo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationSelectionResponse": {
+            "type": "object",
+            "properties": {
+                "login_ticket": {
+                    "type": "string"
+                },
+                "organizations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationInfo"
+                    }
+                },
+                "requires_organization_selection": {
+                    "type": "boolean"
                 }
             }
         },
@@ -722,9 +1429,161 @@ const docTemplate = `{
                 "full_name": {
                     "type": "string"
                 },
+                "organization_name": {
+                    "type": "string"
+                },
+                "organization_slug": {
+                    "type": "string"
+                },
                 "password": {
                     "type": "string",
                     "minLength": 8
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.Repository": {
+            "type": "object",
+            "properties": {
+                "analyses": {
+                    "description": "Relationships",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CodeAnalysis"
+                    }
+                },
+                "analysis_error": {
+                    "type": "string"
+                },
+                "analysis_status": {
+                    "description": "pending, in_progress, completed, failed",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_user": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                },
+                "created_by_user_id": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "description": "soft delete",
+                    "type": "string"
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryDependency"
+                    }
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_public": {
+                    "type": "boolean"
+                },
+                "last_analyzed_at": {
+                    "type": "string"
+                },
+                "last_reviewed_at": {
+                    "type": "string"
+                },
+                "last_synced_at": {
+                    "type": "string"
+                },
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                    }
+                },
+                "metadata": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryMetadata"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organization": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Organization"
+                },
+                "organization_id": {
+                    "type": "string"
+                },
+                "owner_user": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                },
+                "owner_user_id": {
+                    "type": "string"
+                },
+                "reviews_count": {
+                    "type": "integer"
+                },
+                "sync_error": {
+                    "type": "string"
+                },
+                "sync_status": {
+                    "description": "idle, syncing, synced, error",
+                    "type": "string"
+                },
+                "type": {
+                    "description": "github, gitlab, gitea, custom",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryType"
+                        }
+                    ]
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "webhooks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Webhook"
+                    }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryDependency": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "depends_on": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "depends_on_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_optional": {
+                    "type": "boolean"
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "import, library, service, etc",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
                 }
             }
         },
@@ -831,6 +1690,9 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "created_by_user_id": {
+                    "type": "string"
+                },
                 "description": {
                     "type": "string"
                 },
@@ -844,6 +1706,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryMetadata"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "organization_id": {
                     "type": "string"
                 },
                 "owner_user_id": {
@@ -875,6 +1740,115 @@ const docTemplate = `{
                 "RepositoryTypeCustom"
             ]
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.SelectOrganizationRequest": {
+            "type": "object",
+            "required": [
+                "login_ticket",
+                "organization_id"
+            ],
+            "properties": {
+                "login_ticket": {
+                    "type": "string"
+                },
+                "organization_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.SemanticSearchResponse": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.SemanticSearchResult"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.SemanticSearchResult": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "end_line": {
+                    "type": "integer"
+                },
+                "file_path": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "start_line": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.Token": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "family_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_revoked": {
+                    "type": "boolean"
+                },
+                "jti": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "organization_id": {
+                    "type": "string"
+                },
+                "parent_jti": {
+                    "type": "string"
+                },
+                "revoke_reason": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "\"access\" or \"refresh\"",
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.TokenResponse": {
             "type": "object",
             "properties": {
@@ -884,6 +1858,9 @@ const docTemplate = `{
                 "expires_in": {
                     "description": "seconds",
                     "type": "integer"
+                },
+                "organization": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationInfo"
                 },
                 "refresh_expires_in": {
                     "description": "seconds",
@@ -912,6 +1889,53 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.User": {
+            "type": "object",
+            "properties": {
+                "avatar": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "last_seen": {
+                    "type": "string"
+                },
+                "repositories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                    }
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                },
+                "tokens": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Token"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.UserInfo": {
             "type": "object",
             "properties": {
@@ -923,6 +1947,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "organization": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationInfo"
                 },
                 "role": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
@@ -943,6 +1970,166 @@ const docTemplate = `{
                 "RoleDeveloper",
                 "RoleViewer"
             ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.Webhook": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "delivery_id": {
+                    "description": "GitHub/GitLab delivery ID",
+                    "type": "string"
+                },
+                "event_payload": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.WebhookEventPayload"
+                },
+                "event_type": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.WebhookEventType"
+                },
+                "failed_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "max_retries": {
+                    "type": "integer"
+                },
+                "next_retry_at": {
+                    "type": "string"
+                },
+                "processing_error": {
+                    "type": "string"
+                },
+                "processing_result": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.WebhookProcessingResult"
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "retry_count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "pending, processing, completed, failed",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.WebhookEventPayload": {
+            "type": "object",
+            "properties": {
+                "actor_id": {
+                    "type": "string"
+                },
+                "actor_name": {
+                    "type": "string"
+                },
+                "branch": {
+                    "type": "string"
+                },
+                "commit_message": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "event_id": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "provider": {
+                    "description": "github, gitlab, gitea",
+                    "type": "string"
+                },
+                "pull_request_id": {
+                    "type": "integer"
+                },
+                "pull_request_number": {
+                    "type": "integer"
+                },
+                "raw_data": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "repository_name": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.WebhookEventType": {
+            "type": "string",
+            "enum": [
+                "push",
+                "pull_request",
+                "issues",
+                "release",
+                "repository",
+                "workflow_run",
+                "merge_request",
+                "pipeline",
+                "tag_push",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "WebhookEventPush",
+                "WebhookEventPullRequest",
+                "WebhookEventIssue",
+                "WebhookEventRelease",
+                "WebhookEventRepository",
+                "WebhookEventWorkflowRun",
+                "WebhookEventMergeRequest",
+                "WebhookEventPipeline",
+                "WebhookEventTag",
+                "WebhookEventUnknown"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.WebhookProcessingResult": {
+            "type": "object",
+            "properties": {
+                "analysis_id": {
+                    "description": "What was processed",
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "processed_at": {
+                    "type": "string"
+                },
+                "processing_time_ms": {
+                    "type": "integer"
+                },
+                "review_id": {
+                    "description": "If triggered AI review",
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                },
+                "sync_id": {
+                    "description": "If triggered sync",
+                    "type": "string"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                }
+            }
         }
     },
     "securityDefinitions": {

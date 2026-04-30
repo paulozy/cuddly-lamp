@@ -4,6 +4,8 @@
 
 ### Authentication System ✅
 - Email/Password registration with Argon2 hashing (2 iterations, 64MB, 4 parallelism)
+- Organization onboarding at registration via `organization_name` and optional `organization_slug`
+- Multi-organization login — one org returns tokens directly; multiple orgs return a short-lived `login_ticket` and org choices, completed by `/auth/select-organization`
 - JWT access tokens (15min) with JTI revocation tracking
 - Refresh token rotation (RFC 9700) — opaque tokens stored as SHA-256, 7-day TTL
 - Refresh token reuse detection — replayed token revokes entire family (anti-hijacking)
@@ -41,17 +43,17 @@
 - **Library**: swaggo/swag (code-first, annotation-based)
 - **Format**: OpenAPI 2.0 (Swagger)
 - **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
-- **Coverage**: All 19 endpoints documented (5 auth, 5 repository, 1 webhook, 2 analysis, 2 semantic search, 1 health, 3 swagger)
+- **Coverage**: Auth, repository, webhook, analysis, semantic search, health, and Swagger UI routes documented
 - **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
 - **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
-- **Generation**: `make swagger` rebuilds docs/ from annotations
+- **Generation**: `make swagger` rebuilds docs/ from annotations using pinned `swag@v1.8.12` via `go run`
 - **Files**: docs/docs.go committed (for consumers without swag CLI), docs/swagger.json/yaml ignored (.gitignore)
 
 ### AI Integration ✅
 - **Pluggable Architecture**: `ai.Analyzer` interface in `internal/ai/` — extensible to any LLM (Anthropic, OpenAI, Gemini, etc.)
 - **Current Provider**: Anthropic (Claude) via `internal/integrations/anthropic/` using raw HTTP client
 - **Code Analysis Worker**: `TypeAnalyzeRepo` asynq job handler — repository-wide analysis + PR-specific analysis
-- **PR Analysis Mode**: Analyzes changed files when `PullRequestID > 0`; posts GitHub review comments if `GITHUB_PR_REVIEW_ENABLED=true`
+- **PR Analysis Mode**: Fetches PR metadata and changed files from GitHub when `PullRequestID > 0`, filters noisy/binary/generated diffs, applies a 50K-token diff budget, and focuses Claude on the PR delta; posts GitHub review comments if `GITHUB_PR_REVIEW_ENABLED=true`
 - **Auto-Trigger**: Webhook processor enqueues analysis on `push` events (if not already in progress) + `pull_request` events
 - **HTTP Endpoints**: `POST /repositories/:id/analyze` (trigger, 202 Accepted), `GET /repositories/:id/analyses` (list results)
 - **Provider Swap**: To use OpenAI instead of Anthropic — create new struct implementing `ai.Analyzer`, update one line in `main.go`
@@ -94,10 +96,11 @@
 **Public Routes** (`/api/v1`):
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/auth/register` | Email/password registration → JWT pair |
-| POST | `/auth/login` | Email/password login → JWT pair |
+| POST | `/auth/register` | Email/password registration + organization onboarding → JWT pair |
+| POST | `/auth/login` | Email/password login → JWT pair or multi-org selection response |
+| POST | `/auth/select-organization` | Complete multi-org login with `login_ticket` + `organization_id` |
 | POST | `/auth/refresh` | Rotate refresh token → new JWT pair |
-| GET | `/auth/:provider` | OAuth redirect (github, gitlab) |
+| GET | `/auth/:provider` | OAuth redirect (github, gitlab), supports onboarding query params |
 | GET | `/auth/:provider/callback` | OAuth callback → JWT pair |
 | POST | `/webhooks/github/:repoID` | GitHub webhook receiver (HMAC auth) |
 | GET | `/health` | Health check |
@@ -265,10 +268,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Repo + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Commits this phase**: 6 (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance)  
+**Status**: 🤖 AI Integration + Semantic Search + Auth Onboarding Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
+**Commits this phase**: 8 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login)  
 **Total commits (AI + pipeline)**: 12  
-**Production Readiness**: ~90% (auth + repo + webhook + encryption + AI analysis + semantic search done; needs handler tests, integration tests, key rotation)
+**Production Readiness**: ~90% (auth + repo + webhook + encryption + AI analysis + semantic search done; needs broader handler/integration tests, key rotation)
 
 ---
 
@@ -280,8 +283,8 @@ make dev
 # Open: http://localhost:3000/swagger/index.html
 ```
 
-**19 documented endpoints:**
-- 5 Auth endpoints (register, login, refresh, OAuth, logout, /users/me)
+**Documented endpoints include:**
+- Auth endpoints (register, login, select organization, refresh, OAuth, logout, /users/me)
 - 5 Repository endpoints (CRUD)
 - 2 Analysis endpoints (trigger, list)
 - 2 Semantic search endpoints (generate embeddings, search)
@@ -295,3 +298,4 @@ make dev
 - ✅ Request/response examples
 - ✅ Error codes documented
 - ✅ AI analysis endpoints documented with job response models
+- ✅ Multi-org login selection response documented
