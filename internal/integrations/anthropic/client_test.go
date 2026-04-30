@@ -114,6 +114,23 @@ func TestClient_BuildPrompt_DependencyAnalysis(t *testing.T) {
 	}
 }
 
+func TestClient_BuildPrompt_InjectsProjectStandards(t *testing.T) {
+	client := NewClient("test-key")
+	req := &ai.AnalysisRequest{
+		RepoName:         "my-api",
+		Branch:           "main",
+		AnalysisType:     ai.AnalysisTypeCodeReview,
+		ProjectStandards: "## guidelines\nUse repository errors consistently.",
+	}
+
+	prompt := client.buildPrompt(req)
+	for _, want := range []string{"PROJECT STANDARDS / DOCUMENTATION", "Use repository errors consistently.", "reference these standards by name"} {
+		if !contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestClient_ParseResponse_RecommendedVersion(t *testing.T) {
 	client := NewClient("test-key")
 	result, err := client.parseResponse(`{

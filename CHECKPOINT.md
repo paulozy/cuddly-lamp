@@ -43,21 +43,32 @@
 - **Library**: swaggo/swag (code-first, annotation-based)
 - **Format**: OpenAPI 2.0 (Swagger)
 - **UI**: Interactive Swagger UI at `/swagger/index.html` via gin-swagger middleware
-- **Coverage**: Auth, repository, webhook, analysis, dependency, template, semantic search, health, and Swagger UI routes documented
+- **Coverage**: Auth, repository, webhook, analysis, dependency, docs generation, template, semantic search, health, and Swagger UI routes documented
 - **Annotations**: Complete with `@Summary`, `@Tags`, `@Param`, `@Success`, `@Failure`, `@Security` markers
 - **Security**: JWT BearerAuth scheme documented; webhook HMAC headers documented
 - **Generation**: `make swagger` rebuilds docs/ from annotations using pinned `swag@v1.8.12` via `go run`
 - **Files**: docs/docs.go committed (for consumers without swag CLI), docs/swagger.json/yaml ignored (.gitignore)
 
 ### AI Integration ✅
-- **Pluggable Architecture**: `ai.Analyzer` interface in `internal/ai/` — extensible to any LLM (Anthropic, OpenAI, Gemini, etc.)
-- **Current Provider**: Anthropic (Claude) via `internal/integrations/anthropic/` using raw HTTP client
+- **Pluggable Architecture**: `ai.Analyzer`, `ai.DocumentationGenerator`, and `ai.Generator` interfaces in `internal/ai/` — extensible to any LLM (Anthropic, OpenAI, Gemini, etc.)
+- **Current Provider**: Anthropic (Claude) via `internal/integrations/anthropic/` using the Anthropic SDK
 - **Code Analysis Worker**: `TypeAnalyzeRepo` asynq job handler — repository-wide analysis + PR-specific analysis
 - **PR Analysis Mode**: Fetches PR metadata and changed files from GitHub when `PullRequestID > 0`, filters noisy/binary/generated diffs, applies a 50K-token diff budget, and focuses Claude on the PR delta; posts GitHub review comments if `GITHUB_PR_REVIEW_ENABLED=true`
 - **Auto-Trigger**: Webhook processor enqueues analysis on `push` events (if not already in progress) + `pull_request` events
 - **HTTP Endpoints**: `POST /repositories/:id/analyze` (trigger, 202 Accepted), `GET /repositories/:id/analyses` (list results)
+- **Doc-Aware Analysis**: Latest completed generated documentation is injected into Claude prompts as `PROJECT STANDARDS / DOCUMENTATION` so findings can reference ADRs and guidelines.
 - **Provider Swap**: To use OpenAI instead of Anthropic — create new struct implementing `ai.Analyzer`, update one line in `main.go`
 - **Token Tracking**: Analysis results include model name and token usage for cost monitoring
+
+### Auto-Generated Documentation ✅
+- **Pluggable Architecture**: `ai.DocumentationGenerator` in `internal/ai/provider.go`, implemented by Anthropic in `internal/integrations/anthropic/documentation.go`.
+- **Doc Worker**: `TypeGenerateDocs` (`docs:generate`) asynq job handler clones the repo, collects context, asks Claude for Markdown, commits files, opens a GitHub PR, and persists content.
+- **HTTP Endpoint**: `POST /repositories/:id/docs/generate` queues documentation generation with requested `types` and optional `branch`.
+- **Supported Types**: `adr`, `architecture`, `service_doc`, `guidelines`.
+- **Generated Files**: ADRs to `docs/adr/README.md`, architecture to `docs/ARCHITECTURE.md`, service docs to `docs/SERVICE.md`, and guidelines to `CONTRIBUTING.md`.
+- **GitHub Delivery**: New GitHub client methods create branches, create/update files via Contents API, and open pull requests.
+- **Storage**: `doc_generations.content` stores generated Markdown as JSONB for later cross-reference during analysis, with PR URL/number, generated branch, status, tokens, and errors.
+- **Token Budget**: Manual trigger checks the shared Anthropic hourly budget before enqueueing.
 
 ### Intelligent Code Templates ✅
 - **Pluggable Architecture**: `ai.Generator` interface in `internal/ai/generator.go`, separate from `ai.Analyzer` so analysis and generation can evolve independently.
@@ -92,13 +103,13 @@
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
 - asynq job queue — `Enqueuer` interface, priority queues (critical/default/low), dead-letter
-- Background workers registered in-process: `SyncWorker` (`repo:sync`), `WebhookProcessor` (`webhook:process`), `AnalysisWorker` (`repo:analyze`), `EmbeddingWorker` (`embeddings:generate`), `DependencyWorker` (`dependency:scan`), `TemplateWorker` (`template:generate`)
-- GitHub API client (`internal/integrations/github/`) — repos, branches, commits, PRs, webhooks
+- Background workers registered in-process: `SyncWorker` (`repo:sync`), `WebhookProcessor` (`webhook:process`), `AnalysisWorker` (`repo:analyze`), `EmbeddingWorker` (`embeddings:generate`), `DependencyWorker` (`dependency:scan`), `DocsWorker` (`docs:generate`), `TemplateWorker` (`template:generate`)
+- GitHub API client (`internal/integrations/github/`) — repos, branches, commits, PRs, Contents API, webhooks
 - GORM logger configured: `IgnoreRecordNotFoundError: true`, 200ms slow query threshold
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 10 SQL migrations applied and tracked via `schema_migrations`
+- 11 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -109,6 +120,7 @@
   - `008`: Organizations/multitenancy — organization tables, memberships, organization config
   - `009`: Package dependencies — `package_dependencies` inventory with CVE/update metadata
   - `010`: Code templates — `code_templates` generation results with JSONB files and pinning metadata
+  - `011`: Doc generations — `doc_generations` job metadata, content JSONB, generated branch, PR URL/number, tokens, errors
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -144,6 +156,7 @@
 | GET | `/repositories/:id/search` | Semantic code search over generated embeddings |
 | POST | `/repositories/:id/dependencies/scan` | Queue dependency manifest scan |
 | GET | `/repositories/:id/dependencies` | List repository package dependencies (`?vulnerable=true`) |
+| POST | `/repositories/:id/docs/generate` | Queue AI documentation generation and GitHub PR delivery |
 | POST | `/repositories/:id/templates` | Queue repository-scoped AI template generation |
 | POST | `/templates` | Queue organization-level AI template generation |
 | GET | `/templates/:id` | Poll/retrieve generated template |
@@ -166,6 +179,7 @@
 | `code_embeddings` | Voyage/pgvector source-code embeddings for semantic search |
 | `package_dependencies` | Package inventory with ecosystem, manifest path, vulnerability CVEs, update suggestions |
 | `code_templates` | AI-generated scaffold templates with JSONB files, status, stack snapshot, and pinning metadata |
+| `doc_generations` | AI-generated Markdown docs with content JSONB, generated branch, PR metadata, status, tokens, errors |
 | `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
@@ -217,6 +231,28 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Generated files**: Stored as JSONB array with `{path, content, language}`; no object storage is required for the current scope.
 - **Pinned templates**: `is_pinned`, `name`, `pinned_by_user_id`, and `pinned_at` support team reuse and filtered listing.
 
+### Auto-Generated Documentation
+```
+Generate:
+  POST /api/v1/repositories/:id/docs/generate
+  Body: {"types":["adr","architecture","service_doc","guidelines"],"branch":"main"}
+  Creates a pending DocGeneration and enqueues TypeGenerateDocs with manual TaskID deduplication per repository
+
+Worker:
+  Shallow-clones the repository, gathers directory tree, key files, recent commits/PRs, and latest analysis summary, then asks Claude for Markdown
+  Creates a docs/auto-generated-{timestamp} branch, commits generated files via GitHub Contents API, and opens a PR
+
+Storage:
+  doc_generations.content is JSONB keyed by doc type
+  Completed generated docs are rendered into future analysis prompts as PROJECT STANDARDS / DOCUMENTATION
+
+Generated paths:
+  adr -> docs/adr/README.md
+  architecture -> docs/ARCHITECTURE.md
+  service_doc -> docs/SERVICE.md
+  guidelines -> CONTRIBUTING.md
+```
+
 ---
 
 ## 📊 Test Coverage
@@ -227,9 +263,9 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 | `internal/storage/redis` | Unit tests ✅ | cache get/set/del/exists, no-op fallback |
 | `internal/utils` | Unit tests ✅ | URL parsing |
 | `internal/dependencies` | Unit tests ✅ | manifest parser coverage |
-| `internal/workers` | Unit tests ✅ | analysis and dependency worker coverage |
+| `internal/workers` | Unit tests ✅ | analysis, dependency, docs, and template worker coverage |
 | `internal/api/handlers` | Unit tests ✅ | analysis helpers and dependency handler coverage |
-| `internal/integrations/anthropic` | Unit tests ✅ | analyzer and template generator prompt/parser coverage |
+| `internal/integrations/anthropic` | Unit tests ✅ | analyzer, documentation, and template generator prompt/parser coverage |
 | `internal/storage/postgres` | Integration tests ⏳ | requires `TEST_DATABASE_URL` |
 
 ---
@@ -285,6 +321,17 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Wiring**: Registered `TypeGenerateTemplate` in task types, route setup, handler factory, and server worker bootstrap.
 - **Files**: `internal/ai/generator.go`, `internal/integrations/anthropic/generator.go`, `internal/models/code_template.go`, `internal/models/code_template_dto.go`, `internal/workers/template_worker.go`, `internal/api/handlers/template.go`, `migrations/010-add-code-templates.sql`
 
+### Phase 7: Auto-Generated Documentation + AI Cross-Reference ✅
+- **Provider interface**: Added `ai.DocumentationGenerator`, `DocumentationRequest`, `DocumentationResult`, and documentation type constants.
+- **Anthropic docs generation**: Added Markdown prompts for ADR, architecture, service docs, and guidelines.
+- **Storage**: Added `DocGeneration` model, DTOs, repository interface methods, Postgres CRUD/list implementations, and migration `011`.
+- **GitHub delivery**: Added `CreateBranch`, `CreateOrUpdateFile`, and `CreatePullRequest` client methods with tests.
+- **Worker**: Added `DocsWorker` for context collection, Claude generation, file commits, PR creation, status transitions, token persistence, and failure recording.
+- **Routes**: Added protected `POST /repositories/:id/docs/generate` endpoint and factory wiring.
+- **Cross-reference**: `AnalysisWorker` now loads the latest completed docs and injects a concise standards section into analysis prompts.
+- **Tests**: Added GitHub Contents/PR tests, Anthropic prompt injection test, analysis request cross-reference test, and docs worker test.
+- **Files**: `internal/ai/provider.go`, `internal/integrations/anthropic/documentation.go`, `internal/integrations/github/content.go`, `internal/integrations/github/pull_request_create.go`, `internal/models/doc_generation.go`, `internal/models/doc_generation_dto.go`, `internal/workers/docs_worker.go`, `internal/api/handlers/docs.go`, `migrations/011-add-doc-generations.sql`
+
 ---
 
 ## 🎯 Next Steps
@@ -294,6 +341,7 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - [x] **Semantic search** — Voyage AI embeddings, pgvector storage, `TypeGenerateEmbeddings` job, search endpoints
 - [x] **Dependency tracking** — package manifest parsing, Claude CVE/update analysis, `TypeScanDependencies`, dependency endpoints
 - [x] **Intelligent code templates** — Claude scaffold generation, `TypeGenerateTemplate`, template endpoints, JSONB file storage, pinning
+- [x] **Auto-generated documentation** — Claude Markdown generation, `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -325,7 +373,7 @@ WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in loc
                              # Leave empty or use localhost to skip GitHub registration
 
 # AI Integration
-ANTHROPIC_API_KEY            # Anthropic API key for Claude code and dependency analysis (optional)
+ANTHROPIC_API_KEY            # Anthropic API key for Claude code, dependency, docs, and template generation (optional)
 ANTHROPIC_TOKENS_PER_HOUR=20000  # Hourly token budget for Anthropic API
 
 # Semantic Search
@@ -340,10 +388,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans)  
-**Commits this phase**: 9 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking)  
-**Total commits (AI + pipeline)**: 13  
-**Production Readiness**: ~92% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking done; needs broader integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs)
+**Commits this phase**: 10 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs)
+**Total commits (AI + pipeline)**: 14
+**Production Readiness**: ~93% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking + docs generation done; needs broader integration tests, key rotation)
 
 ---
 
@@ -361,6 +409,7 @@ make dev
 - 2 Analysis endpoints (trigger, list)
 - 2 Semantic search endpoints (generate embeddings, search)
 - 2 Dependency endpoints (scan, list)
+- 1 Documentation endpoint (generate docs)
 - 1 Webhook endpoint (GitHub receiver)
 - 1 Health endpoint
 - 3 Swagger UI routes

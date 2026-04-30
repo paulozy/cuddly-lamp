@@ -29,3 +29,26 @@ func (m *MockAnalyzer) Provider() string {
 	}
 	return "mock"
 }
+
+type MockDocumentationGenerator struct {
+	GenerateDocumentationFunc func(ctx context.Context, req *DocumentationRequest) (*DocumentationResult, error)
+	ProviderFunc              func() string
+}
+
+func (m *MockDocumentationGenerator) GenerateDocumentation(ctx context.Context, req *DocumentationRequest) (*DocumentationResult, error) {
+	if m.GenerateDocumentationFunc != nil {
+		return m.GenerateDocumentationFunc(ctx, req)
+	}
+	return &DocumentationResult{
+		Content:    "# Mock documentation\n",
+		Model:      "mock",
+		TokensUsed: 0,
+	}, nil
+}
+
+func (m *MockDocumentationGenerator) Provider() string {
+	if m.ProviderFunc != nil {
+		return m.ProviderFunc()
+	}
+	return "mock"
+}

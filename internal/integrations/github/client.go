@@ -27,6 +27,9 @@ type ClientInterface interface {
 	GetPullRequest(ctx context.Context, owner, repo string, prID int64) (*PullRequest, error)
 	GetPullRequestFiles(ctx context.Context, owner, repo string, prID int64) ([]PRFile, error)
 	CreatePullRequestReview(ctx context.Context, owner, repo string, prID int64, body string, event string, comments []ReviewCommentInput) (int64, error)
+	CreateBranch(ctx context.Context, owner, repo, baseBranch, newBranch string) error
+	CreateOrUpdateFile(ctx context.Context, owner, repo, branch, path, message, content string) error
+	CreatePullRequest(ctx context.Context, owner, repo, title, head, base, body string) (*PullRequest, error)
 }
 
 type RepoInfo struct {
@@ -63,22 +66,23 @@ type commitUser struct {
 }
 
 type PullRequest struct {
-	ID              int64  `json:"id"`
-	Number          int64  `json:"number"`
-	Title           string `json:"title"`
-	Body            string `json:"body"`
-	State           string `json:"state"` // open, closed
-	User            User   `json:"user"`
-	Head            Branch `json:"head"`
-	Base            Branch `json:"base"`
-	MergedAt        string `json:"merged_at,omitempty"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
-	Draft           bool   `json:"draft"`
-	CommitsCount    int    `json:"commits"`
-	ChangedFiles    int    `json:"changed_files"`
-	AdditionsCount  int    `json:"additions"`
-	DeletionsCount  int    `json:"deletions"`
+	ID             int64  `json:"id"`
+	Number         int64  `json:"number"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	State          string `json:"state"` // open, closed
+	User           User   `json:"user"`
+	Head           Branch `json:"head"`
+	Base           Branch `json:"base"`
+	MergedAt       string `json:"merged_at,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+	Draft          bool   `json:"draft"`
+	CommitsCount   int    `json:"commits"`
+	ChangedFiles   int    `json:"changed_files"`
+	AdditionsCount int    `json:"additions"`
+	DeletionsCount int    `json:"deletions"`
+	HTMLURL        string `json:"html_url"`
 }
 
 type User struct {

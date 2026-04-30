@@ -93,6 +93,12 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 	sb.WriteString(fmt.Sprintf("- Branch: %s\n", req.Branch))
 	sb.WriteString(fmt.Sprintf("- Commit: %s\n", req.CommitSHA))
 
+	if strings.TrimSpace(req.ProjectStandards) != "" {
+		sb.WriteString("\nPROJECT STANDARDS / DOCUMENTATION:\n")
+		sb.WriteString(req.ProjectStandards)
+		sb.WriteString("\nWhen identifying issues, reference these standards by name where applicable.\n")
+	}
+
 	// For PR analysis
 	if req.PullRequestID > 0 {
 		sb.WriteString("\nPULL REQUEST:\n")

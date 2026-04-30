@@ -9,6 +9,7 @@ const (
 	TypeGenerateEmbeddings = "embeddings:generate"
 	TypeScanDependencies   = "dependency:scan"
 	TypeGenerateTemplate   = "template:generate"
+	TypeGenerateDocs       = "docs:generate"
 )
 
 type SyncRepoPayload struct {
@@ -50,4 +51,12 @@ type GenerateTemplatePayload struct {
 	Prompt         string `json:"prompt"`
 	StackHint      string `json:"stack_hint,omitempty"`
 	TriggeredByID  string `json:"triggered_by_id"`
+}
+
+type GenerateDocsPayload struct {
+	DocGenerationID string   `json:"doc_generation_id"`
+	RepositoryID    string   `json:"repository_id"`
+	Types           []string `json:"types"`
+	Branch          string   `json:"branch,omitempty"`
+	TriggeredByID   string   `json:"triggered_by_id,omitempty"`
 }

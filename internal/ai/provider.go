@@ -55,8 +55,37 @@ type AnalysisRequest struct {
 	// Computed metrics (populated by local analysis)
 	Metrics *CodeMetrics
 
+	// Generated project documentation and standards used as analysis context.
+	ProjectStandards string
+
 	// Analysis parameters
 	AnalysisType AnalysisType
+}
+
+type DocumentationType string
+
+const (
+	DocumentationTypeADR          DocumentationType = "adr"
+	DocumentationTypeArchitecture DocumentationType = "architecture"
+	DocumentationTypeServiceDoc   DocumentationType = "service_doc"
+	DocumentationTypeGuidelines   DocumentationType = "guidelines"
+)
+
+type DocumentationRequest struct {
+	Type            DocumentationType
+	RepositoryID    string
+	RepoName        string
+	Branch          string
+	Languages       []string
+	Frameworks      []string
+	Topics          []string
+	ContextMarkdown string
+}
+
+type DocumentationResult struct {
+	Content    string
+	Model      string
+	TokensUsed int
 }
 
 // CodeIssue represents a single issue found by the AI
@@ -121,5 +150,10 @@ type Analyzer interface {
 	AnalyzeCode(ctx context.Context, req *AnalysisRequest) (*AnalysisResult, error)
 
 	// Provider returns the name of the AI provider
+	Provider() string
+}
+
+type DocumentationGenerator interface {
+	GenerateDocumentation(ctx context.Context, req *DocumentationRequest) (*DocumentationResult, error)
 	Provider() string
 }

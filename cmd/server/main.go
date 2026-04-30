@@ -102,6 +102,7 @@ func main() {
 		analysisWorker := workers.NewAnalysisWorker(pgRepo)
 		dependencyWorker := workers.NewDependencyWorker(pgRepo, nil, ghClient)
 		templateWorker := workers.NewTemplateWorker(pgRepo)
+		docsWorker := workers.NewDocsWorker(pgRepo)
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
@@ -110,6 +111,7 @@ func main() {
 		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
 		worker.Register(tasks.TypeScanDependencies, dependencyWorker.Handle)
 		worker.Register(tasks.TypeGenerateTemplate, templateWorker.Handle)
+		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
 
 		go func() {
 			if err := worker.Run(); err != nil {

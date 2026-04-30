@@ -1,6 +1,6 @@
 # IDP Backend - Identity Provider with AI Integration
 
-Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, intelligent code templates, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
+Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, auto-generated repository documentation, intelligent code templates, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
 
 ## ✨ Features Implemented
 
@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 10 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates)
+- ✅ 11 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -35,6 +35,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Encrypted fields: OAuth tokens (access_token_encrypted), webhook secrets (secret_encrypted)
 - ✅ Package dependency inventory with CVE/update metadata
 - ✅ Code template storage with generated files as JSONB and pinning metadata
+- ✅ Doc generation storage with generated Markdown content as JSONB and PR metadata
 
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
@@ -68,11 +69,13 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Swagger/OpenAPI 2.0 with swaggo/swag
 - ✅ Interactive Swagger UI at `/swagger/index.html`
 - ✅ Comprehensive annotations for auth, repository, webhook, analysis, dependency, template, semantic search, and health endpoints
+- ✅ Documentation generation endpoint annotation
 - ✅ JWT security scheme documented
 - ✅ Automatic generation with `make swagger`
 
 ### AI Integration
 - ✅ Pluggable `ai.Analyzer` interface for code analysis
+- ✅ Pluggable `ai.DocumentationGenerator` interface for generated repository documentation
 - ✅ Pluggable `ai.Generator` interface for code template generation
 - ✅ Anthropic (Claude) implementation with Anthropic SDK
 - ✅ Analysis worker (`TypeAnalyzeRepo` job) — triggers on push/PR webhook events
@@ -80,11 +83,21 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ PR review posting (optional via `GITHUB_PR_REVIEW_ENABLED=true`)
 - ✅ HTTP endpoints: `POST /repositories/:id/analyze`, `GET /repositories/:id/analyses`
 - ✅ Support for multiple analysis types: `code_review`, `security`, `architecture`
+- ✅ Doc-aware analysis: latest generated docs are injected into analysis prompts as `PROJECT STANDARDS / DOCUMENTATION`
 - ✅ Auto-trigger: analyze repositories on `push` events, create PR comments on `pull_request` events
 - ✅ Deduplication: manual trigger deduplication via asynq.TaskID (returns 409 on conflict)
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
 - ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis, using `GITHUB_TOKEN` for private repositories when configured
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
+
+### Auto-Generated Documentation
+- ✅ HTTP endpoint: `POST /repositories/:id/docs/generate`
+- ✅ Supported doc types: `adr`, `architecture`, `service_doc`, `guidelines`
+- ✅ Async flow: create `doc_generations` row → enqueue `docs:generate` → clone repo → generate Markdown → commit files → open GitHub PR
+- ✅ GitHub Contents API integration for branch creation and create/update file commits
+- ✅ Generated files: `docs/adr/README.md`, `docs/ARCHITECTURE.md`, `docs/SERVICE.md`, `CONTRIBUTING.md`
+- ✅ Generated Markdown stored in PostgreSQL JSONB for fast cross-reference during future code analysis
+- ✅ Shared Anthropic token budget check on manual trigger
 
 ### Intelligent Code Templates
 - ✅ AI-powered code scaffold generation via Claude (`ai.Generator`)
@@ -224,6 +237,15 @@ curl -X PATCH http://localhost:3000/api/v1/templates/$TEMPLATE_ID/pin \
   -d '{"is_pinned":true,"name":"Go CRUD with JWT"}'
 ```
 
+### 8. Generate repository documentation
+```bash
+# Requires ANTHROPIC_API_KEY, GITHUB_TOKEN, and Redis/asynq enabled
+curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/docs/generate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"types":["adr","architecture","service_doc","guidelines"],"branch":"main"}'
+```
+
 > For webhook testing with ngrok see [`tests/GITHUB_SYNC_TESTING.md`](tests/GITHUB_SYNC_TESTING.md).
 
 ## 📚 Documentação
@@ -308,6 +330,7 @@ backend/
 │   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
 │   │   │   ├── analysis.go        # Code analysis + semantic search endpoints
 │   │   │   ├── dependency_handler.go # Dependency scan/list endpoints
+│   │   │   ├── docs.go           # Documentation generation endpoint
 │   │   │   └── template.go        # AI code template generation/list/pin endpoints
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
@@ -321,10 +344,11 @@ backend/
 │   │   │   ├── make_webhook_handler.go     # DI: webhook handler
 │   │   │   ├── make_analysis_handler.go    # DI: analysis handler
 │   │   │   ├── make_dependency_handler.go  # DI: dependency handler
+│   │   │   ├── make_docs_handler.go        # DI: docs handler
 │   │   │   └── make_template_handler.go    # DI: template handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
 │   ├── ai/                        # Pluggable AI provider interfaces
-│   │   ├── provider.go            # Analyzer interface + request/response types
+│   │   ├── provider.go            # Analyzer + DocumentationGenerator interfaces and types
 │   │   ├── generator.go           # Generator interface + template request/result types
 │   │   ├── mock_analyzer.go       # Mock analyzer for testing
 │   │   └── mock_generator.go      # Mock generator for testing
@@ -342,11 +366,14 @@ backend/
 │   ├── integrations/
 │   │   ├── anthropic/             # Anthropic (Claude) AI implementation
 │   │   │   ├── client.go          # Client implementing ai.Analyzer
+│   │   │   ├── documentation.go   # Client implementing ai.DocumentationGenerator
 │   │   │   ├── generator.go       # Client implementing ai.Generator
 │   │   │   └── *_test.go          # Anthropic analyzer/generator tests
-│   │   └── github/                # GitHub API client (repos, branches, commits, PRs, webhooks)
+│   │   └── github/                # GitHub API client (repos, branches, commits, PRs, contents, webhooks)
 │   │       ├── client.go          # HTTP client + ClientInterface
+│   │       ├── content.go         # Contents API branch/file operations
 │   │       ├── pr.go              # PR-specific operations (fetch, review posting)
+│   │       ├── pull_request_create.go # Create pull requests
 │   │       └── validation.go      # HMAC-SHA256 webhook signature validation
 │   ├── oauth/                     # Multi-provider OAuth 2.0
 │   │   ├── provider.go            # OAuthProvider interface
@@ -363,6 +390,7 @@ backend/
 │   │   ├── analysis_worker.go     # Handles repo:analyze asynq task (code + PR analysis)
 │   │   ├── embedding_worker.go    # Handles embeddings:generate asynq task
 │   │   ├── dependency_worker.go   # Handles dependency:scan asynq task
+│   │   ├── docs_worker.go         # Handles docs:generate asynq task
 │   │   ├── template_worker.go     # Handles template:generate asynq task
 │   │   └── analysis_worker_test.go # Analysis worker tests
 │   ├── models/
@@ -373,6 +401,8 @@ backend/
 │   │   ├── dependency.go          # PackageDependency model
 │   │   ├── code_template.go       # CodeTemplate model
 │   │   ├── code_template_dto.go   # Template request/response DTOs
+│   │   ├── doc_generation.go      # DocGeneration model
+│   │   ├── doc_generation_dto.go  # Documentation request/response DTOs
 │   │   ├── repository_dto.go      # CreateRepositoryRequest, UpdateRepositoryRequest
 │   │   ├── webhook.go             # Webhook events + WebhookConfig + StringArray type
 │   │   ├── code_analysis.go       # Code analysis results (issues, metrics, model used)
@@ -383,7 +413,8 @@ backend/
 │   ├── storage/
 │   │   ├── repository.go          # Repository interface
 │   │   ├── postgres/
-│   │   │   └── postgres_repository.go  # GORM implementation
+│   │   │   ├── postgres_repository.go  # GORM implementation
+│   │   │   └── doc_generation_repository.go # DocGeneration CRUD/list methods
 │   │   ├── redis/
 │   │   │   ├── redis.go           # RedisClient interface + impl + no-op
 │   │   │   ├── cache.go           # Cache interface (Get/Set/Del/Exists + ErrCacheMiss)
@@ -409,7 +440,8 @@ backend/
 │   ├── 007-add-voyage-embeddings-metadata.sql  # Voyage/pgvector semantic search metadata + VECTOR(1024)
 │   ├── 008-add-organizations-multitenancy.sql  # Organizations, memberships, org config
 │   ├── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
-│   └── 010-add-code-templates.sql  # Code template storage and pinning metadata
+│   ├── 010-add-code-templates.sql  # Code template storage and pinning metadata
+│   └── 011-add-doc-generations.sql  # Doc generation jobs, content JSONB, and PR metadata
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -452,13 +484,13 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
 - **JWT_SECRET** - Secret for JWT signing and state token validation
 - **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
-- **ANTHROPIC_API_KEY** - Claude API key for code analysis, dependency analysis, and template generation (optional — AI features return unavailable or fail queued jobs if not set)
+- **ANTHROPIC_API_KEY** - Claude API key for code analysis, dependency analysis, documentation generation, and template generation (optional — AI features return unavailable or fail queued jobs if not set)
 - **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
 - **VOYAGE_API_KEY** - Voyage AI API key for semantic code search (optional — skips embedding provider if not set)
 - **EMBEDDINGS_PROVIDER** - Embedding provider selector (default: voyage)
 - **EMBEDDINGS_MODEL** - Embedding model (default: voyage-code-3)
 - **EMBEDDINGS_DIMENSIONS** - Embedding vector dimension (default: 1024)
-- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR operations, and private repository clones for metrics/dependency scans/embeddings)
+- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR operations, documentation PR creation, and private repository clones for metrics/dependency scans/embeddings)
 - **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
 - **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -504,9 +536,10 @@ docker-compose exec postgres psql -U postgres -d idp_dev -c "SELECT * FROM schem
 - **CodeEmbedding** - Embeddings vetoriais para busca semântica (pgvector)
 - **PackageDependency** - Dependências de pacotes com versões, ecossistema, CVEs e status de atualização
 - **CodeTemplate** - Templates de código gerados por IA com arquivos JSONB, snapshot de stack, status e metadados de pinning
+- **DocGeneration** - Geração de documentação com conteúdo Markdown JSONB, branch/PR criado, status, tokens e erros
 
 ### Database
-- **Tabelas principais** com indexes otimizados para auth, repositórios, webhooks, análises, embeddings, dependências e templates
+- **Tabelas principais** com indexes otimizados para auth, repositórios, webhooks, análises, embeddings, dependências, docs e templates
 - **JSONB** para dados flexíveis (metadata, issues, métricas)
 - **pgvector** para semantic search
 - **Soft deletes** (deleted_at column)
@@ -543,6 +576,10 @@ UpdatePackageDependencyVulnStatus, DeletePackageDependencies
 
 // Code Templates
 CreateCodeTemplate, GetCodeTemplate, UpdateCodeTemplate, ListCodeTemplates
+
+// Doc Generations
+CreateDocGeneration, UpdateDocGeneration, GetDocGeneration,
+GetLatestDocGenerationForRepo, ListDocGenerationsForRepo
 ```
 
 ## ⚙️ Important Implementation Details
@@ -612,13 +649,31 @@ Job queue (internal/jobs):
   No-op fallback — NewNoopEnqueuer() logs and discards jobs silently
 
 Task type constants (internal/jobs/tasks):
-  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings, TypeScanDependencies, TypeGenerateTemplate
+  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings, TypeScanDependencies, TypeGenerateDocs, TypeGenerateTemplate
 
 Key builders (internal/storage/redis/keys.go):
   TokenKey(jti), UserKey(id), RepoKey(id), SessionKey(id)
 ```
 
-### Dependency Tracking
+### Auto-Generated Documentation
+```
+Generate:
+  POST /api/v1/repositories/:id/docs/generate
+  Body: {"types":["adr","architecture","service_doc","guidelines"],"branch":"main"}
+  Creates a pending DocGeneration and enqueues TypeGenerateDocs with manual TaskID deduplication per repository
+
+Worker:
+  Clones the repository shallowly, gathers directory/key-file/commit/PR/latest-analysis context, asks Claude for Markdown, commits docs to a docs/auto-generated-* branch, and opens a GitHub PR
+
+Storage:
+  doc_generations.content is JSONB map[string]string keyed by doc type
+  Generated content is reused by AnalysisWorker as PROJECT STANDARDS / DOCUMENTATION in future prompts
+
+Generated paths:
+  adr -> docs/adr/README.md
+  architecture -> docs/ARCHITECTURE.md
+  service_doc -> docs/SERVICE.md
+  guidelines -> CONTRIBUTING.md
 ```
 
 ### Intelligent Code Templates
@@ -645,6 +700,9 @@ Pin:
 Storage:
   code_templates.files is JSONB containing generated files with path, content, and language
   code_templates tokens are included in the shared Anthropic hourly budget
+```
+
+### Dependency Tracking
 ```
 Supported manifests:
   go.mod, package.json, requirements.txt, Cargo.toml
@@ -703,7 +761,8 @@ Query:
 - [x] Code analysis API + Claude integration — `TypeAnalyzeRepo` job with pluggable AI providers
 - [x] Semantic search with Voyage AI + pgvector embeddings — `TypeGenerateEmbeddings` job
 - [x] Dependency tracking — manifest parsing, `TypeScanDependencies` job, Claude CVE/update analysis, dependency endpoints
-- [ ] Rate limiting & request throttling
+- [x] Auto-generated documentation — `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
+- [x] Rate limiting & request throttling for Anthropic-backed manual triggers
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
 
 ## 🤝 Contribuindo
@@ -720,8 +779,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans)  
-**Última atualização**: April 30, 2026 (Dependency tracking: manifest parsers, dependency scan worker, endpoints, storage, webhook auto-trigger)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs)
+**Última atualização**: April 30, 2026 (Auto docs: doc generation worker, endpoint, storage, GitHub Contents/PR delivery, doc-aware analysis prompts)
 
 ### 📖 Accessing the API Documentation
 ```bash

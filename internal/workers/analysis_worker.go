@@ -262,6 +262,12 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 	}
 	req.DefaultBranch = metadata.DefaultBranch
 
+	if docs, err := w.repo.GetLatestDocGenerationForRepo(ctx, repository.ID); err == nil && docs != nil {
+		req.ProjectStandards = renderDocSummary(docs)
+	} else if err != nil {
+		utils.Warn("analysis worker: fetch generated docs failed", "repo_id", repository.ID, "error", err)
+	}
+
 	// Fallback to provided branch/commit
 	if req.Branch == "" {
 		req.Branch = req.DefaultBranch
@@ -307,6 +313,38 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 	}
 
 	return req, nil
+}
+
+func renderDocSummary(doc *models.DocGeneration) string {
+	if doc == nil {
+		return ""
+	}
+	content := doc.Content.Data()
+	if len(content) == 0 {
+		return ""
+	}
+
+	orderedTypes := []string{
+		string(ai.DocumentationTypeGuidelines),
+		string(ai.DocumentationTypeADR),
+		string(ai.DocumentationTypeArchitecture),
+		string(ai.DocumentationTypeServiceDoc),
+	}
+	var sb strings.Builder
+	for _, docType := range orderedTypes {
+		markdown := strings.TrimSpace(content[docType])
+		if markdown == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("## %s\n", docType))
+		limit := 10000
+		if docType == string(ai.DocumentationTypeArchitecture) || docType == string(ai.DocumentationTypeServiceDoc) {
+			limit = 4000
+		}
+		sb.WriteString(truncateString(markdown, limit))
+		sb.WriteString("\n\n")
+	}
+	return truncateString(strings.TrimSpace(sb.String()), 24000)
 }
 
 func (w *AnalysisWorker) failAnalysis(ctx context.Context, repository *models.Repository, errorMsg string, triggeredBy string) error {

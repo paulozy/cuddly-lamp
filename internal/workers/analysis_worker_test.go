@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/hibiken/asynq"
@@ -11,6 +12,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"gorm.io/datatypes"
 )
 
 type mockRepository struct {
@@ -19,6 +21,11 @@ type mockRepository struct {
 	updateRepoFunc                        func(ctx context.Context, repo *models.Repository) error
 	createAnalysisFunc                    func(ctx context.Context, analysis *models.CodeAnalysis) error
 	updateAnalysisFunc                    func(ctx context.Context, analysis *models.CodeAnalysis) error
+	createDocGenerationFunc               func(ctx context.Context, doc *models.DocGeneration) error
+	updateDocGenerationFunc               func(ctx context.Context, doc *models.DocGeneration) error
+	getDocGenerationFunc                  func(ctx context.Context, id string) (*models.DocGeneration, error)
+	getLatestDocGenerationFunc            func(ctx context.Context, repoID string) (*models.DocGeneration, error)
+	getLatestAnalysisFunc                 func(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
 	getConfigFunc                         func(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
 	upsertPackageDependencyFunc           func(ctx context.Context, dep *models.PackageDependency) error
 	listPackageDependenciesFunc           func(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
@@ -51,6 +58,41 @@ func (m *mockRepository) UpdateCodeAnalysis(ctx context.Context, analysis *model
 		return m.updateAnalysisFunc(ctx, analysis)
 	}
 	return nil
+}
+
+func (m *mockRepository) CreateDocGeneration(ctx context.Context, doc *models.DocGeneration) error {
+	if m.createDocGenerationFunc != nil {
+		return m.createDocGenerationFunc(ctx, doc)
+	}
+	return nil
+}
+
+func (m *mockRepository) UpdateDocGeneration(ctx context.Context, doc *models.DocGeneration) error {
+	if m.updateDocGenerationFunc != nil {
+		return m.updateDocGenerationFunc(ctx, doc)
+	}
+	return nil
+}
+
+func (m *mockRepository) GetDocGeneration(ctx context.Context, id string) (*models.DocGeneration, error) {
+	if m.getDocGenerationFunc != nil {
+		return m.getDocGenerationFunc(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockRepository) GetLatestDocGenerationForRepo(ctx context.Context, repoID string) (*models.DocGeneration, error) {
+	if m.getLatestDocGenerationFunc != nil {
+		return m.getLatestDocGenerationFunc(ctx, repoID)
+	}
+	return nil, nil
+}
+
+func (m *mockRepository) GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {
+	if m.getLatestAnalysisFunc != nil {
+		return m.getLatestAnalysisFunc(ctx, repoID, analysisType)
+	}
+	return nil, nil
 }
 
 func (m *mockRepository) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
@@ -329,5 +371,45 @@ func TestAnalysisWorker_Handle_InvalidPayload(t *testing.T) {
 	err := worker.Handle(context.Background(), task)
 	if err == nil {
 		t.Fatal("Expected error for invalid payload")
+	}
+}
+
+func TestBuildAnalysisRequest_WithProjectStandards(t *testing.T) {
+	mockRepo := &mockRepository{
+		getLatestDocGenerationFunc: func(ctx context.Context, repoID string) (*models.DocGeneration, error) {
+			if repoID != "repo-1" {
+				t.Fatalf("repoID = %q, want repo-1", repoID)
+			}
+			return &models.DocGeneration{
+				RepositoryID: repoID,
+				Status:       models.DocGenerationStatusCompleted,
+				Content: datatypes.NewJSONType(map[string]string{
+					"guidelines": "Use explicit errors.",
+					"adr":        "ADR-003: Prefer async workers.",
+				}),
+			}, nil
+		},
+	}
+	worker := NewAnalysisWorker(mockRepo)
+	req, err := worker.buildAnalysisRequest(
+		context.Background(),
+		&mockGithubClient{},
+		&models.Repository{
+			ID:             "repo-1",
+			Name:           "repo",
+			URL:            "https://github.com/owner/repo",
+			OrganizationID: "org-1",
+			Metadata:       models.RepositoryMetadata{DefaultBranch: "main"},
+		},
+		tasks.AnalyzeRepoPayload{RepositoryID: "repo-1", Type: "code_review"},
+		"owner",
+		"repo",
+		&ai.CodeMetrics{},
+	)
+	if err != nil {
+		t.Fatalf("buildAnalysisRequest returned error: %v", err)
+	}
+	if !strings.Contains(req.ProjectStandards, "Use explicit errors.") || !strings.Contains(req.ProjectStandards, "ADR-003") {
+		t.Fatalf("ProjectStandards = %q, want generated docs", req.ProjectStandards)
 	}
 }

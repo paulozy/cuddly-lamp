@@ -56,6 +56,18 @@ func (m *mockGitHubClient) CreatePullRequestReview(_ context.Context, _, _ strin
 	return 0, nil
 }
 
+func (m *mockGitHubClient) CreateBranch(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockGitHubClient) CreateOrUpdateFile(_ context.Context, _, _, _, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockGitHubClient) CreatePullRequest(_ context.Context, _, _, _, _, _, _ string) (*githubclient.PullRequest, error) {
+	return nil, nil
+}
+
 // ── extended mock repo store for SyncService ─────────────────────────────────
 
 type mockSyncRepoStore struct {

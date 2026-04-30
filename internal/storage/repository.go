@@ -59,6 +59,13 @@ type Repository interface {
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
 	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
+	// Documentation generation operations
+	CreateDocGeneration(ctx context.Context, doc *models.DocGeneration) error
+	UpdateDocGeneration(ctx context.Context, doc *models.DocGeneration) error
+	GetDocGeneration(ctx context.Context, id string) (*models.DocGeneration, error)
+	GetLatestDocGenerationForRepo(ctx context.Context, repoID string) (*models.DocGeneration, error)
+	ListDocGenerationsForRepo(ctx context.Context, repoID string) ([]models.DocGeneration, error)
+
 	// Code Template operations
 	CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
 	GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error)
