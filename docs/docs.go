@@ -342,6 +342,90 @@ const docTemplate = `{
                 }
             }
         },
+        "/organizations/configs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Get organization Configs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationConfigResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Update/Set organization configs",
+                "parameters": [
+                    {
+                        "description": "Update config request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateOrganizationConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationConfigResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/repositories": {
             "get": {
                 "security": [
@@ -441,6 +525,119 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Repository already exists",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/:id/dependencies": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "List repository dependencies analyses",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result limit (default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Result offset (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.PackageDependencyListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/:id/dependencies/scan": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Scan repository dependencies to analyze possible security issues",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
@@ -1370,6 +1567,56 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationConfigResponse": {
+            "type": "object",
+            "properties": {
+                "anthropic_api_key_configured": {
+                    "type": "boolean"
+                },
+                "anthropic_tokens_per_hour": {
+                    "type": "integer"
+                },
+                "embeddings_dimensions": {
+                    "type": "integer"
+                },
+                "embeddings_model": {
+                    "type": "string"
+                },
+                "embeddings_provider": {
+                    "type": "string"
+                },
+                "github_callback_url": {
+                    "type": "string"
+                },
+                "github_client_id_configured": {
+                    "type": "boolean"
+                },
+                "github_client_secret_configured": {
+                    "type": "boolean"
+                },
+                "github_pr_review_enabled": {
+                    "type": "boolean"
+                },
+                "github_token_configured": {
+                    "type": "boolean"
+                },
+                "gitlab_callback_url": {
+                    "type": "string"
+                },
+                "gitlab_client_id_configured": {
+                    "type": "boolean"
+                },
+                "gitlab_client_secret_configured": {
+                    "type": "boolean"
+                },
+                "voyage_api_key_configured": {
+                    "type": "boolean"
+                },
+                "webhook_base_url": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.OrganizationInfo": {
             "type": "object",
             "properties": {
@@ -1401,6 +1648,76 @@ const docTemplate = `{
                 },
                 "requires_organization_selection": {
                     "type": "boolean"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.PackageDependencyListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.PackageDependencyResponse"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.PackageDependencyResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "current_version": {
+                    "type": "string"
+                },
+                "ecosystem": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_direct_dependency": {
+                    "type": "boolean"
+                },
+                "is_vulnerable": {
+                    "type": "boolean"
+                },
+                "last_scanned_at": {
+                    "type": "string"
+                },
+                "latest_version": {
+                    "type": "string"
+                },
+                "manifest_file": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "update_available": {
+                    "type": "boolean"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "vulnerability_cves": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -1875,6 +2192,56 @@ const docTemplate = `{
                 },
                 "user": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserInfo"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateOrganizationConfigRequest": {
+            "type": "object",
+            "properties": {
+                "anthropic_api_key": {
+                    "type": "string"
+                },
+                "anthropic_tokens_per_hour": {
+                    "type": "integer"
+                },
+                "embeddings_dimensions": {
+                    "type": "integer"
+                },
+                "embeddings_model": {
+                    "type": "string"
+                },
+                "embeddings_provider": {
+                    "type": "string"
+                },
+                "github_callback_url": {
+                    "type": "string"
+                },
+                "github_client_id": {
+                    "type": "string"
+                },
+                "github_client_secret": {
+                    "type": "string"
+                },
+                "github_pr_review_enabled": {
+                    "type": "boolean"
+                },
+                "github_token": {
+                    "type": "string"
+                },
+                "gitlab_callback_url": {
+                    "type": "string"
+                },
+                "gitlab_client_id": {
+                    "type": "string"
+                },
+                "gitlab_client_secret": {
+                    "type": "string"
+                },
+                "voyage_api_key": {
+                    "type": "string"
+                },
+                "webhook_base_url": {
+                    "type": "string"
                 }
             }
         },
