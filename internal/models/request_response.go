@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // AnalyzeRepositoryRequest represents a request to analyze a repository
 type AnalyzeRepositoryRequest struct {
 	Type      string `json:"type,omitempty"`       // code_review, security, architecture
@@ -20,6 +22,53 @@ type AnalysisListResponse struct {
 	Analyses []CodeAnalysis `json:"analyses"`
 	Limit    int            `json:"limit,omitempty"`
 	Offset   int            `json:"offset,omitempty"`
+}
+
+type PackageDependencyResponse struct {
+	ID                 string    `json:"id"`
+	RepositoryID       string    `json:"repository_id"`
+	Name               string    `json:"name"`
+	CurrentVersion     string    `json:"current_version"`
+	LatestVersion      string    `json:"latest_version"`
+	Ecosystem          string    `json:"ecosystem"`
+	ManifestFile       string    `json:"manifest_file"`
+	IsDirectDependency bool      `json:"is_direct_dependency"`
+	IsVulnerable       bool      `json:"is_vulnerable"`
+	VulnerabilityCVEs  []string  `json:"vulnerability_cves"`
+	UpdateAvailable    bool      `json:"update_available"`
+	LastScannedAt      time.Time `json:"last_scanned_at"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type PackageDependencyListResponse struct {
+	Items  []PackageDependencyResponse `json:"items"`
+	Total  int64                       `json:"total"`
+	Limit  int                         `json:"limit"`
+	Offset int                         `json:"offset"`
+}
+
+func PackageDependencyToResponse(dep *PackageDependency) PackageDependencyResponse {
+	if dep == nil {
+		return PackageDependencyResponse{}
+	}
+
+	return PackageDependencyResponse{
+		ID:                 dep.ID,
+		RepositoryID:       dep.RepositoryID,
+		Name:               dep.Name,
+		CurrentVersion:     dep.CurrentVersion,
+		LatestVersion:      dep.LatestVersion,
+		Ecosystem:          dep.Ecosystem,
+		ManifestFile:       dep.ManifestFile,
+		IsDirectDependency: dep.IsDirectDependency,
+		IsVulnerable:       dep.IsVulnerable,
+		VulnerabilityCVEs:  append([]string(nil), dep.VulnerabilityCVEs...),
+		UpdateAvailable:    dep.UpdateAvailable,
+		LastScannedAt:      dep.LastScannedAt,
+		CreatedAt:          dep.CreatedAt,
+		UpdatedAt:          dep.UpdatedAt,
+	}
 }
 
 type GenerateEmbeddingsRequest struct {

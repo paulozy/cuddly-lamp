@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,15 +84,15 @@ func TestDependencyHandler_ListDependencies(t *testing.T) {
 	repo := &dependencyHandlerRepo{
 		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-1"},
 		deps: []*models.PackageDependency{
-			{Name: "safe", IsVulnerable: false},
-			{Name: "vulnerable", IsVulnerable: true},
+			{ID: "dep-1", Name: "safe", IsVulnerable: false},
+			{ID: "dep-2", Name: "vulnerable", IsVulnerable: true},
 		},
 	}
 	handler := NewDependencyHandler(repo, &dependencyHandlerEnqueuer{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	req := httptest.NewRequest(http.MethodGet, "/repositories/repo-1/dependencies?vulnerable=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/repositories/repo-1/dependencies?vulnerable=true&limit=1&offset=0", nil)
 	req = req.WithContext(context.WithValue(req.Context(), utils.ContextKeyOrganization, "org-1"))
 	c.Request = req
 	c.Params = gin.Params{{Key: "id", Value: "repo-1"}}
@@ -101,7 +102,23 @@ func TestDependencyHandler_ListDependencies(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"total":1`) {
-		t.Fatalf("body = %s, want total 1", w.Body.String())
+	var resp models.PackageDependencyListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v; body=%s", err, w.Body.String())
+	}
+	if resp.Total != 1 {
+		t.Fatalf("total = %d, want 1", resp.Total)
+	}
+	if resp.Limit != 1 || resp.Offset != 0 {
+		t.Fatalf("limit/offset = %d/%d, want 1/0", resp.Limit, resp.Offset)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(resp.Items))
+	}
+	if resp.Items[0].ID != "dep-2" || resp.Items[0].Name != "vulnerable" {
+		t.Fatalf("item = %+v, want dep-2 vulnerable", resp.Items[0])
+	}
+	if !strings.Contains(w.Body.String(), `"items"`) {
+		t.Fatalf("body = %s, want items envelope", w.Body.String())
 	}
 }

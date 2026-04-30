@@ -18,6 +18,14 @@ func NewOrganizationConfigHandler(repo storage.Repository) *OrganizationConfigHa
 	return &OrganizationConfigHandler{repo: repo}
 }
 
+// GetConfig retrieve the organization configs
+// @Summary Get organization Configs
+// @Tags organizations
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} models.OrganizationConfigResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Router       /organization/configs [get]
 func (h *OrganizationConfigHandler) GetConfig(c *gin.Context) {
 	orgID, ok := h.requireAdmin(c)
 	if !ok {
@@ -36,6 +44,18 @@ func (h *OrganizationConfigHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, models.OrganizationConfigToResponse(cfg))
 }
 
+// UpdateConfig update/set the organization configs
+// @Summary Update/Set organization configs
+// @Tags organizations
+// @Accept       json
+// @Produce json
+// @Param        body  body      models.UpdateOrganizationConfigRequest
+// @Security BearerAuth
+// @Success 200 {object} models.OrganizationConfigResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      400   {object}  models.ErrorResponse
+// @Failure      500   {object}  models.ErrorResponse
+// @Router       /organization/configs [patch]
 func (h *OrganizationConfigHandler) UpdateConfig(c *gin.Context) {
 	orgID, ok := h.requireAdmin(c)
 	if !ok {

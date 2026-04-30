@@ -186,11 +186,29 @@ func (h *AnalysisHandler) ListAnalyses(c *gin.Context) {
 		return
 	}
 
-	// Fetch analyses (TODO: implement GetAnalysesByRepository in storage)
-	// For now, return empty list
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	analyses, total, err := h.repo.GetAnalysesByRepository(c.Request.Context(), repoID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:            "internal_error",
+			ErrorDescription: "failed to fetch analyses",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, models.AnalysisListResponse{
-		Total:    0,
-		Analyses: []models.CodeAnalysis{},
+		Total:    total,
+		Analyses: analyses,
+		Limit:    limit,
+		Offset:   offset,
 	})
 }
 

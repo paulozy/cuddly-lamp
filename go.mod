@@ -12,6 +12,7 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
+	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/pgvector/pgvector-go v0.2.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/swaggo/files v1.0.1
@@ -22,6 +23,7 @@ require (
 	golang.org/x/oauth2 v0.36.0
 	gorm.io/datatypes v1.2.7
 	gorm.io/driver/postgres v1.6.0
+	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -73,9 +75,9 @@ require (
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect

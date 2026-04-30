@@ -80,8 +80,9 @@ func setupAPIRoutes(
 	{
 		protected.POST("/auth/logout", authHandler.Logout)
 		protected.GET("/users/me", authHandler.GetCurrentUser)
-		protected.GET("/organization/config", orgConfigHandler.GetConfig)
-		protected.PATCH("/organization/config", orgConfigHandler.UpdateConfig)
+
+		protected.GET("/organizations/configs", orgConfigHandler.GetConfig)
+		protected.PATCH("/organizations/configs", orgConfigHandler.UpdateConfig)
 
 		protected.POST("/repositories", repoHandler.CreateRepository)
 		protected.GET("/repositories", repoHandler.ListRepositories)

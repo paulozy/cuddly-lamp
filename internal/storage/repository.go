@@ -53,6 +53,7 @@ type Repository interface {
 	GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error)
 	CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
 	UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
+	GetAnalysesByRepository(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
 	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
 	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)

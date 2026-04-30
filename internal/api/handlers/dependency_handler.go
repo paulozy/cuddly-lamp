@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,18 @@ func NewDependencyHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *Depe
 	return &DependencyHandler{repo: repo, enqueuer: enqueuer}
 }
 
+// ScanDependencies scan repository dependencies
+// @Summary     Scan repository dependencies to analyze possible security issues
+// @Tags         analysis
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id       path      string true  "Repository ID"
+// @Success      202      {object}  models.JobResponse
+// @Failure      400      {object}  models.ErrorResponse
+// @Failure      401      {object}  models.ErrorResponse
+// @Failure      404      {object}  models.ErrorResponse
+// @Failure      503      {object}  models.ErrorResponse
+// @Router       /repositories/:id/dependencies/scan [post]
 func (h *DependencyHandler) ScanDependencies(c *gin.Context) {
 	repoID := c.Param("id")
 	repository, ok := h.fetchAccessibleRepository(c, repoID)
@@ -68,6 +81,18 @@ func (h *DependencyHandler) ScanDependencies(c *gin.Context) {
 	})
 }
 
+// ListDependencies retrieves all dependencies analyses for a repository
+// @Summary      List repository dependencies analyses
+// @Tags         analysis
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id       path      string false "Repository ID"
+// @Param        limit    query     int    false "Result limit (default 20)"
+// @Param        offset   query     int    false "Result offset (default 0)"
+// @Success      200      {object}  models.PackageDependencyListResponse
+// @Failure      401      {object}  models.ErrorResponse
+// @Failure      404      {object}  models.ErrorResponse
+// @Router       /repositories/:id/dependencies [get]
 func (h *DependencyHandler) ListDependencies(c *gin.Context) {
 	repoID := c.Param("id")
 	if _, ok := h.fetchAccessibleRepository(c, repoID); !ok {
@@ -85,10 +110,38 @@ func (h *DependencyHandler) ListDependencies(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"total":        len(deps),
-		"dependencies": deps,
-	})
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	total := len(deps)
+	items := deps
+	if offset < total {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		items = deps[offset:end]
+	} else {
+		items = []*models.PackageDependency{}
+	}
+
+	resp := models.PackageDependencyListResponse{
+		Items:  make([]models.PackageDependencyResponse, 0, len(items)),
+		Total:  int64(total),
+		Limit:  limit,
+		Offset: offset,
+	}
+	for _, dep := range items {
+		resp.Items = append(resp.Items, models.PackageDependencyToResponse(dep))
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *DependencyHandler) fetchAccessibleRepository(c *gin.Context, repoID string) (*models.Repository, bool) {

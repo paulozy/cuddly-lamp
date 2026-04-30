@@ -436,7 +436,7 @@ func (pr *PostgresRepository) UpdateCodeAnalysis(ctx context.Context, analysis *
 	return nil
 }
 
-func (pr *PostgresRepository) ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
+func (pr *PostgresRepository) GetAnalysesByRepository(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
 	var analyses []models.CodeAnalysis
 	var total int64
 
@@ -455,6 +455,10 @@ func (pr *PostgresRepository) ListAnalyses(ctx context.Context, repoID string, l
 	}
 
 	return analyses, total, nil
+}
+
+func (pr *PostgresRepository) ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
+	return pr.GetAnalysesByRepository(ctx, repoID, limit, offset)
 }
 
 func (pr *PostgresRepository) GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {
