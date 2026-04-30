@@ -70,6 +70,7 @@ func TestClient_BuildPrompt_PRAnalysis(t *testing.T) {
 		ChangedFiles: []ai.ChangedFile{
 			{Path: "auth.go", Status: "modified", Patch: "+ // New auth handler\n"},
 		},
+		TruncatedFiles: []string{"large.go"},
 	}
 
 	prompt := client.buildPrompt(req)
@@ -81,6 +82,10 @@ func TestClient_BuildPrompt_PRAnalysis(t *testing.T) {
 		"authentication",
 		"CHANGED FILES",
 		"auth.go",
+		"<diff file=\"auth.go\" status=\"modified\">",
+		"Focus exclusively on the changes",
+		"FILES NOT SHOWN",
+		"large.go",
 	}
 
 	for _, test := range tests {
@@ -92,23 +97,6 @@ func TestClient_BuildPrompt_PRAnalysis(t *testing.T) {
 
 // TestClient_AnalyzeCode_NoAPIKey tests error handling when API key is invalid
 // (Skipped: requires valid API key to run full integration test)
-
-func TestTruncatePatch(t *testing.T) {
-	patch := "line1\nline2\nline3\nline4\nline5"
-	truncated := truncatePatch(patch, 3)
-
-	if !contains(truncated, "line3") {
-		t.Error("Truncated patch missing expected lines")
-	}
-
-	if contains(truncated, "line4") {
-		t.Error("Truncated patch should not contain lines beyond limit")
-	}
-
-	if !contains(truncated, "truncated") {
-		t.Error("Truncated patch should indicate truncation")
-	}
-}
 
 // TestExtractJSON tests the extractJSON function with various input formats
 func TestExtractJSON(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -102,9 +103,17 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 			sb.WriteString(fmt.Sprintf("- Description: %s\n", req.PRBody))
 		}
 
+		sb.WriteString("\nFocus exclusively on the changes in the CHANGED FILES below. Do NOT analyze the repository as a whole. When reporting an issue, the line number must reference the post-image line from the @@ -X,Y +A,B @@ hunk header. Only report issues for lines that appear in the diff.\n")
 		sb.WriteString("\nCHANGED FILES:\n")
 		for _, file := range req.ChangedFiles {
-			sb.WriteString(fmt.Sprintf("\n%s (%s):\n```\n%s\n```\n", file.Path, file.Status, truncatePatch(file.Patch, 500)))
+			sb.WriteString(fmt.Sprintf("\n<diff file=\"%s\" status=\"%s\">\n%s\n</diff>\n", html.EscapeString(file.Path), html.EscapeString(file.Status), file.Patch))
+		}
+
+		if len(req.TruncatedFiles) > 0 {
+			sb.WriteString("\nFILES NOT SHOWN (exceeded context budget):\n")
+			for _, path := range req.TruncatedFiles {
+				sb.WriteString(fmt.Sprintf("- %s\n", path))
+			}
 		}
 	}
 
@@ -299,14 +308,4 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// truncatePatch limits patch length to avoid token limits
-func truncatePatch(patch string, maxLines int) string {
-	lines := strings.Split(patch, "\n")
-	if len(lines) <= maxLines {
-		return patch
-	}
-
-	return strings.Join(lines[:maxLines], "\n") + "\n... (truncated)"
 }

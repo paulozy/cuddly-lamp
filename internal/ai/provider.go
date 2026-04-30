@@ -6,9 +6,9 @@ import "context"
 type AnalysisType string
 
 const (
-	AnalysisTypeCodeReview    AnalysisType = "code_review"
-	AnalysisTypeSecurity      AnalysisType = "security"
-	AnalysisTypeArchitecture  AnalysisType = "architecture"
+	AnalysisTypeCodeReview   AnalysisType = "code_review"
+	AnalysisTypeSecurity     AnalysisType = "security"
+	AnalysisTypeArchitecture AnalysisType = "architecture"
 )
 
 // CommitSummary represents a simplified commit for AI analysis
@@ -44,11 +44,12 @@ type AnalysisRequest struct {
 	RecentCommits []CommitSummary
 
 	// PR-specific context (populated when analyzing a PR)
-	PullRequestID int64
-	PRTitle       string
-	PRBody        string
-	PRAuthor      string
-	ChangedFiles  []ChangedFile
+	PullRequestID  int64
+	PRTitle        string
+	PRBody         string
+	PRAuthor       string
+	ChangedFiles   []ChangedFile
+	TruncatedFiles []string
 
 	// Computed metrics (populated by local analysis)
 	Metrics *CodeMetrics
@@ -83,10 +84,10 @@ type CodeIssue struct {
 // CodeMetrics represents code quality metrics
 // Note: This mirrors models.CodeMetrics structure
 type CodeMetrics struct {
-	LinesOfCode         int32
+	LinesOfCode          int32
 	CyclomaticComplexity int32
-	TestCoverage        float32
-	CodeDuplication     float32
+	TestCoverage         float32
+	CodeDuplication      float32
 	MaintainabilityIndex float32
 }
 
@@ -108,9 +109,9 @@ type PRReviewComment struct {
 
 // PRReviewRequest represents a GitHub PR review to be posted
 type PRReviewRequest struct {
-	Body     string              // review summary
-	Event    string              // "COMMENT", "APPROVE", or "REQUEST_CHANGES"
-	Comments []PRReviewComment   // line-specific comments
+	Body     string            // review summary
+	Event    string            // "COMMENT", "APPROVE", or "REQUEST_CHANGES"
+	Comments []PRReviewComment // line-specific comments
 }
 
 // Analyzer is the extension point for pluggable AI providers
