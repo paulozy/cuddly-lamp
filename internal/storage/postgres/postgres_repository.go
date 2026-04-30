@@ -130,6 +130,19 @@ func (pr *PostgresRepository) GetOrganizationMember(ctx context.Context, orgID, 
 	return &member, nil
 }
 
+func (pr *PostgresRepository) ListOrganizationMembersForUser(ctx context.Context, userID string) ([]models.OrganizationMember, error) {
+	var members []models.OrganizationMember
+	if err := pr.db.WithContext(ctx).
+		Preload("Organization").
+		Joins("JOIN organizations ON organizations.id = organization_members.organization_id").
+		Where("organization_members.user_id = ? AND organization_members.is_active = true AND organizations.is_active = true", userID).
+		Order("organization_members.created_at ASC").
+		Find(&members).Error; err != nil {
+		return nil, fmt.Errorf("list organization members for user: %w", err)
+	}
+	return members, nil
+}
+
 func (pr *PostgresRepository) CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error {
 	if err := pr.db.WithContext(ctx).Create(member).Error; err != nil {
 		return fmt.Errorf("create organization member: %w", err)

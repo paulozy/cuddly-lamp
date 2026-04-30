@@ -58,9 +58,14 @@ func setupAPIRoutes(
 	public := router.Group("/api/v1")
 	{
 		public.GET("/health", healthCheck)
+		public.POST("/auth/login", authHandler.LoginWithEmail)
+		public.POST("/auth/select-organization", authHandler.SelectOrganization)
+		public.POST("/auth/register", authHandler.RegisterWithEmail)
 		public.POST("/orgs/:slug/auth/login", authHandler.LoginWithEmail)
 		public.POST("/orgs/:slug/auth/register", authHandler.RegisterWithEmail)
 		public.POST("/auth/refresh", authHandler.RefreshTokens)
+		public.GET("/auth/:provider", authHandler.OAuthLogin)
+		public.GET("/auth/:provider/callback", authHandler.OAuthCallback)
 		public.GET("/orgs/:slug/auth/:provider", authHandler.OAuthLogin)
 		public.GET("/orgs/:slug/auth/:provider/callback", authHandler.OAuthCallback)
 

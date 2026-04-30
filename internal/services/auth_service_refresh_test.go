@@ -19,6 +19,7 @@ type mockRepo struct {
 	users   map[string]*models.User  // keyed by user_id
 	orgs    map[string]*models.Organization
 	members map[string]*models.OrganizationMember
+	configs map[string]*models.OrganizationConfig
 
 	revokedJTIs     []string
 	revokedFamilies []uuid.UUID
@@ -31,6 +32,7 @@ func newMockRepo() *mockRepo {
 		users:   make(map[string]*models.User),
 		orgs:    make(map[string]*models.Organization),
 		members: make(map[string]*models.OrganizationMember),
+		configs: make(map[string]*models.OrganizationConfig),
 	}
 }
 
@@ -111,12 +113,69 @@ func (m *mockRepo) GetOrganization(_ context.Context, id string) (*models.Organi
 	return org, nil
 }
 
+func (m *mockRepo) GetOrganizationBySlug(_ context.Context, slug string) (*models.Organization, error) {
+	for _, org := range m.orgs {
+		if org.Slug == slug {
+			return org, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockRepo) CreateOrganization(_ context.Context, org *models.Organization) error {
+	m.orgs[org.ID] = org
+	return nil
+}
+
 func (m *mockRepo) GetOrganizationMember(_ context.Context, orgID, userID string) (*models.OrganizationMember, error) {
 	member, ok := m.members[orgID+":"+userID]
 	if !ok {
 		return nil, nil
 	}
 	return member, nil
+}
+
+func (m *mockRepo) ListOrganizationMembersForUser(_ context.Context, userID string) ([]models.OrganizationMember, error) {
+	var members []models.OrganizationMember
+	for _, member := range m.members {
+		if member.UserID != userID || !member.IsActive {
+			continue
+		}
+		copy := *member
+		if org, ok := m.orgs[member.OrganizationID]; ok {
+			copy.Organization = *org
+		}
+		members = append(members, copy)
+	}
+	return members, nil
+}
+
+func (m *mockRepo) CountOrganizationMembers(_ context.Context, orgID string) (int64, error) {
+	var count int64
+	for _, member := range m.members {
+		if member.OrganizationID == orgID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockRepo) CreateOrganizationMember(_ context.Context, member *models.OrganizationMember) error {
+	m.members[member.OrganizationID+":"+member.UserID] = member
+	return nil
+}
+
+func (m *mockRepo) GetOrganizationConfig(_ context.Context, orgID string) (*models.OrganizationConfig, error) {
+	cfg, ok := m.configs[orgID]
+	if !ok {
+		return nil, nil
+	}
+	return cfg, nil
+}
+
+func (m *mockRepo) UpsertOrganizationConfig(_ context.Context, cfg *models.OrganizationConfig) error {
+	m.configs[cfg.OrganizationID] = cfg
+	return nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -356,5 +415,117 @@ func TestGenerateTokenPair_ResponseContainsRefreshFields(t *testing.T) {
 	}
 	if resp.ExpiresIn <= 0 {
 		t.Error("expires_in must be positive")
+	}
+}
+
+func TestRegisterWithEmail_CreatesOrganizationFromBody(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	resp, err := svc.RegisterWithEmail(context.Background(), "new@example.com", "New User", "Password123", "Acme Inc", "")
+	if err != nil {
+		t.Fatalf("RegisterWithEmail failed: %v", err)
+	}
+
+	if resp.Organization.Name != "Acme Inc" {
+		t.Fatalf("organization name = %q, want Acme Inc", resp.Organization.Name)
+	}
+	if resp.Organization.Slug != "acme-inc" {
+		t.Fatalf("organization slug = %q, want acme-inc", resp.Organization.Slug)
+	}
+	if resp.Organization.Role != models.RoleAdmin {
+		t.Fatalf("organization role = %q, want admin", resp.Organization.Role)
+	}
+	if _, ok := repo.configs[resp.Organization.ID]; !ok {
+		t.Fatal("expected default organization config to be created")
+	}
+}
+
+func TestLoginWithEmail_SingleOrganizationDoesNotRequireSlug(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	_, err := svc.RegisterWithEmail(context.Background(), "single@example.com", "Single User", "Password123", "Single Org", "")
+	if err != nil {
+		t.Fatalf("RegisterWithEmail failed: %v", err)
+	}
+
+	resp, selection, err := svc.LoginWithEmail(context.Background(), "single@example.com", "Password123", "")
+	if err != nil {
+		t.Fatalf("LoginWithEmail failed: %v", err)
+	}
+	if selection != nil {
+		t.Fatalf("LoginWithEmail selection = %+v, want nil", selection)
+	}
+	if resp.Organization.Slug != "single-org" {
+		t.Fatalf("organization slug = %q, want single-org", resp.Organization.Slug)
+	}
+}
+
+func TestLoginWithEmail_MultipleOrganizationsReturnsSelectionTicket(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first"); err != nil {
+		t.Fatalf("register first org: %v", err)
+	}
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second"); err != nil {
+		t.Fatalf("register second org: %v", err)
+	}
+
+	resp, selection, err := svc.LoginWithEmail(context.Background(), "multi@example.com", "Password123", "")
+	if err != nil {
+		t.Fatalf("LoginWithEmail failed: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("LoginWithEmail token = %+v, want nil until organization is selected", resp)
+	}
+	if selection == nil {
+		t.Fatal("LoginWithEmail selection = nil, want organization selection response")
+	}
+	if !selection.RequiresOrganizationSelection {
+		t.Fatal("selection response should require organization selection")
+	}
+	if selection.LoginTicket == "" {
+		t.Fatal("selection response should include login ticket")
+	}
+	if len(selection.Organizations) != 2 {
+		t.Fatalf("selection organizations = %+v, want 2", selection.Organizations)
+	}
+
+	selected, err := svc.SelectOrganization(context.Background(), selection.LoginTicket, selection.Organizations[1].ID)
+	if err != nil {
+		t.Fatalf("SelectOrganization failed: %v", err)
+	}
+	if selected.Organization.ID != selection.Organizations[1].ID {
+		t.Fatalf("selected organization = %q, want %q", selected.Organization.ID, selection.Organizations[1].ID)
+	}
+}
+
+func TestSelectOrganizationRejectsUnavailableOrganization(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first"); err != nil {
+		t.Fatalf("register first org: %v", err)
+	}
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second"); err != nil {
+		t.Fatalf("register second org: %v", err)
+	}
+	otherOrg := newTestOrg()
+	otherOrg.Slug = "other"
+	repo.orgs[otherOrg.ID] = otherOrg
+
+	_, selection, err := svc.LoginWithEmail(context.Background(), "multi@example.com", "Password123", "")
+	if err != nil {
+		t.Fatalf("LoginWithEmail failed: %v", err)
+	}
+	if selection == nil {
+		t.Fatal("LoginWithEmail selection = nil, want selection response")
+	}
+
+	_, err = svc.SelectOrganization(context.Background(), selection.LoginTicket, otherOrg.ID)
+	if err == nil {
+		t.Fatal("SelectOrganization should reject an organization outside the login ticket")
 	}
 }

@@ -132,18 +132,21 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		branch = "main"
 	}
 
-	// Calculate code metrics locally (lines of code, complexity)
-	// Note: test coverage is skipped as it's a CI artifact, not a git artifact
-	repoMetrics, err := w.calculateMetrics(ctx, repository.URL, githubToken, branch)
-	if err != nil {
-		utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", githubToken != "", "error", err)
-		repoMetrics = &ai.CodeMetrics{}
+	repoMetrics := &ai.CodeMetrics{}
+	if payload.PullRequestID == 0 {
+		// Calculate code metrics locally (lines of code, complexity).
+		// Note: test coverage is skipped as it's a CI artifact, not a git artifact.
+		repoMetrics, err = w.calculateMetrics(ctx, repository.URL, githubToken, branch)
+		if err != nil {
+			utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", githubToken != "", "error", err)
+			repoMetrics = &ai.CodeMetrics{}
+		}
 	}
 
 	// Build analysis request with computed metrics
-	analysisReq := w.buildAnalysisRequest(ctx, ghClient, repository, payload, owner, repo, repoMetrics)
-	if analysisReq == nil {
-		return w.failAnalysis(ctx, repository, "failed to build analysis request", payload.TriggeredBy)
+	analysisReq, err := w.buildAnalysisRequest(ctx, ghClient, repository, payload, owner, repo, repoMetrics)
+	if err != nil {
+		return w.failAnalysis(ctx, repository, fmt.Sprintf("failed to build analysis request: %v", err), payload.TriggeredBy)
 	}
 
 	// Call analyzer
@@ -230,7 +233,7 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	return nil
 }
 
-func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) *ai.AnalysisRequest {
+func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) (*ai.AnalysisRequest, error) {
 	analysisType := ai.AnalysisType(payload.Type)
 	if analysisType == "" {
 		analysisType = ai.AnalysisTypeCodeReview
@@ -267,11 +270,31 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 		}
 	}
 
-	// Fetch recent commits for context
+	if payload.PullRequestID > 0 {
+		pr, err := ghClient.GetPullRequest(ctx, owner, repoName, payload.PullRequestID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch PR details: %w", err)
+		}
+		req.PullRequestID = payload.PullRequestID
+		req.PRTitle = pr.Title
+		req.PRBody = pr.Body
+		req.PRAuthor = pr.User.Login
+
+		files, err := ghClient.GetPullRequestFiles(ctx, owner, repoName, payload.PullRequestID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch PR files: %w", err)
+		}
+		changed := ai.FilterAndMapPRFiles(files)
+		req.ChangedFiles, req.TruncatedFiles = ai.BudgetChangedFiles(changed)
+
+		return req, nil
+	}
+
+	// Fetch recent commits for push/branch analysis context.
 	commits, err := ghClient.GetCommits(ctx, owner, repoName, req.Branch, 10)
 	if err != nil {
 		utils.Warn("analysis worker: fetch commits failed", "error", err)
-		// Don't fail, continue with empty commits
+		// Don't fail, continue with empty commits.
 	}
 
 	for _, commit := range commits {
@@ -283,12 +306,7 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 		})
 	}
 
-	// TODO: For PR analysis, fetch PR details and changed files
-	// if payload.PullRequestID > 0 {
-	//   req.ChangedFiles = ... fetch from github
-	// }
-
-	return req
+	return req, nil
 }
 
 func (w *AnalysisWorker) failAnalysis(ctx context.Context, repository *models.Repository, errorMsg string, triggeredBy string) error {

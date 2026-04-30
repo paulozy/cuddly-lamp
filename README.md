@@ -6,6 +6,8 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Authentication & Authorization
 - ✅ Email/Password registration & login (Argon2 hashing)
+- ✅ Organization onboarding during registration (`organization_name`, optional derived slug)
+- ✅ Multi-organization login flow with short-lived selection tickets
 - ✅ JWT access tokens with revocation tracking (JTI per token)
 - ✅ Refresh token rotation (RFC 6749 §6 / RFC 9700 compliant)
 - ✅ Refresh token reuse detection with family revocation (anti-hijacking)
@@ -46,7 +48,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Background processing worker (`webhook:process` asynq task)
 
 ### API Routes
-- ✅ Public routes: login, register, token refresh, OAuth (GitHub/GitLab)
+- ✅ Public routes: login, organization selection, register, token refresh, OAuth (GitHub/GitLab)
 - ✅ Public webhook receiver: `POST /api/v1/webhooks/github/:repoID` (HMAC auth)
 - ✅ Protected routes: /users/me, logout
 - ✅ Protected repository routes: CRUD on `/api/v1/repositories`
@@ -63,7 +65,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 ### API Documentation
 - ✅ Swagger/OpenAPI 2.0 with swaggo/swag
 - ✅ Interactive Swagger UI at `/swagger/index.html`
-- ✅ Comprehensive annotations on all 19 endpoints (auth, repository, webhook, analysis, semantic search)
+- ✅ Comprehensive annotations for auth, repository, webhook, analysis, semantic search, and health endpoints
 - ✅ JWT security scheme documented
 - ✅ Automatic generation with `make swagger`
 
@@ -71,7 +73,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Pluggable `ai.Analyzer` interface for code analysis
 - ✅ Anthropic (Claude) implementation with Anthropic SDK
 - ✅ Analysis worker (`TypeAnalyzeRepo` job) — triggers on push/PR webhook events
-- ✅ Pull request analysis with diff parsing and file-level commenting
+- ✅ Pull request analysis with real GitHub PR metadata/files, diff filtering, token budgeting, and file-level commenting
 - ✅ PR review posting (optional via `GITHUB_PR_REVIEW_ENABLED=true`)
 - ✅ HTTP endpoints: `POST /repositories/:id/analyze`, `GET /repositories/:id/analyses`
 - ✅ Support for multiple analysis types: `code_review`, `security`, `architecture`
@@ -145,12 +147,19 @@ curl http://localhost:3000/api/v1/health
 # Register with email/password
 curl -X POST http://localhost:3000/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "full_name": "Test User", "password": "Password123"}'
+  -d '{"email": "user@example.com", "full_name": "Test User", "password": "Password123", "organization_name": "Acme Inc"}'
 
 # Login and capture token
+# If the user belongs to multiple organizations, the response includes
+# requires_organization_selection=true, login_ticket, and organizations[].
 TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"Password123"}' | jq -r '.access_token')
+
+# Complete multi-organization login when required
+curl -X POST http://localhost:3000/api/v1/auth/select-organization \
+  -H "Content-Type: application/json" \
+  -d '{"login_ticket":"LOGIN_TICKET","organization_id":"ORG_ID"}'
 
 # Add a repository (triggers GitHub sync automatically)
 curl -X POST http://localhost:3000/api/v1/repositories \
@@ -161,8 +170,8 @@ curl -X POST http://localhost:3000/api/v1/repositories \
 # List repositories
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/repositories
 
-# OAuth: redirect to GitHub (if configured)
-curl -L http://localhost:3000/api/v1/auth/github
+# OAuth onboarding: redirect to GitHub (if configured)
+curl -L "http://localhost:3000/api/v1/auth/github?organization_name=Acme%20Inc"
 ```
 
 > For webhook testing with ngrok see [`tests/GITHUB_SYNC_TESTING.md`](tests/GITHUB_SYNC_TESTING.md).
@@ -202,7 +211,7 @@ make docker-logs      # Mostra logs dos containers
 make fmt              # Formata código (gofmt)
 make mod-tidy         # Atualiza go.mod/go.sum
 make clean            # Remove build artifacts
-make swagger          # Gera documentação Swagger/OpenAPI
+make swagger          # Gera documentação Swagger/OpenAPI via pinned swag@v1.8.12
 ```
 
 ## 🔐 Setting Up GitHub OAuth
@@ -476,10 +485,21 @@ Format: <hex-salt>$<hex-hash>
 ### OAuth State (CSRF Protection)
 ```
 Stateless signed state token (no Redis needed):
-- Payload: base64url(json{"nonce":"<random>","exp":<unix>})
+- Payload: base64url(json{"nonce":"<random>","organization_id|organization_name":"...","exp":<unix>})
 - Signature: base64url(HMAC-SHA256(payload, jwtSecret))
 - Format: <payload>.<signature>
 - Expiry: 10 minutes
+```
+
+### Multi-Organization Login
+```
+POST /auth/login with email/password:
+  - one org: returns TokenResponse directly
+  - multiple orgs: returns 202 with requires_organization_selection, login_ticket, organizations[]
+
+POST /auth/select-organization:
+  - accepts login_ticket + organization_id
+  - validates ticket and membership before issuing TokenResponse
 ```
 
 ### Refresh Token Security (RFC 9700)
@@ -557,6 +577,8 @@ Query:
 - [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
 - [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
 - [x] API documentation (Swagger/OpenAPI)
+- [x] Real PR diff analysis for pull_request webhooks
+- [x] Organization onboarding + multi-org login selection flow
 - [x] Code analysis API + Claude integration — `TypeAnalyzeRepo` job with pluggable AI providers
 - [x] Semantic search with Voyage AI + pgvector embeddings — `TypeGenerateEmbeddings` job
 - [ ] Rate limiting & request throttling
@@ -576,8 +598,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search Complete (Auth + Sync + Webhook + Encryption + Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Última atualização**: April 29, 2026 (Hybrid semantic search relevance + authenticated metrics clone)
+**Status**: 🤖 AI Integration + Semantic Search + Auth Onboarding Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
+**Última atualização**: April 29, 2026 (Real PR diff analysis + organization onboarding/multi-org login)
 
 ### 📖 Accessing the API Documentation
 ```bash
