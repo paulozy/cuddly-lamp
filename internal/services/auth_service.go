@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -48,23 +49,57 @@ var (
 	ErrTokenRevoked = fmt.Errorf("token revoked")
 )
 
-func (s *AuthService) LoginWithEmail(ctx context.Context, orgSlug, email, password string) (*models.TokenResponse, error) {
-	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
-	if err != nil || org == nil || !org.IsActive {
-		return nil, fmt.Errorf("invalid organization")
-	}
+type loginSelectionClaims struct {
+	UserID          string   `json:"user_id"`
+	OrganizationIDs []string `json:"organization_ids"`
+	Purpose         string   `json:"purpose"`
+	jwt.RegisteredClaims
+}
 
+func (s *AuthService) LoginWithEmail(ctx context.Context, email, password, orgSlug string) (*models.TokenResponse, *models.OrganizationSelectionResponse, error) {
 	user, err := s.repo.GetUserByEmail(ctx, email)
 	if user == nil || err != nil {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, nil, fmt.Errorf("invalid email or password")
 	}
 
 	if !verifyPasswordHash(user.PasswordHash, password) {
-		return nil, fmt.Errorf("invalid email or password")
+		return nil, nil, fmt.Errorf("invalid email or password")
 	}
 
 	if !user.IsActive {
-		return nil, fmt.Errorf("account is inactive")
+		return nil, nil, fmt.Errorf("account is inactive")
+	}
+
+	org, member, selection, err := s.resolveLoginOrganization(ctx, user.ID, orgSlug)
+	if err != nil {
+		return nil, nil, err
+	}
+	if selection != nil {
+		return nil, selection, nil
+	}
+
+	resp, err := s.generateTokenPair(ctx, user, org, member.Role)
+	return resp, nil, err
+}
+
+func (s *AuthService) SelectOrganization(ctx context.Context, loginTicket, organizationID string) (*models.TokenResponse, error) {
+	claims, err := s.verifyLoginSelectionTicket(loginTicket)
+	if err != nil {
+		return nil, err
+	}
+
+	if !containsString(claims.OrganizationIDs, organizationID) {
+		return nil, fmt.Errorf("organization is not available for this login")
+	}
+
+	user, err := s.repo.GetUser(ctx, claims.UserID)
+	if err != nil || user == nil || !user.IsActive {
+		return nil, fmt.Errorf("invalid user")
+	}
+
+	org, err := s.repo.GetOrganization(ctx, organizationID)
+	if err != nil || org == nil || !org.IsActive {
+		return nil, fmt.Errorf("invalid organization")
 	}
 
 	member, err := s.repo.GetOrganizationMember(ctx, org.ID, user.ID)
@@ -78,12 +113,12 @@ func (s *AuthService) LoginWithEmail(ctx context.Context, orgSlug, email, passwo
 	return s.generateTokenPair(ctx, user, org, member.Role)
 }
 
-func (s *AuthService) RegisterWithEmail(ctx context.Context, orgSlug, email, fullName, password string) (*models.TokenResponse, error) {
+func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, password, organizationName, organizationSlug string) (*models.TokenResponse, error) {
 	if err := validatePasswordStrength(password); err != nil {
 		return nil, fmt.Errorf("password validation failed: %w", err)
 	}
 
-	org, err := s.getOrCreateOrganization(ctx, orgSlug)
+	org, err := s.getOrCreateOrganization(ctx, organizationName, organizationSlug)
 	if err != nil {
 		return nil, err
 	}
@@ -379,10 +414,124 @@ type refreshOrganization struct {
 	Role         models.UserRole
 }
 
-func (s *AuthService) getOrCreateOrganization(ctx context.Context, slug string) (*models.Organization, error) {
-	normalized := normalizeSlug(slug)
+func (s *AuthService) resolveLoginOrganization(ctx context.Context, userID, orgSlug string) (*models.Organization, *models.OrganizationMember, *models.OrganizationSelectionResponse, error) {
+	if normalizeSlug(orgSlug) != "" {
+		org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
+		if err != nil || org == nil || !org.IsActive {
+			return nil, nil, nil, fmt.Errorf("invalid organization")
+		}
+
+		member, err := s.repo.GetOrganizationMember(ctx, org.ID, userID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to retrieve organization membership: %w", err)
+		}
+		if member == nil {
+			return nil, nil, nil, fmt.Errorf("user does not belong to organization")
+		}
+		return org, member, nil, nil
+	}
+
+	members, err := s.repo.ListOrganizationMembersForUser(ctx, userID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to retrieve organization memberships: %w", err)
+	}
+	if len(members) == 0 {
+		return nil, nil, nil, fmt.Errorf("user does not belong to any organization")
+	}
+	if len(members) > 1 {
+		selection, err := s.buildOrganizationSelectionResponse(userID, members)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return nil, nil, selection, nil
+	}
+	member := members[0]
+	if member.Organization.ID == "" || !member.Organization.IsActive {
+		return nil, nil, nil, fmt.Errorf("invalid organization")
+	}
+	return &member.Organization, &member, nil, nil
+}
+
+func (s *AuthService) buildOrganizationSelectionResponse(userID string, members []models.OrganizationMember) (*models.OrganizationSelectionResponse, error) {
+	orgs := make([]models.OrganizationInfo, 0, len(members))
+	orgIDs := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.Organization.ID == "" || !member.Organization.IsActive {
+			continue
+		}
+		orgIDs = append(orgIDs, member.Organization.ID)
+		orgs = append(orgs, models.OrganizationInfo{
+			ID:   member.Organization.ID,
+			Name: member.Organization.Name,
+			Slug: member.Organization.Slug,
+			Role: member.Role,
+		})
+	}
+	if len(orgs) == 0 {
+		return nil, fmt.Errorf("user does not belong to any active organization")
+	}
+
+	ticket, err := s.generateLoginSelectionTicket(userID, orgIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.OrganizationSelectionResponse{
+		RequiresOrganizationSelection: true,
+		LoginTicket:                   ticket,
+		Organizations:                 orgs,
+	}, nil
+}
+
+func (s *AuthService) generateLoginSelectionTicket(userID string, organizationIDs []string) (string, error) {
+	now := time.Now().UTC()
+	claims := loginSelectionClaims{
+		UserID:          userID,
+		OrganizationIDs: organizationIDs,
+		Purpose:         "organization_selection",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    s.jwtIssuer,
+			Audience:  []string{s.jwtAudience},
+			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ID:        uuid.New().String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signedToken, err := token.SignedString([]byte(s.jwtSecret))
+	if err != nil {
+		return "", fmt.Errorf("failed to sign login ticket: %w", err)
+	}
+	return signedToken, nil
+}
+
+func (s *AuthService) verifyLoginSelectionTicket(ticket string) (*loginSelectionClaims, error) {
+	claims := &loginSelectionClaims{}
+	token, err := jwt.ParseWithClaims(ticket, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(s.jwtSecret), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid login ticket: %w", err)
+	}
+	if claims.Purpose != "organization_selection" || claims.UserID == "" || len(claims.OrganizationIDs) == 0 {
+		return nil, fmt.Errorf("invalid login ticket")
+	}
+	return claims, nil
+}
+
+func (s *AuthService) getOrCreateOrganization(ctx context.Context, name, slug string) (*models.Organization, error) {
+	normalized, err := normalizeOrDeriveSlug(name, slug)
+	if err != nil {
+		return nil, err
+	}
+	orgName := strings.TrimSpace(name)
 	if normalized == "" {
 		return nil, fmt.Errorf("organization slug is required")
+	}
+	if orgName == "" {
+		orgName = normalized
 	}
 
 	org, err := s.repo.GetOrganizationBySlug(ctx, normalized)
@@ -395,7 +544,7 @@ func (s *AuthService) getOrCreateOrganization(ctx context.Context, slug string) 
 
 	org = &models.Organization{
 		ID:        uuid.New().String(),
-		Name:      normalized,
+		Name:      orgName,
 		Slug:      normalized,
 		IsActive:  true,
 		CreatedAt: time.Now().UTC(),
@@ -450,6 +599,37 @@ func (s *AuthService) ensureOrganizationMember(ctx context.Context, orgID, userI
 
 func normalizeSlug(slug string) string {
 	return strings.ToLower(strings.TrimSpace(slug))
+}
+
+func normalizeOrDeriveSlug(name, slug string) (string, error) {
+	source := slug
+	if strings.TrimSpace(source) == "" {
+		source = name
+	}
+	normalized := slugify(source)
+	if normalized == "" {
+		return "", fmt.Errorf("organization slug is required")
+	}
+	return normalized, nil
+}
+
+func slugify(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		case unicode.IsSpace(r), r == '-', r == '_':
+			if b.Len() > 0 && !lastHyphen {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // ============================================
@@ -520,6 +700,15 @@ func containsDigit(s string) bool {
 	return false
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // ============================================
 // OAUTH
 // ============================================
@@ -529,23 +718,50 @@ func (s *AuthService) RegisterProvider(provider oauth.OAuthProvider) {
 }
 
 func (s *AuthService) GetOAuthAuthURL(ctx context.Context, orgSlug, provider, state string) string {
-	p, err := s.oauthProviderForOrganization(ctx, orgSlug, provider)
+	var (
+		p   oauth.OAuthProvider
+		err error
+	)
+	if normalizeSlug(orgSlug) == "" {
+		p = s.providers[provider]
+		if p == nil {
+			return ""
+		}
+	} else {
+		p, err = s.oauthProviderForOrganization(ctx, orgSlug, provider)
+	}
 	if err != nil {
 		return ""
 	}
 	return p.GetAuthURL(state)
 }
 
-func (s *AuthService) GenerateOAuthState(orgID string) (string, error) {
+type OAuthStateInput struct {
+	OrganizationID   string
+	OrganizationName string
+	OrganizationSlug string
+}
+
+type oauthStatePayload struct {
+	Nonce            string `json:"nonce"`
+	OrganizationID   string `json:"organization_id,omitempty"`
+	OrganizationName string `json:"organization_name,omitempty"`
+	OrganizationSlug string `json:"organization_slug,omitempty"`
+	Exp              int64  `json:"exp"`
+}
+
+func (s *AuthService) GenerateOAuthState(input OAuthStateInput) (string, error) {
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	payload := map[string]interface{}{
-		"nonce":           base64.RawURLEncoding.EncodeToString(nonce),
-		"organization_id": orgID,
-		"exp":             time.Now().Add(10 * time.Minute).Unix(),
+	payload := oauthStatePayload{
+		Nonce:            base64.RawURLEncoding.EncodeToString(nonce),
+		OrganizationID:   input.OrganizationID,
+		OrganizationName: input.OrganizationName,
+		OrganizationSlug: input.OrganizationSlug,
+		Exp:              time.Now().Add(10 * time.Minute).Unix(),
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -562,10 +778,10 @@ func (s *AuthService) GenerateOAuthState(orgID string) (string, error) {
 	return payloadB64 + "." + signature, nil
 }
 
-func (s *AuthService) VerifyOAuthState(state, orgID string) error {
+func (s *AuthService) VerifyOAuthState(state string) (*oauthStatePayload, error) {
 	parts := len(state)
 	if parts < 100 {
-		return fmt.Errorf("invalid state format")
+		return nil, fmt.Errorf("invalid state format")
 	}
 
 	idx := len(state) - len(state)
@@ -577,7 +793,7 @@ func (s *AuthService) VerifyOAuthState(state, orgID string) error {
 	}
 
 	if idx == 0 {
-		return fmt.Errorf("invalid state format: no signature")
+		return nil, fmt.Errorf("invalid state format: no signature")
 	}
 
 	payloadB64 := state[:idx]
@@ -588,47 +804,36 @@ func (s *AuthService) VerifyOAuthState(state, orgID string) error {
 	expectedSignature := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 
 	if !hmac.Equal([]byte(signatureB64), []byte(expectedSignature)) {
-		return fmt.Errorf("invalid state signature")
+		return nil, fmt.Errorf("invalid state signature")
 	}
 
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
 	if err != nil {
-		return fmt.Errorf("failed to decode payload: %w", err)
+		return nil, fmt.Errorf("failed to decode payload: %w", err)
 	}
 
-	var payload map[string]interface{}
+	var payload oauthStatePayload
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
-		return fmt.Errorf("failed to unmarshal payload: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	expVal, ok := payload["exp"].(float64)
-	if !ok {
-		return fmt.Errorf("invalid exp in payload")
+	if payload.Exp == 0 {
+		return nil, fmt.Errorf("invalid exp in payload")
+	}
+	if time.Now().Unix() > payload.Exp {
+		return nil, fmt.Errorf("state has expired")
 	}
 
-	if time.Now().Unix() > int64(expVal) {
-		return fmt.Errorf("state has expired")
-	}
-
-	stateOrgID, _ := payload["organization_id"].(string)
-	if stateOrgID == "" || stateOrgID != orgID {
-		return fmt.Errorf("invalid organization in state")
-	}
-
-	return nil
+	return &payload, nil
 }
 
 func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, code, state string) (*models.TokenResponse, error) {
-	org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
-	if err != nil || org == nil || !org.IsActive {
-		return nil, fmt.Errorf("invalid organization")
-	}
-
-	if err := s.VerifyOAuthState(state, org.ID); err != nil {
+	statePayload, err := s.VerifyOAuthState(state)
+	if err != nil {
 		return nil, fmt.Errorf("invalid oauth state: %w", err)
 	}
 
-	oauthProvider, err := s.oauthProviderForOrganization(ctx, orgSlug, provider)
+	org, oauthProvider, err := s.resolveOAuthOrganizationAndProvider(ctx, orgSlug, provider, statePayload)
 	if err != nil {
 		return nil, err
 	}
@@ -703,6 +908,45 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, cod
 	}
 
 	return s.generateTokenPair(ctx, user, org, member.Role)
+}
+
+func (s *AuthService) resolveOAuthOrganizationAndProvider(ctx context.Context, orgSlug, provider string, statePayload *oauthStatePayload) (*models.Organization, oauth.OAuthProvider, error) {
+	if normalizeSlug(orgSlug) != "" {
+		org, err := s.repo.GetOrganizationBySlug(ctx, normalizeSlug(orgSlug))
+		if err != nil || org == nil || !org.IsActive {
+			return nil, nil, fmt.Errorf("invalid organization")
+		}
+		if statePayload.OrganizationID == "" || statePayload.OrganizationID != org.ID {
+			return nil, nil, fmt.Errorf("invalid organization in state")
+		}
+		oauthProvider, err := s.oauthProviderForOrganization(ctx, org.Slug, provider)
+		if err != nil {
+			return nil, nil, err
+		}
+		return org, oauthProvider, nil
+	}
+
+	if statePayload.OrganizationID != "" {
+		org, err := s.repo.GetOrganization(ctx, statePayload.OrganizationID)
+		if err != nil || org == nil || !org.IsActive {
+			return nil, nil, fmt.Errorf("invalid organization")
+		}
+		oauthProvider, err := s.oauthProviderForOrganization(ctx, org.Slug, provider)
+		if err != nil {
+			return nil, nil, err
+		}
+		return org, oauthProvider, nil
+	}
+
+	oauthProvider := s.providers[provider]
+	if oauthProvider == nil {
+		return nil, nil, fmt.Errorf("unknown oauth provider: %s", provider)
+	}
+	org, err := s.getOrCreateOrganization(ctx, statePayload.OrganizationName, statePayload.OrganizationSlug)
+	if err != nil {
+		return nil, nil, err
+	}
+	return org, oauthProvider, nil
 }
 
 func (s *AuthService) oauthProviderForOrganization(ctx context.Context, orgSlug, provider string) (oauth.OAuthProvider, error) {

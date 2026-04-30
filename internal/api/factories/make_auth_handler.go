@@ -5,6 +5,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/api/handlers"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	"github.com/paulozy/idp-with-ai-backend/internal/oauth"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 )
@@ -26,6 +27,13 @@ func MakeAuthConfig(
 		config.Server.AccessTokenTTL,
 		config.Server.RefreshTokenTTL,
 	)
+
+	if githubCfg := config.OAuth.Providers["github"]; githubCfg.ClientID != "" && githubCfg.ClientSecret != "" {
+		authService.RegisterProvider(oauth.NewGitHubProvider(githubCfg.ClientID, githubCfg.ClientSecret, githubCfg.CallbackURL))
+	}
+	if gitlabCfg := config.OAuth.Providers["gitlab"]; gitlabCfg.ClientID != "" && gitlabCfg.ClientSecret != "" {
+		authService.RegisterProvider(oauth.NewGitLabProvider(gitlabCfg.ClientID, gitlabCfg.ClientSecret, gitlabCfg.CallbackURL))
+	}
 
 	return &AuthHandlerConfigResponse{
 		AuthHandler:    handlers.NewAuthHandler(authService),

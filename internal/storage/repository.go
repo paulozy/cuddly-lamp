@@ -21,6 +21,7 @@ type Repository interface {
 	GetOrganizationBySlug(ctx context.Context, slug string) (*models.Organization, error)
 	CreateOrganization(ctx context.Context, org *models.Organization) error
 	GetOrganizationMember(ctx context.Context, orgID, userID string) (*models.OrganizationMember, error)
+	ListOrganizationMembersForUser(ctx context.Context, userID string) ([]models.OrganizationMember, error)
 	CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error
 	CountOrganizationMembers(ctx context.Context, orgID string) (int64, error)
 	GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error)

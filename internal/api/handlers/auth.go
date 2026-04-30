@@ -26,6 +26,7 @@ func NewAuthHandler(authService *services.AuthService) *AuthHandler {
 // @Produce      json
 // @Param        body  body      models.LoginRequest  true  "Credentials"
 // @Success      200   {object}  models.TokenResponse
+// @Success      202   {object}  models.OrganizationSelectionResponse
 // @Failure      400   {object}  models.ErrorResponse
 // @Failure      401   {object}  models.ErrorResponse
 // @Router       /auth/login [post]
@@ -40,10 +41,48 @@ func (h *AuthHandler) LoginWithEmail(c *gin.Context) {
 		return
 	}
 
-	tokenResponse, err := h.authService.LoginWithEmail(c.Request.Context(), c.Param("slug"), req.Email, req.Password)
+	tokenResponse, selectionResponse, err := h.authService.LoginWithEmail(c.Request.Context(), req.Email, req.Password, c.Param("slug"))
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
 			Error:            "authentication_failed",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	if selectionResponse != nil {
+		c.JSON(http.StatusAccepted, selectionResponse)
+		return
+	}
+
+	c.JSON(http.StatusOK, tokenResponse)
+}
+
+// SelectOrganization completes login after the user selects an organization.
+// @Summary      Select organization after login
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      models.SelectOrganizationRequest  true  "Organization selection"
+// @Success      200   {object}  models.TokenResponse
+// @Failure      400   {object}  models.ErrorResponse
+// @Failure      401   {object}  models.ErrorResponse
+// @Router       /auth/select-organization [post]
+func (h *AuthHandler) SelectOrganization(c *gin.Context) {
+	var req models.SelectOrganizationRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	tokenResponse, err := h.authService.SelectOrganization(c.Request.Context(), req.LoginTicket, req.OrganizationID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "organization_selection_failed",
 			ErrorDescription: err.Error(),
 		})
 		return
@@ -72,7 +111,21 @@ func (h *AuthHandler) RegisterWithEmail(c *gin.Context) {
 		return
 	}
 
-	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), c.Param("slug"), req.Email, req.FullName, req.Password)
+	if req.OrganizationSlug == "" {
+		req.OrganizationSlug = c.Param("slug")
+	}
+	if req.OrganizationName == "" {
+		req.OrganizationName = req.OrganizationSlug
+	}
+	if req.OrganizationName == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "organization_name is required",
+		})
+		return
+	}
+
+	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), req.Email, req.FullName, req.Password, req.OrganizationName, req.OrganizationSlug)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
 			Error:            "registration_failed",
@@ -190,6 +243,8 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 // @Summary      Initiate OAuth flow
 // @Tags         auth
 // @Param        provider  path      string  true  "OAuth provider (github, gitlab)"
+// @Param        organization_name  query  string  false  "Organization name for onboarding without an existing organization"
+// @Param        organization_slug  query  string  false  "Optional organization slug for onboarding"
 // @Success      307
 // @Failure      400  {object}  models.ErrorResponse
 // @Failure      500  {object}  models.ErrorResponse
@@ -198,16 +253,30 @@ func (h *AuthHandler) OAuthLogin(c *gin.Context) {
 	provider := c.Param("provider")
 	orgSlug := c.Param("slug")
 
-	org, err := h.authService.GetOrganizationBySlug(c.Request.Context(), orgSlug)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_organization",
-			ErrorDescription: err.Error(),
-		})
-		return
+	stateInput := services.OAuthStateInput{}
+	if orgSlug != "" {
+		org, err := h.authService.GetOrganizationBySlug(c.Request.Context(), orgSlug)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "invalid_organization",
+				ErrorDescription: err.Error(),
+			})
+			return
+		}
+		stateInput.OrganizationID = org.ID
+	} else {
+		stateInput.OrganizationName = c.Query("organization_name")
+		stateInput.OrganizationSlug = c.Query("organization_slug")
+		if stateInput.OrganizationName == "" {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "invalid_request",
+				ErrorDescription: "organization_name is required",
+			})
+			return
+		}
 	}
 
-	state, err := h.authService.GenerateOAuthState(org.ID)
+	state, err := h.authService.GenerateOAuthState(stateInput)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "oauth_error",

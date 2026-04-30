@@ -46,9 +46,11 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	FullName string `json:"full_name" binding:"required"`
-	Password string `json:"password" binding:"required,min=8"`
+	Email            string `json:"email" binding:"required,email"`
+	FullName         string `json:"full_name" binding:"required"`
+	Password         string `json:"password" binding:"required,min=8"`
+	OrganizationName string `json:"organization_name,omitempty"`
+	OrganizationSlug string `json:"organization_slug,omitempty"`
 }
 
 type TokenResponse struct {
@@ -59,6 +61,17 @@ type TokenResponse struct {
 	RefreshExpiresIn int64            `json:"refresh_expires_in"` // seconds
 	User             UserInfo         `json:"user"`
 	Organization     OrganizationInfo `json:"organization"`
+}
+
+type OrganizationSelectionResponse struct {
+	RequiresOrganizationSelection bool               `json:"requires_organization_selection"`
+	LoginTicket                   string             `json:"login_ticket"`
+	Organizations                 []OrganizationInfo `json:"organizations"`
+}
+
+type SelectOrganizationRequest struct {
+	LoginTicket    string `json:"login_ticket" binding:"required"`
+	OrganizationID string `json:"organization_id" binding:"required"`
 }
 
 type RefreshRequest struct {
