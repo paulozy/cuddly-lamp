@@ -15,10 +15,14 @@ import (
 
 type mockRepository struct {
 	storage.Repository
-	getRepoFunc        func(ctx context.Context, id string) (*models.Repository, error)
-	updateRepoFunc     func(ctx context.Context, repo *models.Repository) error
-	createAnalysisFunc func(ctx context.Context, analysis *models.CodeAnalysis) error
-	getConfigFunc      func(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
+	getRepoFunc                           func(ctx context.Context, id string) (*models.Repository, error)
+	updateRepoFunc                        func(ctx context.Context, repo *models.Repository) error
+	createAnalysisFunc                    func(ctx context.Context, analysis *models.CodeAnalysis) error
+	updateAnalysisFunc                    func(ctx context.Context, analysis *models.CodeAnalysis) error
+	getConfigFunc                         func(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
+	upsertPackageDependencyFunc           func(ctx context.Context, dep *models.PackageDependency) error
+	listPackageDependenciesFunc           func(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
+	updatePackageDependencyVulnStatusFunc func(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
 }
 
 func (m *mockRepository) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
@@ -42,11 +46,39 @@ func (m *mockRepository) CreateCodeAnalysis(ctx context.Context, analysis *model
 	return nil
 }
 
+func (m *mockRepository) UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error {
+	if m.updateAnalysisFunc != nil {
+		return m.updateAnalysisFunc(ctx, analysis)
+	}
+	return nil
+}
+
 func (m *mockRepository) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
 	if m.getConfigFunc != nil {
 		return m.getConfigFunc(ctx, orgID)
 	}
 	return nil, nil
+}
+
+func (m *mockRepository) UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error {
+	if m.upsertPackageDependencyFunc != nil {
+		return m.upsertPackageDependencyFunc(ctx, dep)
+	}
+	return nil
+}
+
+func (m *mockRepository) ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error) {
+	if m.listPackageDependenciesFunc != nil {
+		return m.listPackageDependenciesFunc(ctx, repoID, onlyVulnerable)
+	}
+	return nil, nil
+}
+
+func (m *mockRepository) UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error {
+	if m.updatePackageDependencyVulnStatusFunc != nil {
+		return m.updatePackageDependencyVulnStatusFunc(ctx, id, isVulnerable, cves, latestVersion)
+	}
+	return nil
 }
 
 type mockGithubClient struct {

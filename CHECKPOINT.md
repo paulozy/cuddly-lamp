@@ -1,4 +1,4 @@
-# Project Checkpoint - April 29, 2026
+# Project Checkpoint - April 30, 2026
 
 ## 📌 What Has Been Implemented
 
@@ -68,17 +68,26 @@
 - **Hybrid Ranking**: Search combines pgvector cosine similarity with textual boosts for content, file path, and language, then filters below `min_score` so weak queries can return zero results.
 - **pgvector Storage**: Uses `pgvector-go`, cosine candidate ranking, and `code_embeddings` metadata for provider/model/dimension/branch/commit tracking.
 
+### Dependency Tracking ✅
+- **Manifest Parsers**: `internal/dependencies/` parses `go.mod`, `package.json`, `requirements.txt`, and `Cargo.toml`.
+- **Package Model**: `PackageDependency` stores package name, current/latest version, ecosystem, manifest path, direct dependency flag, vulnerability status, CVEs, update availability, and last scan timestamp.
+- **Dependency Worker**: `TypeScanDependencies` (`dependency:scan`) shallow-clones repositories, parses manifests, upserts package rows, sends manifests to Claude for dependency analysis, persists a `CodeAnalysis` record of type `dependency`, and updates vulnerable package status.
+- **Claude Dependency Analysis**: Prompts cover known CVEs, outdated packages, license risks, transitive risks, change impact, and recommended versions. `recommended_version` is preserved in issue suggestions.
+- **HTTP Endpoints**: `POST /repositories/:id/dependencies/scan` queues manual scans with 10-minute deduplication; `GET /repositories/:id/dependencies?vulnerable=true` lists package inventory.
+- **Webhook Auto-Trigger**: Push and PR webhooks enqueue dependency scans only when supported manifest files change.
+- **Scope**: Suggestion-based updates only. Recommended versions are stored and can be surfaced in PR review comments; automatic update PR creation is not implemented.
+
 ### Infrastructure ✅
 - Redis cache layer — `Cache` interface with `ErrCacheMiss`, no-op fallback
 - Key builders: `TokenKey`, `UserKey`, `RepoKey`, `SessionKey`
 - asynq job queue — `Enqueuer` interface, priority queues (critical/default/low), dead-letter
-- Background workers registered in-process: `SyncWorker` (`repo:sync`) + `WebhookProcessor` (`webhook:process`)
+- Background workers registered in-process: `SyncWorker` (`repo:sync`), `WebhookProcessor` (`webhook:process`), `AnalysisWorker` (`repo:analyze`), `EmbeddingWorker` (`embeddings:generate`), `DependencyWorker` (`dependency:scan`)
 - GitHub API client (`internal/integrations/github/`) — repos, branches, commits, PRs, webhooks
 - GORM logger configured: `IgnoreRecordNotFoundError: true`, 200ms slow query threshold
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 7 SQL migrations applied and tracked via `schema_migrations`
+- 9 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -86,6 +95,8 @@
   - `005`: Sync status — added `'synced'` to `repositories.sync_status` check constraint
   - `006`: Encrypted fields — `access_token_encrypted` (bytea) on `oauth_connections`, `secret_encrypted` (bytea) on `webhook_configs`
   - `007`: Voyage embeddings — provider/model/dimension/branch metadata and `VECTOR(1024)` pgvector storage
+  - `008`: Organizations/multitenancy — organization tables, memberships, organization config
+  - `009`: Package dependencies — `package_dependencies` inventory with CVE/update metadata
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -119,6 +130,8 @@
 | GET | `/repositories/:id/analyses` | List code analyses for repository |
 | POST | `/repositories/:id/embeddings` | Queue semantic embedding generation |
 | GET | `/repositories/:id/search` | Semantic code search over generated embeddings |
+| POST | `/repositories/:id/dependencies/scan` | Queue dependency manifest scan |
+| GET | `/repositories/:id/dependencies` | List repository package dependencies (`?vulnerable=true`) |
 
 ---
 
@@ -134,6 +147,7 @@
 | `webhooks` | Incoming webhook events with status, retry, idempotency |
 | `code_analyses` | Code review results with issues (JSONB), metrics, model name, token usage |
 | `code_embeddings` | Voyage/pgvector source-code embeddings for semantic search |
+| `package_dependencies` | Package inventory with ecosystem, manifest path, vulnerability CVEs, update suggestions |
 | `schema_migrations` | Migration tracking — version + applied_at |
 
 ---
@@ -150,6 +164,7 @@ Valid values: `idle`, `syncing`, `synced`, `error` (enforced by DB check constra
 - HMAC-SHA256 over raw request body with per-repo secret
 - Secret generated with 32 bytes of `crypto/rand`, stored as hex
 - Duplicate deliveries detected by `X-GitHub-Delivery` ID before any processing
+- Dependency scans are auto-enqueued from webhook processing only when changed files include supported manifest basenames.
 
 ### Refresh Token Security (RFC 9700)
 - Stored as `SHA-256(raw_token)` — never cleartext
@@ -169,6 +184,13 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Key rotation**: Not yet implemented — future: store key version in database for multi-key support
 - **Migration tool** (`cmd/migrate-encrypt/`): Reads plaintext columns, encrypts to new columns, updates models, drops plaintext columns (safe two-phase migration)
 
+### Dependency Tracking
+- **Supported manifests**: `go.mod`, `package.json`, `requirements.txt`, `Cargo.toml`
+- **Upsert key**: `(repository_id, name, ecosystem)` keeps scans idempotent while refreshing versions/status
+- **AI request**: Manifest contents are sent as untrusted data under `ai.AnalysisTypeDependency`
+- **Vulnerability mapping**: Worker matches AI issues back to package rows by manifest path and package names, extracts `CVE-YYYY-NNNN` values, and stores latest recommended version when present
+- **Manual deduplication**: `asynq.TaskID("dependency:scan:manual:{repoID}")` with 10-minute retention returns 409 while a manual scan is already queued/running
+
 ---
 
 ## 📊 Test Coverage
@@ -178,12 +200,14 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 | `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, sync pipeline |
 | `internal/storage/redis` | Unit tests ✅ | cache get/set/del/exists, no-op fallback |
 | `internal/utils` | Unit tests ✅ | URL parsing |
+| `internal/dependencies` | Unit tests ✅ | manifest parser coverage |
+| `internal/workers` | Unit tests ✅ | analysis and dependency worker coverage |
+| `internal/api/handlers` | Unit tests ✅ | analysis helpers and dependency handler coverage |
 | `internal/storage/postgres` | Integration tests ⏳ | requires `TEST_DATABASE_URL` |
-| `internal/api/handlers` | None ❌ | next priority |
 
 ---
 
-## 📋 Latest Updates (April 29, Current Session)
+## 📋 Latest Updates (April 30, Current Session)
 
 ### Phase 1: Analysis Pipeline Deduplication ✅
 - **Trigger**: Manual analysis trigger via `POST /repositories/:id/analyze`
@@ -215,6 +239,15 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - **Schema**: Migration `007` adds provider/model/dimension/branch/commit metadata and converts embeddings to `VECTOR(1024)`
 - **Files**: `internal/embeddings/`, `internal/workers/embedding_worker.go`, `internal/api/handlers/analysis.go`, `migrations/007-add-voyage-embeddings-metadata.sql`
 
+### Phase 5: Dependency Tracking ✅
+- **Manifest parsing**: Added parsers/tests for Go modules, npm package manifests, Python requirements, and Cargo manifests
+- **Storage**: Added `PackageDependency` model, repository interface methods, Postgres upsert/list/update/delete implementations, and migration `009`
+- **Worker**: Added `DependencyWorker` for clone → parse → Claude dependency analysis → persist package and `CodeAnalysis` results
+- **Routes**: Added protected dependency scan/list endpoints and factory wiring
+- **Webhook integration**: Push/PR events enqueue dependency scans when supported manifest files change
+- **Tests**: Added parser tests, Anthropic dependency prompt/response tests, dependency worker test, and dependency handler tests
+- **Files**: `internal/dependencies/`, `internal/models/dependency.go`, `internal/workers/dependency_worker.go`, `internal/api/handlers/dependency_handler.go`, `migrations/009-add-package-dependencies.sql`
+
 ---
 
 ## 🎯 Next Steps
@@ -222,7 +255,8 @@ If `schema_migrations` is empty but `users` table exists, all current migration 
 - [x] **AI Integration** — Claude API for code analysis; pluggable `ai.Analyzer` interface with PR review posting
 - [x] **Analysis Pipeline** — Deduplication, token rate limiting, local metrics computation
 - [x] **Semantic search** — Voyage AI embeddings, pgvector storage, `TypeGenerateEmbeddings` job, search endpoints
-- [ ] **Handler tests** — unit tests for repository, analysis, and webhook handlers
+- [x] **Dependency tracking** — package manifest parsing, Claude CVE/update analysis, `TypeScanDependencies`, dependency endpoints
+- [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
 
@@ -244,7 +278,7 @@ REFRESH_TOKEN_TTL=10080      # minutes (7 days)
 ENCRYPTION_KEY               # Base64-encoded 32-byte key (generate: openssl rand -base64 32)
 
 # GitHub
-GITHUB_TOKEN                 # Personal access token (repo + admin:repo_hook scopes)
+GITHUB_TOKEN                 # Personal access token (repo + admin:repo_hook scopes; private clones for metrics/dependencies/embeddings)
 GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL
 GITHUB_PR_REVIEW_ENABLED     # Post AI-generated PR reviews to GitHub (default: false)
 
@@ -253,7 +287,7 @@ WEBHOOK_BASE_URL             # Public URL for webhook registration (ngrok in loc
                              # Leave empty or use localhost to skip GitHub registration
 
 # AI Integration
-ANTHROPIC_API_KEY            # Anthropic API key for Claude code analysis (optional)
+ANTHROPIC_API_KEY            # Anthropic API key for Claude code and dependency analysis (optional)
 ANTHROPIC_TOKENS_PER_HOUR=20000  # Hourly token budget for Anthropic API
 
 # Semantic Search
@@ -268,10 +302,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Auth Onboarding Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Commits this phase**: 8 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login)  
-**Total commits (AI + pipeline)**: 12  
-**Production Readiness**: ~90% (auth + repo + webhook + encryption + AI analysis + semantic search done; needs broader handler/integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans)  
+**Commits this phase**: 9 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking)  
+**Total commits (AI + pipeline)**: 13  
+**Production Readiness**: ~92% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking done; needs broader integration tests, key rotation)
 
 ---
 
@@ -288,6 +322,7 @@ make dev
 - 5 Repository endpoints (CRUD)
 - 2 Analysis endpoints (trigger, list)
 - 2 Semantic search endpoints (generate embeddings, search)
+- 2 Dependency endpoints (scan, list)
 - 1 Webhook endpoint (GitHub receiver)
 - 1 Health endpoint
 - 3 Swagger UI routes

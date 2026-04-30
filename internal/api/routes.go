@@ -31,9 +31,10 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
 	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
+	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler, orgConfigHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, webhookHandler, analysisHandler, dependencyHandler, orgConfigHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -50,6 +51,7 @@ func setupAPIRoutes(
 	repoHandler *handlers.RepositoryHandler,
 	webhookHandler *handlers.WebhookHandler,
 	analysisHandler *handlers.AnalysisHandler,
+	dependencyHandler *handlers.DependencyHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 ) {
 	// Swagger UI
@@ -92,5 +94,7 @@ func setupAPIRoutes(
 		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
 		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
 		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
+		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)
+		protected.GET("/repositories/:id/dependencies", dependencyHandler.ListDependencies)
 	}
 }

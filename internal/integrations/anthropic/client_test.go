@@ -95,6 +95,52 @@ func TestClient_BuildPrompt_PRAnalysis(t *testing.T) {
 	}
 }
 
+func TestClient_BuildPrompt_DependencyAnalysis(t *testing.T) {
+	client := NewClient("test-key")
+	req := &ai.AnalysisRequest{
+		RepoName:     "my-api",
+		Branch:       "main",
+		AnalysisType: ai.AnalysisTypeDependency,
+		ChangedFiles: []ai.ChangedFile{
+			{Path: "go.mod", Status: "modified", Patch: "require golang.org/x/crypto v0.1.0"},
+		},
+	}
+
+	prompt := client.buildPrompt(req)
+	for _, want := range []string{"Dependency Analysis", "Known CVEs", "recommended_version", "go.mod"} {
+		if !contains(prompt, want) {
+			t.Fatalf("dependency prompt missing %q", want)
+		}
+	}
+}
+
+func TestClient_ParseResponse_RecommendedVersion(t *testing.T) {
+	client := NewClient("test-key")
+	result, err := client.parseResponse(`{
+		"summary": "dependency issue",
+		"issues": [{
+			"category": "vulnerable_dependency",
+			"severity": "high",
+			"title": "x/crypto vulnerable",
+			"description": "CVE-2024-0001",
+			"suggestion": "Upgrade package",
+			"file_path": "go.mod",
+			"line": 4,
+			"recommended_version": "v0.31.0"
+		}],
+		"metrics": {"lines_of_code": 0, "cyclomatic_complexity": 0}
+	}`, 123)
+	if err != nil {
+		t.Fatalf("parseResponse returned error: %v", err)
+	}
+	if len(result.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(result.Issues))
+	}
+	if !contains(result.Issues[0].Suggestion, "recommended: v0.31.0") {
+		t.Fatalf("suggestion = %q", result.Issues[0].Suggestion)
+	}
+}
+
 // TestClient_AnalyzeCode_NoAPIKey tests error handling when API key is invalid
 // (Skipped: requires valid API key to run full integration test)
 

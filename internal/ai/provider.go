@@ -9,6 +9,7 @@ const (
 	AnalysisTypeCodeReview   AnalysisType = "code_review"
 	AnalysisTypeSecurity     AnalysisType = "security"
 	AnalysisTypeArchitecture AnalysisType = "architecture"
+	AnalysisTypeDependency   AnalysisType = "dependency"
 )
 
 // CommitSummary represents a simplified commit for AI analysis

@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -100,19 +102,22 @@ func (h *WebhookHandler) HandleGitHubWebhook(c *gin.Context) {
 
 	eventType := resolveEventType(c.GetHeader("X-GitHub-Event"))
 
+	eventPayload := models.WebhookEventPayload{
+		EventType:    string(eventType),
+		Provider:     "github",
+		Timestamp:    time.Now().UTC(),
+		RepositoryID: repoID,
+		RawData:      map[string]interface{}{"body": string(body)},
+	}
+	enrichGitHubEventPayload(body, &eventPayload)
+
 	webhook := &models.Webhook{
 		RepositoryID: repoID,
 		EventType:    eventType,
-		EventPayload: models.WebhookEventPayload{
-			EventType:    string(eventType),
-			Provider:     "github",
-			Timestamp:    time.Now().UTC(),
-			RepositoryID: repoID,
-			RawData:      map[string]interface{}{"body": string(body)},
-		},
-		Status:     "pending",
-		DeliveryID: deliveryID,
-		MaxRetries: 3,
+		EventPayload: eventPayload,
+		Status:       "pending",
+		DeliveryID:   deliveryID,
+		MaxRetries:   3,
 	}
 
 	if err := h.repo.CreateWebhook(ctx, webhook); err != nil {
@@ -129,6 +134,40 @@ func (h *WebhookHandler) HandleGitHubWebhook(c *gin.Context) {
 	}
 
 	c.Status(http.StatusAccepted)
+}
+
+func enrichGitHubEventPayload(body []byte, payload *models.WebhookEventPayload) {
+	var raw struct {
+		Ref        string `json:"ref"`
+		After      string `json:"after"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+		PullRequest struct {
+			ID     int `json:"id"`
+			Number int `json:"number"`
+			Head   struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			} `json:"head"`
+		} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return
+	}
+	payload.RepositoryName = raw.Repository.FullName
+	if raw.Ref != "" {
+		payload.Branch = strings.TrimPrefix(raw.Ref, "refs/heads/")
+	}
+	if raw.After != "" {
+		payload.CommitSHA = raw.After
+	}
+	if raw.PullRequest.Number > 0 {
+		payload.PullRequestID = &raw.PullRequest.Number
+		payload.PullRequestNumber = &raw.PullRequest.Number
+		payload.Branch = raw.PullRequest.Head.Ref
+		payload.CommitSHA = raw.PullRequest.Head.SHA
+	}
 }
 
 func resolveEventType(event string) models.WebhookEventType {

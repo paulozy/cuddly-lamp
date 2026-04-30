@@ -488,6 +488,62 @@ func (pr *PostgresRepository) GetRepositoriesNeedingAnalysis(ctx context.Context
 	return repos, nil
 }
 
+// ============ Package Dependency Operations ============
+
+func (pr *PostgresRepository) UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error {
+	if dep.RepositoryID == "" || dep.Name == "" || dep.Ecosystem == "" {
+		return errors.New("invalid package dependency data")
+	}
+	if err := pr.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "repository_id"}, {Name: "name"}, {Name: "ecosystem"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"current_version", "latest_version", "manifest_file", "is_direct_dependency",
+				"is_vulnerable", "vulnerability_cves", "update_available", "last_scanned_at", "updated_at",
+			}),
+		}).
+		Create(dep).Error; err != nil {
+		return fmt.Errorf("upsert package dependency: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error) {
+	var deps []*models.PackageDependency
+	query := pr.db.WithContext(ctx).Where("repository_id = ?", repoID)
+	if onlyVulnerable {
+		query = query.Where("is_vulnerable = true")
+	}
+	if err := query.Order("ecosystem ASC, name ASC").Find(&deps).Error; err != nil {
+		return nil, fmt.Errorf("list package dependencies: %w", err)
+	}
+	return deps, nil
+}
+
+func (pr *PostgresRepository) UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error {
+	updates := map[string]interface{}{
+		"is_vulnerable":      isVulnerable,
+		"vulnerability_cves": models.StringArray(cves),
+		"latest_version":     latestVersion,
+		"update_available":   latestVersion != "",
+		"updated_at":         time.Now().UTC(),
+	}
+	if err := pr.db.WithContext(ctx).
+		Model(&models.PackageDependency{}).
+		Where("id = ?", id).
+		Updates(updates).Error; err != nil {
+		return fmt.Errorf("update package dependency vulnerability status: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) DeletePackageDependencies(ctx context.Context, repoID string) error {
+	if err := pr.db.WithContext(ctx).Where("repository_id = ?", repoID).Delete(&models.PackageDependency{}).Error; err != nil {
+		return fmt.Errorf("delete package dependencies: %w", err)
+	}
+	return nil
+}
+
 // ============ Code Embedding Operations ============
 
 func (pr *PostgresRepository) CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error {

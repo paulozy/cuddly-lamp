@@ -1,6 +1,6 @@
 # IDP Backend - Identity Provider with AI Integration
 
-Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
+Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), AI code/dependency analysis, and semantic code search integration. Built with Go, PostgreSQL, and pgvector for embeddings.
 
 ## ✨ Features Implemented
 
@@ -26,13 +26,14 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 6 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields)
+- ✅ 9 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
 - ✅ Soft deletes (deleted_at timestamps)
 - ✅ Audit triggers (created_at, updated_at automation)
 - ✅ Encrypted fields: OAuth tokens (access_token_encrypted), webhook secrets (secret_encrypted)
+- ✅ Package dependency inventory with CVE/update metadata
 
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
@@ -82,6 +83,15 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
 - ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis, using `GITHUB_TOKEN` for private repositories when configured
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
+
+### Dependency Tracking
+- ✅ Manifest parsers for `go.mod`, `package.json`, `requirements.txt`, and `Cargo.toml`
+- ✅ Package inventory stored in `package_dependencies` with unique `(repository_id, name, ecosystem)` upserts
+- ✅ Dependency scan worker (`dependency:scan`) — shallow clone, parse manifests, call Claude, persist analysis and vulnerability status
+- ✅ Claude dependency analysis for CVEs, outdated packages, license risks, transitive risks, and recommended versions
+- ✅ HTTP endpoints: `POST /repositories/:id/dependencies/scan`, `GET /repositories/:id/dependencies?vulnerable=true`
+- ✅ Webhook auto-trigger when push/PR changes include supported manifest files
+- ✅ Suggestion-based updates only: recommended versions are stored/commented, no automatic update PR creation
 
 ### Semantic Code Search
 - ✅ Voyage AI embeddings with provider abstraction (`internal/embeddings`)
@@ -139,7 +149,17 @@ curl "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=where%20is%20t
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### 5. Test the server
+### 5. Scan repository dependencies
+```bash
+# Requires ANTHROPIC_API_KEY, Redis/asynq enabled, and GITHUB_TOKEN for private repositories
+curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/dependencies/scan \
+  -H "Authorization: Bearer $TOKEN"
+
+curl "http://localhost:3000/api/v1/repositories/$REPO_ID/dependencies?vulnerable=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 6. Test the server
 ```bash
 # Health check
 curl http://localhost:3000/api/v1/health
@@ -256,7 +276,8 @@ backend/
 │   │   │   ├── auth.go            # Login, register, OAuth, logout, /users/me
 │   │   │   ├── repository.go      # Repository CRUD endpoints
 │   │   │   ├── webhook.go         # GitHub webhook receiver (HMAC validation)
-│   │   │   └── analysis.go        # Code analysis + semantic search endpoints
+│   │   │   ├── analysis.go        # Code analysis + semantic search endpoints
+│   │   │   └── dependency_handler.go # Dependency scan/list endpoints
 │   │   ├── middleware/
 │   │   │   ├── auth.go            # JWT verification, context storage
 │   │   │   ├── logger.go          # Request logging
@@ -267,11 +288,15 @@ backend/
 │   │   │   ├── make_auth_handler.go        # DI: auth service + providers
 │   │   │   ├── make_repository_handler.go  # DI: repository service
 │   │   │   ├── make_webhook_handler.go     # DI: webhook handler
-│   │   │   └── make_analysis_handler.go    # DI: analysis handler
+│   │   │   ├── make_analysis_handler.go    # DI: analysis handler
+│   │   │   └── make_dependency_handler.go  # DI: dependency handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
 │   ├── ai/                        # Pluggable AI provider interface
 │   │   ├── provider.go            # Analyzer interface + request/response types
 │   │   └── mock_analyzer.go       # Mock implementation for testing
+│   ├── dependencies/              # Package manifest parsers
+│   │   ├── parser.go              # go.mod, package.json, requirements.txt, Cargo.toml parsers
+│   │   └── parser_test.go         # Parser unit tests
 │   ├── embeddings/                # Semantic-search provider abstraction + chunking
 │   │   ├── provider.go            # Embedding Provider interface
 │   │   ├── voyage.go              # Voyage AI implementation
@@ -302,12 +327,14 @@ backend/
 │   │   ├── webhook_processor.go   # Handles webhook:process asynq task
 │   │   ├── analysis_worker.go     # Handles repo:analyze asynq task (code + PR analysis)
 │   │   ├── embedding_worker.go    # Handles embeddings:generate asynq task
+│   │   ├── dependency_worker.go   # Handles dependency:scan asynq task
 │   │   └── analysis_worker_test.go # Analysis worker tests
 │   ├── models/
 │   │   ├── user.go                # User with roles
 │   │   ├── oauth_connection.go    # OAuth connections (provider links)
 │   │   ├── auth.go                # Auth DTOs (LoginRequest, TokenResponse)
 │   │   ├── repository.go          # Repository + RepositoryMetadata + StringArray
+│   │   ├── dependency.go          # PackageDependency model
 │   │   ├── repository_dto.go      # CreateRepositoryRequest, UpdateRepositoryRequest
 │   │   ├── webhook.go             # Webhook events + WebhookConfig + StringArray type
 │   │   ├── code_analysis.go       # Code analysis results (issues, metrics, model used)
@@ -341,7 +368,9 @@ backend/
 │   ├── 004-add-refresh-token-rotation.sql  # family_id, parent_jti for token rotation
 │   ├── 005-add-synced-status.sql  # Add 'synced' to sync_status check constraint
 │   ├── 006-encrypt-sensitive-fields.sql  # Add encrypted columns (access_token_encrypted, secret_encrypted)
-│   └── 007-add-voyage-embeddings-metadata.sql  # Voyage/pgvector semantic search metadata + VECTOR(1024)
+│   ├── 007-add-voyage-embeddings-metadata.sql  # Voyage/pgvector semantic search metadata + VECTOR(1024)
+│   ├── 008-add-organizations-multitenancy.sql  # Organizations, memberships, org config
+│   └── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -384,13 +413,13 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB** - Redis (optional — app starts without it)
 - **JWT_SECRET** - Secret for JWT signing and state token validation
 - **ENCRYPTION_KEY** - Base64-encoded 32-byte key for AES-256-GCM encryption (generate with `openssl rand -base64 32`)
-- **ANTHROPIC_API_KEY** - Claude API key for code analysis (optional — skips analysis if not set)
+- **ANTHROPIC_API_KEY** - Claude API key for code and dependency analysis (optional — skips analysis if not set)
 - **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
 - **VOYAGE_API_KEY** - Voyage AI API key for semantic code search (optional — skips embedding provider if not set)
 - **EMBEDDINGS_PROVIDER** - Embedding provider selector (default: voyage)
 - **EMBEDDINGS_MODEL** - Embedding model (default: voyage-code-3)
 - **EMBEDDINGS_DIMENSIONS** - Embedding vector dimension (default: 1024)
-- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR operations, and private repository clones for metrics/embeddings)
+- **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR operations, and private repository clones for metrics/dependency scans/embeddings)
 - **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
 - **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -434,9 +463,10 @@ docker-compose exec postgres psql -U postgres -d idp_dev -c "SELECT * FROM schem
 - **Webhook** - Webhooks com retry logic e status de processamento
 - **CodeAnalysis** - Análises de código com issues, métricas e embeddings
 - **CodeEmbedding** - Embeddings vetoriais para busca semântica (pgvector)
+- **PackageDependency** - Dependências de pacotes com versões, ecossistema, CVEs e status de atualização
 
 ### Database
-- **8 tabelas principais** com indexes otimizados
+- **Tabelas principais** com indexes otimizados para auth, repositórios, webhooks, análises, embeddings e dependências
 - **JSONB** para dados flexíveis (metadata, issues, métricas)
 - **pgvector** para semantic search
 - **Soft deletes** (deleted_at column)
@@ -466,6 +496,10 @@ GetLatestAnalysis, GetRepositoriesNeedingAnalysis
 
 // Code Embeddings
 CreateCodeEmbedding, CreateCodeEmbeddings, SearchEmbeddings, DeleteEmbeddings
+
+// Package Dependencies
+UpsertPackageDependency, ListPackageDependencies,
+UpdatePackageDependencyVulnStatus, DeletePackageDependencies
 ```
 
 ## ⚙️ Important Implementation Details
@@ -535,10 +569,28 @@ Job queue (internal/jobs):
   No-op fallback — NewNoopEnqueuer() logs and discards jobs silently
 
 Task type constants (internal/jobs/tasks):
-  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings
+  TypeSyncRepo, TypeAnalyzeRepo, TypeProcessWebhook, TypeGenerateEmbeddings, TypeScanDependencies
 
 Key builders (internal/storage/redis/keys.go):
   TokenKey(jti), UserKey(id), RepoKey(id), SessionKey(id)
+```
+
+### Dependency Tracking
+```
+Supported manifests:
+  go.mod, package.json, requirements.txt, Cargo.toml
+
+Scan:
+  POST /api/v1/repositories/:id/dependencies/scan
+  Enqueues TypeScanDependencies with manual deduplication for 10 minutes
+  Worker clones repository, parses manifests, upserts package_dependencies, and sends manifests to Claude
+
+List:
+  GET /api/v1/repositories/:id/dependencies?vulnerable=true
+  Returns package inventory with current/latest versions, ecosystem, manifest file, CVEs, and vulnerability flags
+
+Webhook auto-trigger:
+  push and pull_request events enqueue dependency scans only when supported manifest files changed
 ```
 
 ### Semantic Search
@@ -581,6 +633,7 @@ Query:
 - [x] Organization onboarding + multi-org login selection flow
 - [x] Code analysis API + Claude integration — `TypeAnalyzeRepo` job with pluggable AI providers
 - [x] Semantic search with Voyage AI + pgvector embeddings — `TypeGenerateEmbeddings` job
+- [x] Dependency tracking — manifest parsing, `TypeScanDependencies` job, Claude CVE/update analysis, dependency endpoints
 - [ ] Rate limiting & request throttling
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
 
@@ -598,8 +651,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Auth Onboarding Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings)  
-**Última atualização**: April 29, 2026 (Real PR diff analysis + organization onboarding/multi-org login)
+**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans)  
+**Última atualização**: April 30, 2026 (Dependency tracking: manifest parsers, dependency scan worker, endpoints, storage, webhook auto-trigger)
 
 ### 📖 Accessing the API Documentation
 ```bash

@@ -58,6 +58,12 @@ type Repository interface {
 	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
 	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
+	// Package Dependency operations
+	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
+	ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
+	UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
+	DeletePackageDependencies(ctx context.Context, repoID string) error
+
 	// Code Embedding operations
 	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
 	CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error

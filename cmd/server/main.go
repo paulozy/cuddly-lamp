@@ -100,12 +100,14 @@ func main() {
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
 		embeddingWorker := workers.NewEmbeddingWorker(pgRepo)
 		analysisWorker := workers.NewAnalysisWorker(pgRepo)
+		dependencyWorker := workers.NewDependencyWorker(pgRepo, nil, ghClient)
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
 		worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
 		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
+		worker.Register(tasks.TypeScanDependencies, dependencyWorker.Handle)
 
 		go func() {
 			if err := worker.Run(); err != nil {
