@@ -217,7 +217,7 @@ func (pr *PostgresRepository) UpsertOrganizationConfig(ctx context.Context, cfg 
 				"voyage_api_key", "embeddings_model", "embeddings_dimensions",
 				"github_client_id", "github_client_secret", "github_callback_url",
 				"gitlab_client_id", "gitlab_client_secret", "gitlab_callback_url",
-				"updated_at",
+				"output_language", "updated_at",
 			}),
 		}).
 		Create(cfg).Error; err != nil {
