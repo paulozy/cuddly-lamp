@@ -63,9 +63,18 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID
 	}
 
 	if s.enqueuer != nil {
-		payload := tasks.SyncRepoPayload{RepositoryID: repo.ID}
-		if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, payload); err != nil {
+		syncPayload := tasks.SyncRepoPayload{RepositoryID: repo.ID}
+		if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, syncPayload); err != nil {
 			utils.Warn("repository: failed to enqueue sync job", "repo_id", repo.ID, "error", err)
+		}
+
+		analyzePayload := tasks.AnalyzeRepoPayload{
+			RepositoryID: repo.ID,
+			Type:         "code_review",
+			TriggeredBy:  "initial",
+		}
+		if err := s.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
+			utils.Warn("repository: failed to enqueue initial analysis", "repo_id", repo.ID, "error", err)
 		}
 	}
 

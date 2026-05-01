@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	rediscache "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
@@ -113,13 +114,22 @@ func (c *mockCache) Exists(_ context.Context, key string) (bool, error) {
 
 // ── mock enqueuer ──────────────────────────────────────────────────────────
 
-type mockEnqueuer struct{}
+type enqueuedTask struct {
+	taskType string
+	payload  any
+}
 
-func (m *mockEnqueuer) Enqueue(_ context.Context, _ string, _ any, _ ...asynq.Option) error {
+type mockEnqueuer struct {
+	tasks []enqueuedTask
+}
+
+func (m *mockEnqueuer) Enqueue(_ context.Context, taskType string, payload any, _ ...asynq.Option) error {
+	m.tasks = append(m.tasks, enqueuedTask{taskType: taskType, payload: payload})
 	return nil
 }
 
-func (m *mockEnqueuer) EnqueueIn(_ context.Context, _ string, _ any, _ time.Duration, _ ...asynq.Option) error {
+func (m *mockEnqueuer) EnqueueIn(_ context.Context, taskType string, payload any, _ time.Duration, _ ...asynq.Option) error {
+	m.tasks = append(m.tasks, enqueuedTask{taskType: taskType, payload: payload})
 	return nil
 }
 
@@ -127,6 +137,10 @@ func (m *mockEnqueuer) EnqueueIn(_ context.Context, _ string, _ any, _ time.Dura
 
 func newRepoService(store *mockRepoStore, cache rediscache.Cache) *RepositoryService {
 	return NewRepositoryService(store, cache, &mockEnqueuer{})
+}
+
+func newRepoServiceWithEnqueuer(store *mockRepoStore, cache rediscache.Cache, eq *mockEnqueuer) *RepositoryService {
+	return NewRepositoryService(store, cache, eq)
 }
 
 const (
@@ -178,6 +192,48 @@ func TestRepositoryService_Create_InvalidURL(t *testing.T) {
 	_, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: "https://bitbucket.org/owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for unsupported host, got nil")
+	}
+}
+
+func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
+	eq := &mockEnqueuer{}
+	svc := newRepoServiceWithEnqueuer(newMockRepoStore(), newMockCache(), eq)
+
+	resp, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(eq.tasks) != 2 {
+		t.Fatalf("enqueued tasks = %d, want 2 (sync + initial analysis); got %+v", len(eq.tasks), eq.tasks)
+	}
+
+	if eq.tasks[0].taskType != tasks.TypeSyncRepo {
+		t.Errorf("first task = %q, want %q", eq.tasks[0].taskType, tasks.TypeSyncRepo)
+	}
+	syncPayload, ok := eq.tasks[0].payload.(tasks.SyncRepoPayload)
+	if !ok {
+		t.Fatalf("first payload type = %T, want SyncRepoPayload", eq.tasks[0].payload)
+	}
+	if syncPayload.RepositoryID != resp.ID {
+		t.Errorf("sync payload RepositoryID = %q, want %q", syncPayload.RepositoryID, resp.ID)
+	}
+
+	if eq.tasks[1].taskType != tasks.TypeAnalyzeRepo {
+		t.Errorf("second task = %q, want %q", eq.tasks[1].taskType, tasks.TypeAnalyzeRepo)
+	}
+	analyzePayload, ok := eq.tasks[1].payload.(tasks.AnalyzeRepoPayload)
+	if !ok {
+		t.Fatalf("second payload type = %T, want AnalyzeRepoPayload", eq.tasks[1].payload)
+	}
+	if analyzePayload.RepositoryID != resp.ID {
+		t.Errorf("analyze payload RepositoryID = %q, want %q", analyzePayload.RepositoryID, resp.ID)
+	}
+	if analyzePayload.TriggeredBy != "initial" {
+		t.Errorf("analyze payload TriggeredBy = %q, want %q", analyzePayload.TriggeredBy, "initial")
+	}
+	if analyzePayload.Type != "code_review" {
+		t.Errorf("analyze payload Type = %q, want %q", analyzePayload.Type, "code_review")
 	}
 }
 
