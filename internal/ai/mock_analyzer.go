@@ -55,15 +55,19 @@ func (m *MockDocumentationGenerator) Provider() string {
 
 // MockSynthesizer is a test mock that implements Synthesizer. It supports two
 // modes: a custom StreamFunc, or a scripted Script that is replayed verbatim.
+// LastLanguage records the language passed to the most recent call so tests
+// can assert that callers propagate the org's configured output language.
 type MockSynthesizer struct {
-	StreamFunc func(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
-	Script     []SynthesisEvent
-	StartErr   error
+	StreamFunc   func(ctx context.Context, query, language string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
+	Script       []SynthesisEvent
+	StartErr     error
+	LastLanguage string
 }
 
-func (m *MockSynthesizer) StreamSearchSynthesis(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error) {
+func (m *MockSynthesizer) StreamSearchSynthesis(ctx context.Context, query, language string, snippets []SearchSnippet) (<-chan SynthesisEvent, error) {
+	m.LastLanguage = language
 	if m.StreamFunc != nil {
-		return m.StreamFunc(ctx, query, snippets)
+		return m.StreamFunc(ctx, query, language, snippets)
 	}
 	if m.StartErr != nil {
 		return nil, m.StartErr

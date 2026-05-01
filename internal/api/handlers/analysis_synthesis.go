@@ -65,7 +65,7 @@ func (h *AnalysisHandler) streamSearchSynthesis(
 		cache = redisstore.NewNoopCache()
 	}
 
-	fingerprint := computeSearchSynthesisFingerprint(query, response.Results, searchSynthesisModelTag)
+	fingerprint := computeSearchSynthesisFingerprint(query, response.Results, searchSynthesisModelTag, orgConfig.ResolvedOutputLanguage())
 	cacheKey := redisstore.SearchSynthesisKey(repository.ID, fingerprint)
 
 	if cached, err := cache.Get(c.Request.Context(), cacheKey); err == nil && cached != "" {
@@ -89,7 +89,7 @@ func (h *AnalysisHandler) streamSearchSynthesis(
 	streamCtx, cancel := context.WithTimeout(c.Request.Context(), searchSynthesisDeadline)
 	defer cancel()
 
-	events, err := synthesizer.StreamSearchSynthesis(streamCtx, query, snippets)
+	events, err := synthesizer.StreamSearchSynthesis(streamCtx, query, orgConfig.ResolvedOutputLanguage(), snippets)
 	if err != nil {
 		utils.Error("semantic search: synthesizer start failed", "repo_id", repository.ID, "error", err)
 		c.SSEvent("error", gin.H{"reason": "synthesis_start_failed"})
@@ -210,9 +210,11 @@ func snippetsFromResults(results []models.SemanticSearchResult) []ai.SearchSnipp
 }
 
 // computeSearchSynthesisFingerprint returns a stable hash of the query and the
-// ordered identity of the snippet set, scoped to the synthesizer model.
-// The same query against the same snippet set will produce the same key.
-func computeSearchSynthesisFingerprint(query string, results []models.SemanticSearchResult, model string) string {
+// ordered identity of the snippet set, scoped to the synthesizer model and the
+// requested output language. The same query against the same snippet set will
+// produce the same key for the same language; switching languages yields a
+// different key so callers never see a synthesis cached in the wrong language.
+func computeSearchSynthesisFingerprint(query string, results []models.SemanticSearchResult, model, language string) string {
 	items := make([]string, len(results))
 	for i, r := range results {
 		items[i] = fmt.Sprintf("%s:%d-%d", r.FilePath, r.StartLine, r.EndLine)
@@ -225,6 +227,8 @@ func computeSearchSynthesisFingerprint(query string, results []models.SemanticSe
 	h.Write([]byte(strings.Join(items, ",")))
 	h.Write([]byte("|"))
 	h.Write([]byte(model))
+	h.Write([]byte("|"))
+	h.Write([]byte(strings.ToLower(strings.TrimSpace(language))))
 	return hex.EncodeToString(h.Sum(nil))
 }
 

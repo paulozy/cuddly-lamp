@@ -154,6 +154,7 @@ func (w *DependencyWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 
 	req := buildDependencyAnalysisRequest(repository, payload, branch, manifests)
+	req.OutputLanguage = cfg.ResolvedOutputLanguage()
 	start := time.Now()
 	result, err := analyzer.AnalyzeCode(ctx, req)
 	processingMs := time.Since(start).Milliseconds()

@@ -60,6 +60,12 @@ type AnalysisRequest struct {
 
 	// Analysis parameters
 	AnalysisType AnalysisType
+
+	// OutputLanguage is the BCP 47 tag for the language of human-readable
+	// prose in the analysis result (summary, title, description, suggestion).
+	// Empty or "en" preserves canonical English output. Enum-like fields
+	// always stay in English regardless of this value.
+	OutputLanguage string
 }
 
 type DocumentationType string
@@ -80,6 +86,9 @@ type DocumentationRequest struct {
 	Frameworks      []string
 	Topics          []string
 	ContextMarkdown string
+	// OutputLanguage is the BCP 47 tag for the Markdown body. Empty or "en"
+	// produces English output.
+	OutputLanguage string
 }
 
 type DocumentationResult struct {
@@ -203,6 +212,10 @@ type SynthesisEvent struct {
 // Synthesizer streams a natural-language summary over a set of semantic search
 // snippets. Implementations must close the returned channel when the stream
 // ends (after a done or error event), and must respect ctx cancellation.
+//
+// The language argument is a BCP 47 tag selecting the output prose language;
+// empty or "en" produces English. Code identifiers and structured citations
+// (path:line) remain unchanged regardless of language.
 type Synthesizer interface {
-	StreamSearchSynthesis(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
+	StreamSearchSynthesis(ctx context.Context, query, language string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
 }

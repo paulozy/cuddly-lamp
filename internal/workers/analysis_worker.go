@@ -148,6 +148,7 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	if err != nil {
 		return w.failAnalysis(ctx, repository, payload, fmt.Sprintf("failed to build analysis request: %v", err))
 	}
+	analysisReq.OutputLanguage = cfg.ResolvedOutputLanguage()
 
 	// Call analyzer
 	startTime := time.Now()

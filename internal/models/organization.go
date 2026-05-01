@@ -58,6 +58,8 @@ type OrganizationConfig struct {
 	GitLabClientSecret string `gorm:"type:bytea;serializer:enc" json:"-"`
 	GitLabCallbackURL  string `gorm:"type:text" json:"gitlab_callback_url,omitempty"`
 
+	OutputLanguage string `gorm:"column:output_language;type:varchar(20);default:'en'" json:"output_language"`
+
 	CreatedAt    time.Time    `json:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at"`
 	Organization Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
@@ -80,4 +82,16 @@ func (c *OrganizationConfig) ApplyDefaults() {
 	if c.EmbeddingsDimensions == 0 {
 		c.EmbeddingsDimensions = 1024
 	}
+	if c.OutputLanguage == "" {
+		c.OutputLanguage = "en"
+	}
+}
+
+// ResolvedOutputLanguage returns the configured BCP 47 output language tag,
+// falling back to "en" so callers never have to guard against an empty value.
+func (c *OrganizationConfig) ResolvedOutputLanguage() string {
+	if c == nil || c.OutputLanguage == "" {
+		return "en"
+	}
+	return c.OutputLanguage
 }

@@ -23,6 +23,10 @@ type TemplateRequest struct {
 	Stack          StackProfile
 	StackHint      string
 	TemplateID     string
+	// OutputLanguage is the BCP 47 tag for the human-readable summary.
+	// Generated source files (file content) stay in their natural code form;
+	// only the prose summary is localised. Empty or "en" yields English.
+	OutputLanguage string
 }
 
 type GeneratedFile struct {

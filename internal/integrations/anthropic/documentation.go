@@ -12,13 +12,17 @@ import (
 
 func (c *Client) GenerateDocumentation(ctx context.Context, req *ai.DocumentationRequest) (*ai.DocumentationResult, error) {
 	prompt := c.buildDocumentationPrompt(req)
-	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+	params := anthropic.MessageNewParams{
 		Model:     c.model,
 		MaxTokens: int64(templateMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	})
+	}
+	if sys := BuildSystemPrompt(req.OutputLanguage); sys != "" {
+		params.System = []anthropic.TextBlockParam{{Text: sys}}
+	}
+	message, err := c.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic api error: %w", err)
 	}

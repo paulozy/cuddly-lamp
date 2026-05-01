@@ -121,6 +121,7 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 			Frameworks:      append([]string(nil), repository.Metadata.Frameworks...),
 			Topics:          append([]string(nil), repository.Metadata.Topics...),
 			ContextMarkdown: contextMarkdown,
+			OutputLanguage:  cfg.ResolvedOutputLanguage(),
 		})
 		if err != nil {
 			return w.failDocGeneration(ctx, doc, fmt.Sprintf("generate %s documentation: %v", rawType, err))

@@ -128,7 +128,7 @@ func TestStreamSearchSynthesis_CacheHit_EmitsSingleSynthesisEvent(t *testing.T) 
 	cache := newFakeCache()
 
 	response := sampleResponse()
-	fingerprint := computeSearchSynthesisFingerprint(response.Query, response.Results, searchSynthesisModelTag)
+	fingerprint := computeSearchSynthesisFingerprint(response.Query, response.Results, searchSynthesisModelTag, "en")
 	cache.store[redisstore.SearchSynthesisKey("repo-1", fingerprint)] = "cached synthesis text"
 
 	factoryCalls := 0
@@ -203,7 +203,7 @@ func TestStreamSearchSynthesis_CacheMiss_StreamsTokenDeltasAndPersists(t *testin
 		t.Errorf("expected tokens_used:125 in done event:\n%s", body)
 	}
 
-	fingerprint := computeSearchSynthesisFingerprint(response.Query, response.Results, searchSynthesisModelTag)
+	fingerprint := computeSearchSynthesisFingerprint(response.Query, response.Results, searchSynthesisModelTag, "en")
 	cached, err := cache.Get(context.Background(), redisstore.SearchSynthesisKey("repo-1", fingerprint))
 	if err != nil {
 		t.Fatalf("expected synthesis to be cached, got err: %v", err)
@@ -283,8 +283,8 @@ func TestComputeSearchSynthesisFingerprint_StableForSameInput(t *testing.T) {
 		{FilePath: "a.go", StartLine: 1, EndLine: 10},
 		{FilePath: "b.go", StartLine: 5, EndLine: 20},
 	}
-	a := computeSearchSynthesisFingerprint("login", results, "model-x")
-	b := computeSearchSynthesisFingerprint("login", results, "model-x")
+	a := computeSearchSynthesisFingerprint("login", results, "model-x", "en")
+	b := computeSearchSynthesisFingerprint("login", results, "model-x", "en")
 	if a != b {
 		t.Error("fingerprint must be stable for same input")
 	}
@@ -299,15 +299,15 @@ func TestComputeSearchSynthesisFingerprint_OrderIndependent(t *testing.T) {
 		{FilePath: "b.go", StartLine: 5, EndLine: 20},
 		{FilePath: "a.go", StartLine: 1, EndLine: 10},
 	}
-	if computeSearchSynthesisFingerprint("q", r1, "m") != computeSearchSynthesisFingerprint("q", r2, "m") {
+	if computeSearchSynthesisFingerprint("q", r1, "m", "en") != computeSearchSynthesisFingerprint("q", r2, "m", "en") {
 		t.Error("fingerprint should not depend on snippet order")
 	}
 }
 
 func TestComputeSearchSynthesisFingerprint_DiffersOnQueryChange(t *testing.T) {
 	results := []models.SemanticSearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 10}}
-	a := computeSearchSynthesisFingerprint("login", results, "m")
-	b := computeSearchSynthesisFingerprint("logout", results, "m")
+	a := computeSearchSynthesisFingerprint("login", results, "m", "en")
+	b := computeSearchSynthesisFingerprint("logout", results, "m", "en")
 	if a == b {
 		t.Error("fingerprint must differ when query changes")
 	}
@@ -316,8 +316,17 @@ func TestComputeSearchSynthesisFingerprint_DiffersOnQueryChange(t *testing.T) {
 func TestComputeSearchSynthesisFingerprint_DiffersOnSnippetSetChange(t *testing.T) {
 	results1 := []models.SemanticSearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 10}}
 	results2 := []models.SemanticSearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 11}}
-	if computeSearchSynthesisFingerprint("q", results1, "m") == computeSearchSynthesisFingerprint("q", results2, "m") {
+	if computeSearchSynthesisFingerprint("q", results1, "m", "en") == computeSearchSynthesisFingerprint("q", results2, "m", "en") {
 		t.Error("fingerprint must differ when snippet line range changes")
+	}
+}
+
+func TestComputeSearchSynthesisFingerprint_DiffersOnLanguageChange(t *testing.T) {
+	results := []models.SemanticSearchResult{{FilePath: "a.go", StartLine: 1, EndLine: 10}}
+	en := computeSearchSynthesisFingerprint("login", results, "m", "en")
+	pt := computeSearchSynthesisFingerprint("login", results, "m", "pt-BR")
+	if en == pt {
+		t.Error("fingerprint must differ when language changes")
 	}
 }
 

@@ -74,16 +74,21 @@ func truncateLines(content string, maxLines int) string {
 // StreamSearchSynthesis implements ai.Synthesizer for the Anthropic provider.
 // It opens a streaming Messages call and bridges the SDK events onto a typed
 // channel of ai.SynthesisEvent values.
-func (c *Client) StreamSearchSynthesis(ctx context.Context, query string, snippets []ai.SearchSnippet) (<-chan ai.SynthesisEvent, error) {
+func (c *Client) StreamSearchSynthesis(ctx context.Context, query, language string, snippets []ai.SearchSnippet) (<-chan ai.SynthesisEvent, error) {
 	prompt := BuildSearchSynthesisPrompt(query, snippets)
 
-	stream := c.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+	params := anthropic.MessageNewParams{
 		Model:     c.model,
 		MaxTokens: int64(synthesisMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	})
+	}
+	if sys := BuildSystemPrompt(language); sys != "" {
+		params.System = []anthropic.TextBlockParam{{Text: sys}}
+	}
+
+	stream := c.client.Messages.NewStreaming(ctx, params)
 
 	out := make(chan ai.SynthesisEvent, 8)
 	go func() {

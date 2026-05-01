@@ -38,14 +38,19 @@ func NewClient(apiKey string) *Client {
 func (c *Client) AnalyzeCode(ctx context.Context, req *ai.AnalysisRequest) (*ai.AnalysisResult, error) {
 	prompt := c.buildPrompt(req)
 
-	// Call Claude API using SDK
-	message, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+	params := anthropic.MessageNewParams{
 		Model:     c.model,
 		MaxTokens: int64(maxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	})
+	}
+	if sys := BuildSystemPrompt(req.OutputLanguage); sys != "" {
+		params.System = []anthropic.TextBlockParam{{Text: sys}}
+	}
+
+	// Call Claude API using SDK
+	message, err := c.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic api error: %w", err)
 	}

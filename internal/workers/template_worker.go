@@ -82,6 +82,7 @@ func (w *TemplateWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		Stack:          stack,
 		StackHint:      template.StackHint,
 		TemplateID:     template.ID,
+		OutputLanguage: cfg.ResolvedOutputLanguage(),
 	})
 	processingMs := time.Since(started).Milliseconds()
 	if err != nil {
