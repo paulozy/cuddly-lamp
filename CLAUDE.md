@@ -89,6 +89,7 @@ internal/
 11. **Intelligent Code Templates**: Complete — `ai.Generator` interface, Claude template generation, async `TypeGenerateTemplate` worker, `code_templates` JSONB storage, pinning/listing endpoints, Swagger annotations, and shared Anthropic token budget
 12. **Auto-Generated Documentation + Cross-Reference**: Complete — `TypeGenerateDocs` worker, `doc_generations` JSONB storage, GitHub branch/file/PR creation, `POST /repositories/:id/docs/generate`, and generated docs injected into future analysis prompts as project standards
 13. **Spatial Repository Navigation**: Complete — `repository_relationships` graph model, directed typed repo-to-repo edges, `GET /repositories/graph`, relationship CRUD endpoints, and legacy `repository_dependencies` backfill
+14. **Search Synthesis (opt-in SSE)**: Complete — `?synthesize=true` upgrades the existing search endpoint to SSE, streaming Claude-generated overviews of the matched snippets via `ai.Synthesizer.StreamSearchSynthesis`, with Redis caching, token-budget enforcement, and graceful fallback when no Anthropic key is configured
 
 ## Known Issues & Constraints
 
@@ -199,6 +200,9 @@ internal/
 - **Storage**: `code_embeddings.embedding` is `VECTOR(1024)` using `pgvector-go`; rows include provider, model, dimension, branch, commit SHA, content hash, file path, language, and line range.
 - **Relevance Controls**: Semantic search defaults to `min_score=0.55`; callers can tune `min_score` from `0` to `1`. Low-confidence searches can legitimately return `total: 0`.
 - **Provider Swap**: Add a new implementation of `embeddings.Provider`, extend config/bootstrap provider selection in `cmd/server/main.go`, and keep worker/handler/storage unchanged.
+- **AI Synthesis (opt-in SSE)**: With `?synthesize=true`, the same `GET /repositories/:id/search` endpoint upgrades to `text/event-stream` and emits a single `results` event (carrying the unchanged `SemanticSearchResponse`), then either a single `synthesis` event on cache hit or a sequence of `token_delta` events streamed from Claude on cache miss, then a terminal `done` event (`cached`, `tokens_used`, `model`). When the org has no `ANTHROPIC_API_KEY`, the stream emits `synthesis_unavailable` instead. Token-budget guard runs **before** the SSE upgrade so 429 stays plain JSON for both SSE and non-SSE clients. Synthesis tokens are persisted as `code_analyses` rows of type `search_synthesis` so they count toward `SumTokensUsedSince`. Without `?synthesize=true` the endpoint returns the legacy JSON response unchanged.
+- **Synthesis cache**: Successful syntheses are cached in Redis under `synth:search:{repoID}:{sha256(query|sorted-snippets|model)}` with a 1-hour TTL so repeated queries return instantly (see `internal/storage/redis/keys.go:SearchSynthesisKey`).
+- **Synthesizer interface**: `ai.Synthesizer.StreamSearchSynthesis` (in `internal/ai/provider.go`) is the extension point; the Anthropic implementation lives in `internal/integrations/anthropic/synthesis.go` and uses `Messages.NewStreaming`.
 
 ## Swagger/OpenAPI Documentation
 

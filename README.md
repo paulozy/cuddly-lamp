@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 12 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships)
+- ✅ 14 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships, code analysis PR lookup index, search synthesis analysis type)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -136,6 +136,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Relevance cutoff via `min_score` so weak searches can return zero results instead of noisy matches
 - ✅ HTTP endpoints: `POST /repositories/:id/embeddings`, `GET /repositories/:id/search?q=...&min_score=0.55`
 - ✅ Provider/model/dimension/branch metadata persisted for future provider swaps
+- ✅ **AI synthesis via opt-in SSE** — `?synthesize=true` upgrades the same endpoint to `text/event-stream`, emits a `results` event followed by streamed `token_delta` chunks (or a single cached `synthesis` event) and a terminal `done` event with token usage. Pluggable `ai.Synthesizer` interface; current implementation uses Claude's `Messages.NewStreaming`. Synthesis results are cached in Redis (1h TTL, keyed by query + ordered snippet identity + model). Tokens count toward the org's hourly Anthropic budget via `code_analyses` rows of type `search_synthesis`. Without the flag, the legacy JSON response is unchanged.
 
 ### Code Quality
 - ✅ Structured logging (zap)
@@ -182,6 +183,11 @@ curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/embeddings \
 
 curl "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=where%20is%20token%20rotation%20handled&limit=10&min_score=0.55" \
   -H "Authorization: Bearer $TOKEN"
+
+# AI synthesis stream (requires ANTHROPIC_API_KEY on the organization)
+curl -N "http://localhost:3000/api/v1/repositories/$REPO_ID/search?q=how%20is%20refresh%20token%20rotation%20implemented&synthesize=true" \
+  -H "Authorization: Bearer $TOKEN"
+# Streams: event: results (JSON) → event: token_delta (×N) → event: done
 ```
 
 ### 5. Scan repository dependencies
@@ -369,9 +375,9 @@ backend/
 │   │   │   └── make_template_handler.go    # DI: template handler
 │   │   └── routes.go              # Route registration (/api/v1/*)
 │   ├── ai/                        # Pluggable AI provider interfaces
-│   │   ├── provider.go            # Analyzer + DocumentationGenerator interfaces and types
+│   │   ├── provider.go            # Analyzer + DocumentationGenerator + Synthesizer interfaces and types
 │   │   ├── generator.go           # Generator interface + template request/result types
-│   │   ├── mock_analyzer.go       # Mock analyzer for testing
+│   │   ├── mock_analyzer.go       # Mock analyzer + synthesizer for testing
 │   │   └── mock_generator.go      # Mock generator for testing
 │   ├── dependencies/              # Package manifest parsers
 │   │   ├── parser.go              # go.mod, package.json, requirements.txt, Cargo.toml parsers
@@ -389,7 +395,8 @@ backend/
 │   │   │   ├── client.go          # Client implementing ai.Analyzer
 │   │   │   ├── documentation.go   # Client implementing ai.DocumentationGenerator
 │   │   │   ├── generator.go       # Client implementing ai.Generator
-│   │   │   └── *_test.go          # Anthropic analyzer/generator tests
+│   │   │   ├── synthesis.go       # Client implementing ai.Synthesizer (Messages.NewStreaming)
+│   │   │   └── *_test.go          # Anthropic analyzer/generator/synthesis tests
 │   │   └── github/                # GitHub API client (repos, branches, commits, PRs, contents, webhooks)
 │   │       ├── client.go          # HTTP client + ClientInterface
 │   │       ├── content.go         # Contents API branch/file operations
@@ -466,7 +473,9 @@ backend/
 │   ├── 009-add-package-dependencies.sql  # Package dependency inventory and CVE/update metadata
 │   ├── 010-add-code-templates.sql  # Code template storage and pinning metadata
 │   ├── 011-add-doc-generations.sql  # Doc generation jobs, content JSONB, and PR metadata
-│   └── 012-add-repository-relationships.sql  # Spatial repo relationship graph
+│   ├── 012-add-repository-relationships.sql  # Spatial repo relationship graph
+│   ├── 013-add-code-analysis-pr-lookup-index.sql  # Index for fast latest-analysis-per-PR lookup
+│   └── 014-add-search-synthesis-analysis-type.sql  # Allow `search_synthesis` in code_analyses.type CHECK
 ├── tests/
 │   └── GITHUB_SYNC_TESTING.md     # Manual integration testing guide (sync + webhooks)
 ├── .env.example                   # Environment variables template
@@ -815,6 +824,7 @@ Query:
 - [x] Auto-generated documentation — `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
 - [x] Spatial repository navigation — `repository_relationships`, graph endpoint, relationship CRUD, legacy dependency backfill
 - [x] Rate limiting & request throttling for Anthropic-backed manual triggers
+- [x] AI synthesis on semantic search — opt-in `?synthesize=true` SSE upgrade with Redis caching, budget guard, and graceful fallback
 - [ ] Integration tests for handlers and postgres repository (requires test DB)
 
 ## 🤝 Contribuindo
@@ -831,8 +841,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation)
-**Última atualização**: April 30, 2026 (Spatial navigation: repository relationship model, graph endpoint, relationship CRUD, legacy dependency backfill)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis)
+**Última atualização**: May 1, 2026 (Search synthesis: opt-in SSE on `/repositories/:id/search?synthesize=true`, `ai.Synthesizer` interface, Anthropic streaming, Redis cache, token-budget integration, graceful fallback)
 
 ### 📖 Accessing the API Documentation
 ```bash

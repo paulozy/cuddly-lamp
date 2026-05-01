@@ -1,4 +1,4 @@
-# Project Checkpoint - April 30, 2026
+# Project Checkpoint - May 1, 2026
 
 ## 📌 What Has Been Implemented
 
@@ -99,6 +99,15 @@
 - **Hybrid Ranking**: Search combines pgvector cosine similarity with textual boosts for content, file path, and language, then filters below `min_score` so weak queries can return zero results.
 - **pgvector Storage**: Uses `pgvector-go`, cosine candidate ranking, and `code_embeddings` metadata for provider/model/dimension/branch/commit tracking.
 
+### Search Synthesis (opt-in SSE) ✅
+- **Pluggable Architecture**: `ai.Synthesizer` interface in `internal/ai/provider.go` exposes `StreamSearchSynthesis` returning a typed `<-chan ai.SynthesisEvent` (`text_delta`, `usage`, `done`, `error`); `MockSynthesizer` provided for tests.
+- **Anthropic Streaming**: `internal/integrations/anthropic/synthesis.go` builds a deterministic prompt (capped 8 snippets × 60 lines, XML-tagged with HTML-escaped attributes) and bridges `Messages.NewStreaming` to the typed channel.
+- **Same Endpoint, Two Contracts**: `GET /repositories/:id/search` keeps its current JSON contract by default. With `?synthesize=true`, the response upgrades to `text/event-stream` and emits `results` (full `SemanticSearchResponse`), then either a single cached `synthesis` event or a stream of `token_delta` events, then a terminal `done` event with `cached`, `tokens_used`, and `model`.
+- **Cache**: Successful syntheses cached in Redis under `synth:search:{repoID}:{sha256(query|sorted-snippets|model)}` (1h TTL) via `redisstore.SearchSynthesisKey`.
+- **Budget Enforcement**: Token-budget guard runs **before** the SSE upgrade so an exhausted org budget returns a plain HTTP 429 for both SSE and non-SSE clients. Synthesis usage is persisted as `code_analyses` rows of type `search_synthesis` so it counts toward `SumTokensUsedSince`.
+- **Graceful Fallback**: When the org has no `ANTHROPIC_API_KEY`, the stream still emits `results` then `synthesis_unavailable` (reason: `anthropic_not_configured`) and `done`, so clients keep working without AI.
+- **Per-route Write Deadline**: SSE branch raises the connection write deadline to 45s via `http.ResponseController` so the longer stream is not cut by the global `srv.WriteTimeout: 15s`.
+
 ### Dependency Tracking ✅
 - **Manifest Parsers**: `internal/dependencies/` parses `go.mod`, `package.json`, `requirements.txt`, and `Cargo.toml`.
 - **Package Model**: `PackageDependency` stores package name, current/latest version, ecosystem, manifest path, direct dependency flag, vulnerability status, CVEs, update availability, and last scan timestamp.
@@ -118,7 +127,7 @@
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 12 SQL migrations applied and tracked via `schema_migrations`
+- 14 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -131,6 +140,8 @@
   - `010`: Code templates — `code_templates` generation results with JSONB files and pinning metadata
   - `011`: Doc generations — `doc_generations` job metadata, content JSONB, generated branch, PR URL/number, tokens, errors
   - `012`: Repository relationships — spatial graph edges with kind/source/confidence/metadata and legacy dependency backfill
+  - `013`: Code analysis PR lookup index — partial index on `(repository_id, pull_request_id, type, created_at DESC)` for fast latest-analysis-per-PR lookups
+  - `014`: Search synthesis analysis type — extends `code_analyses.type` CHECK constraint to allow `search_synthesis` so streamed search summaries can be persisted for token budgeting
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -167,7 +178,7 @@
 | POST | `/repositories/:id/analyze` | Trigger manual code analysis (returns 202 Accepted) |
 | GET | `/repositories/:id/analyses` | List code analyses for repository |
 | POST | `/repositories/:id/embeddings` | Queue semantic embedding generation |
-| GET | `/repositories/:id/search` | Semantic code search over generated embeddings |
+| GET | `/repositories/:id/search` | Semantic code search over generated embeddings (add `?synthesize=true` for SSE-streamed AI synthesis) |
 | POST | `/repositories/:id/dependencies/scan` | Queue dependency manifest scan |
 | GET | `/repositories/:id/dependencies` | List repository package dependencies (`?vulnerable=true`) |
 | POST | `/repositories/:id/docs/generate` | Queue AI documentation generation and GitHub PR delivery |
@@ -364,6 +375,17 @@ Generated paths:
 - **Tests**: Added service tests for independent repositories in graph, multiple relationships between the same repos, self-relationship rejection, and cross-organization rejection.
 - **Files**: `internal/models/repository_relationship.go`, `internal/models/repository_relationship_dto.go`, `internal/services/repository_relationship_service.go`, `internal/api/handlers/repository_relationship.go`, `migrations/012-add-repository-relationships.sql`
 
+### Phase 9: AI Synthesis on Semantic Search ✅
+- **Pluggable interface**: Added `ai.Synthesizer.StreamSearchSynthesis`, typed `SynthesisEvent` (`text_delta`/`usage`/`done`/`error`), `SearchSnippet` input, and `MockSynthesizer` for tests.
+- **Anthropic streaming**: Added deterministic prompt builder and `Messages.NewStreaming` bridge that maps SDK events to typed channel events and captures final usage from `message_delta`.
+- **SSE branch**: Extended `SemanticSearch` to detect `?synthesize=true`. Pre-flights and budget guard run before any SSE bytes are written so 429 stays plain JSON. Headers: `text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`. Per-request write deadline of 45s overrides the global `srv.WriteTimeout: 15s`.
+- **Cache**: Added `synth:search:` Redis prefix and `SearchSynthesisKey` builder. Fingerprint = `sha256(query | sorted("path:start-end") | model)`. TTL 1h. Cache hit emits a single `synthesis` event with `cached: true` in `done`.
+- **Token persistence**: Added `AnalysisTypeSearchSynthesis` constant and migration `014` to extend the `code_analyses.type` CHECK. After streaming completes, the handler persists a `code_analyses` row with `tokens_used` so it counts toward `SumTokensUsedSince` automatically.
+- **Graceful fallback**: When the org has no `ANTHROPIC_API_KEY`, the stream emits `results` then `synthesis_unavailable` and `done` instead of failing.
+- **DI changes**: `NewAnalysisHandler` now takes `redisstore.Cache` and a `SynthesizerFactory(apiKey) ai.Synthesizer`. `MakeAnalysisHandler` wires Anthropic via the org-resolved key. `RegisterRoutes` passes `params.Cache` through.
+- **Tests**: Added prompt builder tests (capping/truncation/escaping/determinism) and SSE handler tests (no-key fallback, cache hit, cache miss with token deltas + persistence, stream error, synthesizer start failure, fingerprint stability/order-independence).
+- **Files**: `internal/ai/provider.go`, `internal/ai/mock_analyzer.go`, `internal/integrations/anthropic/synthesis.go`, `internal/integrations/anthropic/synthesis_test.go`, `internal/storage/redis/keys.go`, `internal/api/handlers/analysis.go`, `internal/api/handlers/analysis_synthesis.go`, `internal/api/handlers/analysis_synthesis_test.go`, `internal/api/factories/make_analysis_handler.go`, `internal/api/routes.go`, `internal/models/code_analysis.go`, `migrations/014-add-search-synthesis-analysis-type.sql`, `CLAUDE.md`, `docs/docs.go`
+
 ---
 
 ## 🎯 Next Steps
@@ -375,6 +397,7 @@ Generated paths:
 - [x] **Intelligent code templates** — Claude scaffold generation, `TypeGenerateTemplate`, template endpoints, JSONB file storage, pinning
 - [x] **Auto-generated documentation** — Claude Markdown generation, `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
 - [x] **Spatial repository navigation** — typed repo relationship graph, graph endpoint, relationship CRUD, legacy dependency backfill
+- [x] **AI synthesis on semantic search** — opt-in `?synthesize=true` SSE upgrade, `ai.Synthesizer` interface, Anthropic streaming, Redis-cached summaries, token-budget integration, graceful fallback
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -421,10 +444,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation)
-**Commits this phase**: 11 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph)
-**Total commits (AI + pipeline)**: 15
-**Production Readiness**: ~94% (auth + repo + webhook + encryption + AI analysis + semantic search + dependency tracking + docs generation + spatial graph done; needs broader integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis)
+**Commits this phase**: 12 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph, search synthesis SSE)
+**Total commits (AI + pipeline)**: 16
+**Production Readiness**: ~95% (auth + repo + webhook + encryption + AI analysis + semantic search + synthesis streaming + dependency tracking + docs generation + spatial graph done; needs broader integration tests, key rotation)
 
 ---
 
