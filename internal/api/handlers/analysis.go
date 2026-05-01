@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -20,8 +21,9 @@ import (
 )
 
 type AnalysisHandler struct {
-	repo     storage.Repository
-	enqueuer jobs.Enqueuer
+	repo          storage.Repository
+	enqueuer      jobs.Enqueuer
+	githubFactory func(token string) github.ClientInterface
 }
 
 const defaultSemanticMinScore = 0.55
@@ -30,6 +32,9 @@ func NewAnalysisHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *Analys
 	return &AnalysisHandler{
 		repo:     repo,
 		enqueuer: enqueuer,
+		githubFactory: func(token string) github.ClientInterface {
+			return github.NewClient(token)
+		},
 	}
 }
 

@@ -123,6 +123,98 @@ func TestClient_ListPullRequests(t *testing.T) {
 	}
 }
 
+func TestClient_GetPullRequest_ParsesHeadAndBaseRefs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/owner/repo/pulls/42" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"number": 42,
+			"title":  "fix",
+			"head": map[string]string{
+				"ref": "feature",
+				"sha": "head-sha",
+			},
+			"base": map[string]string{
+				"ref": "main",
+				"sha": "base-sha",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	pr, err := newTestClient(srv).GetPullRequest(context.Background(), "owner", "repo", 42)
+	if err != nil {
+		t.Fatalf("GetPullRequest returned error: %v", err)
+	}
+	if pr.Head.DisplayName() != "feature" || pr.Head.SHA != "head-sha" {
+		t.Fatalf("head = %+v, want feature/head-sha", pr.Head)
+	}
+	if pr.Base.DisplayName() != "main" || pr.Base.SHA != "base-sha" {
+		t.Fatalf("base = %+v, want main/base-sha", pr.Base)
+	}
+}
+
+func TestClient_CreatePullRequestReview(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "comment", event: "COMMENT"},
+		{name: "approve", event: "APPROVE"},
+		{name: "request changes", event: "REQUEST_CHANGES"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/repos/owner/repo/pulls/42/reviews" {
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				var body struct {
+					Body     string               `json:"body"`
+					Event    string               `json:"event"`
+					Comments []ReviewCommentInput `json:"comments"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				if body.Body != "review body" || body.Event != tt.event {
+					t.Fatalf("body = %+v, want review body/%s", body, tt.event)
+				}
+				if len(body.Comments) != 1 || body.Comments[0].Path != "main.go" || body.Comments[0].Position != 2 {
+					t.Fatalf("comments = %+v, want main.go position 2", body.Comments)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"id": 123})
+			}))
+			defer srv.Close()
+
+			id, err := newTestClient(srv).CreatePullRequestReview(context.Background(), "owner", "repo", 42, "review body", tt.event, []ReviewCommentInput{{Path: "main.go", Position: 2, Body: "fix"}})
+			if err != nil {
+				t.Fatalf("CreatePullRequestReview returned error: %v", err)
+			}
+			if id != 123 {
+				t.Fatalf("id = %d, want 123", id)
+			}
+		})
+	}
+}
+
+func TestClient_CreatePullRequestReview_MissingID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"node_id": "missing"})
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv).CreatePullRequestReview(context.Background(), "owner", "repo", 42, "body", "COMMENT", nil)
+	if err == nil {
+		t.Fatal("expected error for missing review id")
+	}
+}
+
 func TestCreateBranch(t *testing.T) {
 	var createdRef string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

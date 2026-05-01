@@ -555,6 +555,47 @@ func (pr *PostgresRepository) GetLatestAnalysis(ctx context.Context, repoID stri
 	return &analysis, nil
 }
 
+func (pr *PostgresRepository) GetLatestAnalysisForPullRequest(ctx context.Context, repoID string, pullRequestID int, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {
+	var analysis models.CodeAnalysis
+	if err := pr.db.WithContext(ctx).
+		Where("repository_id = ? AND pull_request_id = ? AND type = ?", repoID, pullRequestID, analysisType).
+		Order("created_at DESC").
+		First(&analysis).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest pull request analysis: %w", err)
+	}
+	return &analysis, nil
+}
+
+func (pr *PostgresRepository) ListLatestAnalysesForPullRequests(ctx context.Context, repoID string, pullRequestIDs []int, analysisType models.AnalysisType) (map[int]models.CodeAnalysis, error) {
+	out := make(map[int]models.CodeAnalysis)
+	if len(pullRequestIDs) == 0 {
+		return out, nil
+	}
+
+	var analyses []models.CodeAnalysis
+	if err := pr.db.WithContext(ctx).
+		Where("repository_id = ? AND pull_request_id IN ? AND type = ?", repoID, pullRequestIDs, analysisType).
+		Order("pull_request_id ASC, created_at DESC").
+		Find(&analyses).Error; err != nil {
+		return nil, fmt.Errorf("list latest pull request analyses: %w", err)
+	}
+
+	for _, analysis := range analyses {
+		if analysis.PullRequestID == nil {
+			continue
+		}
+		if _, exists := out[*analysis.PullRequestID]; exists {
+			continue
+		}
+		out[*analysis.PullRequestID] = analysis
+	}
+
+	return out, nil
+}
+
 func (pr *PostgresRepository) GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error) {
 	var repos []models.Repository
 

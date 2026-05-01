@@ -363,6 +363,72 @@ func TestAnalysisWorker_Handle_PRModeUsesPullRequestDiff(t *testing.T) {
 	}
 }
 
+func TestAnalysisWorker_Handle_PRFailurePreservesPullRequestScope(t *testing.T) {
+	var captured *models.CodeAnalysis
+	mockRepo := &mockRepository{
+		getRepoFunc: func(ctx context.Context, id string) (*models.Repository, error) {
+			return &models.Repository{
+				ID:             id,
+				OrganizationID: "org-1",
+				Name:           "test-repo",
+				URL:            "https://github.com/owner/repo",
+			}, nil
+		},
+		updateRepoFunc: func(ctx context.Context, repo *models.Repository) error {
+			return nil
+		},
+		createAnalysisFunc: func(ctx context.Context, analysis *models.CodeAnalysis) error {
+			copied := *analysis
+			captured = &copied
+			return nil
+		},
+		getConfigFunc: func(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+			return &models.OrganizationConfig{
+				OrganizationID:  orgID,
+				AnthropicAPIKey: "anthropic-key",
+				GithubToken:     "github-token",
+			}, nil
+		},
+	}
+
+	worker := NewAnalysisWorker(mockRepo)
+	worker.githubFactory = func(token string) github.ClientInterface {
+		return &mockGithubClient{
+			getPullRequestFunc: func(ctx context.Context, owner, repo string, prID int64) (*github.PullRequest, error) {
+				return nil, github.ErrNotFound
+			},
+		}
+	}
+
+	payload := tasks.AnalyzeRepoPayload{
+		RepositoryID:  "repo-1",
+		Branch:        "feature",
+		CommitSHA:     "abc123",
+		Type:          "code_review",
+		PullRequestID: 42,
+		TriggeredBy:   "webhook",
+	}
+	data, _ := json.Marshal(payload)
+	task := asynq.NewTask(tasks.TypeAnalyzeRepo, data)
+
+	err := worker.Handle(context.Background(), task)
+	if err == nil {
+		t.Fatal("expected Handle to fail")
+	}
+	if captured == nil {
+		t.Fatal("expected failed analysis to be captured")
+	}
+	if captured.PullRequestID == nil || *captured.PullRequestID != 42 {
+		t.Fatalf("PullRequestID = %+v, want 42", captured.PullRequestID)
+	}
+	if captured.Branch != "feature" || captured.CommitSHA != "abc123" {
+		t.Fatalf("scope = %q/%q, want feature/abc123", captured.Branch, captured.CommitSHA)
+	}
+	if captured.Status != models.AnalysisStatusFailed {
+		t.Fatalf("status = %q, want failed", captured.Status)
+	}
+}
+
 func TestAnalysisWorker_Handle_InvalidPayload(t *testing.T) {
 	worker := NewAnalysisWorker(nil)
 

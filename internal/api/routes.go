@@ -103,6 +103,11 @@ func setupAPIRoutes(
 		// Analysis routes
 		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)
 		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
+		protected.GET("/repositories/:id/pull-requests", analysisHandler.ListPullRequests)
+		protected.GET("/repositories/:id/pull-requests/:pr_number", analysisHandler.GetPullRequest)
+		protected.GET("/repositories/:id/pull-requests/:pr_number/files", analysisHandler.GetPullRequestFiles)
+		protected.POST("/repositories/:id/pull-requests/:pr_number/analyze", analysisHandler.AnalyzePullRequest)
+		protected.POST("/repositories/:id/pull-requests/:pr_number/reviews", analysisHandler.CreatePullRequestReview)
 		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
 		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
 		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)

@@ -47,7 +47,16 @@ type RepoInfo struct {
 }
 
 type Branch struct {
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+	SHA  string `json:"sha,omitempty"`
+}
+
+func (b Branch) DisplayName() string {
+	if b.Ref != "" {
+		return b.Ref
+	}
+	return b.Name
 }
 
 type Commit struct {

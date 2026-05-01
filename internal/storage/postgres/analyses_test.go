@@ -85,3 +85,74 @@ func TestGetAnalysesByRepository_ReturnsOrderedPaginatedResults(t *testing.T) {
 		t.Fatalf("empty len = %d, want 0", len(got))
 	}
 }
+
+func TestPullRequestAnalysisLookups(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.Exec(`
+		CREATE TABLE code_analyses (
+			id TEXT PRIMARY KEY,
+			repository_id TEXT,
+			type TEXT,
+			status TEXT,
+			pull_request_id INTEGER,
+			created_at DATETIME
+		)
+	`).Error; err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	now := time.Now().UTC()
+	rows := []struct {
+		id        string
+		repoID    string
+		typ       models.AnalysisType
+		prID      any
+		createdAt time.Time
+	}{
+		{id: "old-pr-42", repoID: "repo-1", typ: models.AnalysisTypeCodeReview, prID: 42, createdAt: now.Add(-2 * time.Hour)},
+		{id: "new-pr-42", repoID: "repo-1", typ: models.AnalysisTypeCodeReview, prID: 42, createdAt: now.Add(-1 * time.Hour)},
+		{id: "security-pr-42", repoID: "repo-1", typ: models.AnalysisTypeSecurity, prID: 42, createdAt: now},
+		{id: "repo-2-pr-42", repoID: "repo-2", typ: models.AnalysisTypeCodeReview, prID: 42, createdAt: now},
+		{id: "pr-7", repoID: "repo-1", typ: models.AnalysisTypeCodeReview, prID: 7, createdAt: now.Add(-30 * time.Minute)},
+		{id: "no-pr", repoID: "repo-1", typ: models.AnalysisTypeCodeReview, prID: nil, createdAt: now},
+	}
+	for i, row := range rows {
+		if err := db.Exec(
+			`INSERT INTO code_analyses (id, repository_id, type, status, pull_request_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			row.id, row.repoID, row.typ, models.AnalysisStatusCompleted, row.prID, row.createdAt,
+		).Error; err != nil {
+			t.Fatalf("insert analysis %d: %v", i, err)
+		}
+	}
+
+	repo := NewPostgresRepository(db)
+	got, err := repo.GetLatestAnalysisForPullRequest(context.Background(), "repo-1", 42, models.AnalysisTypeCodeReview)
+	if err != nil {
+		t.Fatalf("GetLatestAnalysisForPullRequest: %v", err)
+	}
+	if got == nil || got.ID != "new-pr-42" {
+		t.Fatalf("latest = %+v, want new-pr-42", got)
+	}
+
+	batch, err := repo.ListLatestAnalysesForPullRequests(context.Background(), "repo-1", []int{42, 7}, models.AnalysisTypeCodeReview)
+	if err != nil {
+		t.Fatalf("ListLatestAnalysesForPullRequests: %v", err)
+	}
+	if batch[42].ID != "new-pr-42" {
+		t.Fatalf("batch[42] = %+v, want new-pr-42", batch[42])
+	}
+	if batch[7].ID != "pr-7" {
+		t.Fatalf("batch[7] = %+v, want pr-7", batch[7])
+	}
+
+	empty, err := repo.GetLatestAnalysisForPullRequest(context.Background(), "repo-1", 99, models.AnalysisTypeCodeReview)
+	if err != nil {
+		t.Fatalf("GetLatestAnalysisForPullRequest empty: %v", err)
+	}
+	if empty != nil {
+		t.Fatalf("empty = %+v, want nil", empty)
+	}
+}
