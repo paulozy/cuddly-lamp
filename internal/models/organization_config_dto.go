@@ -25,6 +25,10 @@ type OrganizationConfigResponse struct {
 	GitLabClientIDConfigured     bool   `json:"gitlab_client_id_configured"`
 	GitLabClientSecretConfigured bool   `json:"gitlab_client_secret_configured"`
 	GitLabCallbackURL            string `json:"gitlab_callback_url,omitempty"`
+
+	// OutputLanguage is the BCP 47 tag used for AI-generated prose
+	// (e.g. "en", "pt-BR"). Defaults to "en".
+	OutputLanguage string `json:"output_language"`
 }
 
 type UpdateOrganizationConfigRequest struct {
@@ -45,6 +49,10 @@ type UpdateOrganizationConfigRequest struct {
 	GitLabClientID     *string `json:"gitlab_client_id"`
 	GitLabClientSecret *string `json:"gitlab_client_secret"`
 	GitLabCallbackURL  *string `json:"gitlab_callback_url"`
+
+	// OutputLanguage is a BCP 47 tag (e.g. "en", "pt-BR"). Validated server-side
+	// via golang.org/x/text/language. Empty string falls back to the default.
+	OutputLanguage *string `json:"output_language"`
 }
 
 func OrganizationConfigToResponse(cfg *OrganizationConfig) OrganizationConfigResponse {
@@ -65,5 +73,6 @@ func OrganizationConfigToResponse(cfg *OrganizationConfig) OrganizationConfigRes
 		GitLabClientIDConfigured:     cfg.GitLabClientID != "",
 		GitLabClientSecretConfigured: cfg.GitLabClientSecret != "",
 		GitLabCallbackURL:            cfg.GitLabCallbackURL,
+		OutputLanguage:               cfg.ResolvedOutputLanguage(),
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulozy/idp-with-ai-backend/internal/i18n"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
@@ -69,6 +70,18 @@ func (h *OrganizationConfigHandler) UpdateConfig(c *gin.Context) {
 			ErrorDescription: err.Error(),
 		})
 		return
+	}
+
+	if req.OutputLanguage != nil && *req.OutputLanguage != "" {
+		canonical, _, err := i18n.Resolve(*req.OutputLanguage)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "invalid_output_language",
+				ErrorDescription: err.Error(),
+			})
+			return
+		}
+		*req.OutputLanguage = canonical
 	}
 
 	cfg, err := h.getOrCreateConfig(c, orgID)
@@ -177,6 +190,9 @@ func applyOrganizationConfigUpdate(cfg *models.OrganizationConfig, req models.Up
 	}
 	if req.GitLabCallbackURL != nil {
 		cfg.GitLabCallbackURL = *req.GitLabCallbackURL
+	}
+	if req.OutputLanguage != nil {
+		cfg.OutputLanguage = *req.OutputLanguage
 	}
 	cfg.ApplyDefaults()
 }
