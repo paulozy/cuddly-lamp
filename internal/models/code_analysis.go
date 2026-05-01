@@ -12,11 +12,12 @@ import (
 type AnalysisType string
 
 const (
-	AnalysisTypeCodeReview   AnalysisType = "code_review"
-	AnalysisTypeMetrics      AnalysisType = "metrics"
-	AnalysisTypeDependency   AnalysisType = "dependency"
-	AnalysisTypeSecurity     AnalysisType = "security"
-	AnalysisTypeArchitecture AnalysisType = "architecture"
+	AnalysisTypeCodeReview       AnalysisType = "code_review"
+	AnalysisTypeMetrics          AnalysisType = "metrics"
+	AnalysisTypeDependency       AnalysisType = "dependency"
+	AnalysisTypeSecurity         AnalysisType = "security"
+	AnalysisTypeArchitecture     AnalysisType = "architecture"
+	AnalysisTypeSearchSynthesis  AnalysisType = "search_synthesis"
 )
 
 type AnalysisStatus string

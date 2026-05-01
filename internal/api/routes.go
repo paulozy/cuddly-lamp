@@ -31,7 +31,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer)
+	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, params.Cache)
 	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
 	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)

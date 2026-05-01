@@ -41,7 +41,7 @@ func TestAnalysisHandler_ListAnalyses_ReturnsStoredAnalyses(t *testing.T) {
 		},
 		total: 2,
 	}
-	handler := NewAnalysisHandler(repo, nil)
+	handler := NewAnalysisHandler(repo, nil, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

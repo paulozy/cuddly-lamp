@@ -52,3 +52,32 @@ func (m *MockDocumentationGenerator) Provider() string {
 	}
 	return "mock"
 }
+
+// MockSynthesizer is a test mock that implements Synthesizer. It supports two
+// modes: a custom StreamFunc, or a scripted Script that is replayed verbatim.
+type MockSynthesizer struct {
+	StreamFunc func(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
+	Script     []SynthesisEvent
+	StartErr   error
+}
+
+func (m *MockSynthesizer) StreamSearchSynthesis(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error) {
+	if m.StreamFunc != nil {
+		return m.StreamFunc(ctx, query, snippets)
+	}
+	if m.StartErr != nil {
+		return nil, m.StartErr
+	}
+	out := make(chan SynthesisEvent, len(m.Script)+1)
+	go func() {
+		defer close(out)
+		for _, ev := range m.Script {
+			select {
+			case <-ctx.Done():
+				return
+			case out <- ev:
+			}
+		}
+	}()
+	return out, nil
+}

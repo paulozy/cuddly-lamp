@@ -4,10 +4,11 @@ package redis
 // Centralising them here prevents magic strings from spreading across packages.
 
 const (
-	prefixToken   = "token:"
-	prefixUser    = "user:"
-	prefixSession = "session:"
-	prefixRepo    = "repo:"
+	prefixToken            = "token:"
+	prefixUser             = "user:"
+	prefixSession          = "session:"
+	prefixRepo             = "repo:"
+	prefixSearchSynthesis  = "synth:search:"
 )
 
 // TokenKey returns the cache key for a JWT token record keyed by JTI.
@@ -21,3 +22,9 @@ func SessionKey(id string) string { return prefixSession + id }
 
 // RepoKey returns the cache key for a repository record keyed by ID.
 func RepoKey(id string) string { return prefixRepo + id }
+
+// SearchSynthesisKey returns the cache key for a stored AI synthesis tied to a
+// (repository, query+snippet-set) fingerprint.
+func SearchSynthesisKey(repoID, fingerprint string) string {
+	return prefixSearchSynthesis + repoID + ":" + fingerprint
+}

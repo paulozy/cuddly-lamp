@@ -157,3 +157,52 @@ type DocumentationGenerator interface {
 	GenerateDocumentation(ctx context.Context, req *DocumentationRequest) (*DocumentationResult, error)
 	Provider() string
 }
+
+// SearchSnippet represents a single code chunk returned by semantic search
+// that will be passed to the synthesizer for summarization.
+type SearchSnippet struct {
+	FilePath  string
+	Content   string
+	Language  string
+	StartLine int
+	EndLine   int
+	Score     float64
+}
+
+// SynthesisEventKind enumerates the kinds of events produced during a streaming
+// synthesis call.
+type SynthesisEventKind string
+
+const (
+	SynthesisEventTextDelta SynthesisEventKind = "text_delta"
+	SynthesisEventUsage     SynthesisEventKind = "usage"
+	SynthesisEventDone      SynthesisEventKind = "done"
+	SynthesisEventError     SynthesisEventKind = "error"
+)
+
+// SynthesisUsage carries the final token accounting reported by the model.
+type SynthesisUsage struct {
+	InputTokens  int
+	OutputTokens int
+	Model        string
+}
+
+// SynthesisEvent is a single event emitted during a streaming synthesis.
+// Exactly one of Text, Usage, or Err is meaningful per Kind:
+//   - text_delta -> Text holds the incremental text fragment
+//   - usage      -> Usage holds the final token totals
+//   - done       -> terminal signal, fields are empty
+//   - error      -> Err carries the failure reason
+type SynthesisEvent struct {
+	Kind  SynthesisEventKind
+	Text  string
+	Usage *SynthesisUsage
+	Err   error
+}
+
+// Synthesizer streams a natural-language summary over a set of semantic search
+// snippets. Implementations must close the returned channel when the stream
+// ends (after a done or error event), and must respect ctx cancellation.
+type Synthesizer interface {
+	StreamSearchSynthesis(ctx context.Context, query string, snippets []SearchSnippet) (<-chan SynthesisEvent, error)
+}

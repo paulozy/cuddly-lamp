@@ -136,7 +136,7 @@ func TestAnalysisHandler_ListPullRequests_AttachesLatestAnalysis(t *testing.T) {
 		},
 	}
 	gh := &pullRequestMockGitHub{prs: []github.PullRequest{{Number: 42, Title: "fix", User: github.User{Login: "ana"}}}}
-	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{})
+	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
 	c, w := newPullRequestHandlerTestContext(http.MethodGet, "/repositories/repo-1/pull-requests", "")
@@ -179,7 +179,7 @@ func TestAnalysisHandler_GetPullRequest_ReturnsDetailFilesAndAnalysis(t *testing
 		pr:    &github.PullRequest{Number: 42, Title: "fix", Head: github.Branch{Ref: "feature", SHA: "abc"}, Base: github.Branch{Ref: "main"}},
 		files: []github.PRFile{{Filename: "main.go", Status: "modified", Patch: "@@ -1 +1 @@"}},
 	}
-	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{})
+	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
 	c, w := newPullRequestHandlerTestContext(http.MethodGet, "/repositories/repo-1/pull-requests/42", "")
@@ -211,7 +211,7 @@ func TestAnalysisHandler_AnalyzePullRequest_EnqueuesPRPayload(t *testing.T) {
 	}
 	gh := &pullRequestMockGitHub{pr: &github.PullRequest{Number: 42, Head: github.Branch{Ref: "feature", SHA: "abc"}}}
 	enqueuer := &pullRequestHandlerEnqueuer{}
-	handler := NewAnalysisHandler(repo, enqueuer)
+	handler := NewAnalysisHandler(repo, enqueuer, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
 	c, w := newPullRequestHandlerTestContext(http.MethodPost, "/repositories/repo-1/pull-requests/42/analyze", "")
@@ -236,7 +236,7 @@ func TestAnalysisHandler_CreatePullRequestReview_ApproveAndRequestChangesValidat
 		config: &models.OrganizationConfig{GithubToken: "github-token"},
 	}
 	gh := &pullRequestMockGitHub{reviewID: 99}
-	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{})
+	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
 	c, w := newPullRequestHandlerTestContext(http.MethodPost, "/repositories/repo-1/pull-requests/42/reviews", `{"event":"APPROVE"}`)
@@ -262,7 +262,7 @@ func TestAnalysisHandler_CreatePullRequestReview_CommentWithInlineComments(t *te
 		config: &models.OrganizationConfig{GithubToken: "github-token"},
 	}
 	gh := &pullRequestMockGitHub{reviewID: 100}
-	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{})
+	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
 	body := `{"event":"COMMENT","body":"review body","comments":[{"path":"main.go","position":3,"body":"fix this"}]}`
