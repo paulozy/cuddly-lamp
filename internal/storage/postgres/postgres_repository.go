@@ -32,8 +32,12 @@ type enrichedRepo struct {
 	IsPublic        bool
 	Metadata        []byte // JSONB → raw bytes
 	AnalysisStatus  string
+	AnalysisError   sql.NullString
 	ReviewsCount    int
 	LastAnalyzedAt  *time.Time
+	LastSyncedAt    *time.Time
+	SyncStatus      string
+	SyncError       sql.NullString
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 
@@ -243,8 +247,12 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             r.is_public,
             r.metadata,
             r.analysis_status,
+            r.analysis_error,
             r.reviews_count,
             r.last_analyzed_at,
+            r.last_synced_at,
+            r.sync_status,
+            r.sync_error,
             r.created_at,
             r.updated_at,
             COALESCE(agg.total_analyses, 0)                        AS total_analyses,
@@ -296,7 +304,8 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 		&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
 		&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
 		&e.IsPublic, &e.Metadata,
-		&e.AnalysisStatus, &e.ReviewsCount, &e.LastAnalyzedAt,
+		&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
+		&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 		&e.CreatedAt, &e.UpdatedAt,
 		&e.TotalAnalyses,
 		&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
@@ -377,8 +386,12 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             r.is_public,
             r.metadata,
             r.analysis_status,
+            r.analysis_error,
             r.reviews_count,
             r.last_analyzed_at,
+            r.last_synced_at,
+            r.sync_status,
+            r.sync_error,
             r.created_at,
             r.updated_at,
             COALESCE(agg.total_analyses, 0)                        AS total_analyses,
@@ -436,7 +449,8 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
 			&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
 			&e.IsPublic, &e.Metadata,
-			&e.AnalysisStatus, &e.ReviewsCount, &e.LastAnalyzedAt,
+			&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
+			&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TotalAnalyses,
 			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
@@ -474,6 +488,10 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 	if e.LastAnalyzedAt != nil {
 		lastAnalyzedAt = *e.LastAnalyzedAt
 	}
+	var lastSyncedAt time.Time
+	if e.LastSyncedAt != nil {
+		lastSyncedAt = *e.LastSyncedAt
+	}
 
 	repo := models.Repository{
 		ID:              e.ID,
@@ -487,8 +505,12 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		IsPublic:        e.IsPublic,
 		Metadata:        meta,
 		AnalysisStatus:  e.AnalysisStatus,
+		AnalysisError:   e.AnalysisError.String,
 		ReviewsCount:    e.ReviewsCount,
 		LastAnalyzedAt:  lastAnalyzedAt,
+		LastSyncedAt:    lastSyncedAt,
+		SyncStatus:      e.SyncStatus,
+		SyncError:       e.SyncError.String,
 		CreatedAt:       e.CreatedAt,
 		UpdatedAt:       e.UpdatedAt,
 	}
