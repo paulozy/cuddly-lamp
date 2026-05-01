@@ -43,7 +43,7 @@ type OrganizationConfig struct {
 	AnthropicAPIKey        string `gorm:"type:bytea;serializer:enc" json:"-"`
 	AnthropicTokensPerHour int    `gorm:"default:20000" json:"anthropic_tokens_per_hour"`
 	GithubToken            string `gorm:"type:bytea;serializer:enc" json:"-"`
-	GitHubPRReviewEnabled  bool   `gorm:"default:false" json:"github_pr_review_enabled"`
+	GitHubPRReviewEnabled  bool   `gorm:"column:github_pr_review_enabled;default:false" json:"github_pr_review_enabled"`
 	WebhookBaseURL         string `gorm:"type:text" json:"webhook_base_url,omitempty"`
 
 	EmbeddingsProvider   string `gorm:"type:varchar(50);default:'voyage'" json:"embeddings_provider"`
@@ -51,12 +51,12 @@ type OrganizationConfig struct {
 	EmbeddingsModel      string `gorm:"type:varchar(100);default:'voyage-code-3'" json:"embeddings_model"`
 	EmbeddingsDimensions int    `gorm:"default:1024" json:"embeddings_dimensions"`
 
-	GitHubClientID     string `gorm:"type:varchar(255)" json:"github_client_id,omitempty"`
-	GitHubClientSecret string `gorm:"type:bytea;serializer:enc" json:"-"`
-	GitHubCallbackURL  string `gorm:"type:text" json:"github_callback_url,omitempty"`
-	GitLabClientID     string `gorm:"type:varchar(255)" json:"gitlab_client_id,omitempty"`
-	GitLabClientSecret string `gorm:"type:bytea;serializer:enc" json:"-"`
-	GitLabCallbackURL  string `gorm:"type:text" json:"gitlab_callback_url,omitempty"`
+	GitHubClientID     string `gorm:"column:github_client_id;type:varchar(255)" json:"github_client_id,omitempty"`
+	GitHubClientSecret string `gorm:"column:github_client_secret;type:bytea;serializer:enc" json:"-"`
+	GitHubCallbackURL  string `gorm:"column:github_callback_url;type:text" json:"github_callback_url,omitempty"`
+	GitLabClientID     string `gorm:"column:gitlab_client_id;type:varchar(255)" json:"gitlab_client_id,omitempty"`
+	GitLabClientSecret string `gorm:"column:gitlab_client_secret;type:bytea;serializer:enc" json:"-"`
+	GitLabCallbackURL  string `gorm:"column:gitlab_callback_url;type:text" json:"gitlab_callback_url,omitempty"`
 
 	OutputLanguage string `gorm:"column:output_language;type:varchar(20);default:'en'" json:"output_language"`
 
