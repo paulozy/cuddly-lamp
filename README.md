@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 14 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships, code analysis PR lookup index, search synthesis analysis type)
+- ✅ 15 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships, code analysis PR lookup index, search synthesis analysis type, repository list enrichment indexes)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -37,9 +37,11 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Repository relationship graph storage for spatial navigation maps
 - ✅ Code template storage with generated files as JSONB and pinning metadata
 - ✅ Doc generation storage with generated Markdown content as JSONB and PR metadata
+- ✅ Optimized indexes for enriched repository list queries with LATERAL joins
 
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
+- ✅ Enriched list response — aggregated stats (analysis status, quality score, total analyses, embeddings count, dependency counts, relationship counts) via optimized SQL with LATERAL joins
 - ✅ GitHub sync — fetches metadata (branches, commits, PRs, languages, stars, forks)
 - ✅ Sync status lifecycle — `idle → syncing → synced / error`
 - ✅ WebhookConfig — registers GitHub webhook on sync, stores HMAC secret
@@ -841,8 +843,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis)
-**Última atualização**: May 1, 2026 (Search synthesis: opt-in SSE on `/repositories/:id/search?synthesize=true`, `ai.Synthesizer` interface, Anthropic streaming, Redis cache, token-budget integration, graceful fallback)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats)
+**Última atualização**: May 1, 2026 (Enriched repository list: aggregated stats via optimized LATERAL joins SQL query - quality score, total analyses, embeddings count, dependency counts, relationship counts)
 
 ### 📖 Accessing the API Documentation
 ```bash

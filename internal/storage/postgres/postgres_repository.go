@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +16,37 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// enrichedRepo is a flat struct for scanning the enriched list query result.
+// It matches the SELECT column order exactly.
+type enrichedRepo struct {
+	// Core repository fields
+	ID              string
+	Name            string
+	Description     string
+	URL             string
+	Type            string
+	OrganizationID  string
+	OwnerUserID     *string
+	CreatedByUserID *string
+	IsPublic        bool
+	Metadata        []byte // JSONB → raw bytes
+	AnalysisStatus  string
+	ReviewsCount    int
+	LastAnalyzedAt  *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+
+	// Aggregated stats from LATERAL joins
+	TotalAnalyses    int64
+	IssueCount       sql.NullInt64
+	CriticalCount    sql.NullInt64
+	ErrorCount       sql.NullInt64
+	WarningCount     sql.NullInt64
+	TestCoverage     sql.NullFloat64
+	AvgComplexity    sql.NullFloat64
+	LatestAnalyzedAt sql.NullTime
+}
 
 // PostgresRepository implements RepositoryStorage using GORM
 type PostgresRepository struct {
@@ -196,16 +229,84 @@ func (pr *PostgresRepository) UpsertOrganizationConfig(ctx context.Context, cfg 
 // ============ Repository Operations ============
 
 func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
-	var repo models.Repository
-	if err := pr.db.WithContext(ctx).
-		Preload("Members").
-		Preload("Webhooks").
-		First(&repo, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
+	// Use the same enriched query as ListRepositories but filter by ID
+	listSQL := `
+        SELECT
+            r.id,
+            r.name,
+            r.description,
+            r.url,
+            r.type,
+            r.organization_id,
+            r.owner_user_id,
+            r.created_by_user_id,
+            r.is_public,
+            r.metadata,
+            r.analysis_status,
+            r.reviews_count,
+            r.last_analyzed_at,
+            r.created_at,
+            r.updated_at,
+            COALESCE(agg.total_analyses, 0)                        AS total_analyses,
+            latest.issue_count                                      AS issue_count,
+            latest.critical_count                                   AS critical_count,
+            latest.error_count                                      AS error_count,
+            latest.warning_count                                    AS warning_count,
+            (latest.metrics->>'test_coverage')::float               AS test_coverage,
+            (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
+            latest.created_at                                       AS latest_analyzed_at
+        FROM repositories r
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS total_analyses
+            FROM   code_analyses ca
+            WHERE  ca.repository_id = r.id
+              AND  ca.deleted_at IS NULL
+        ) agg ON true
+        LEFT JOIN LATERAL (
+            SELECT
+                ca.issue_count,
+                ca.critical_count,
+                ca.error_count,
+                ca.warning_count,
+                ca.metrics,
+                ca.created_at
+            FROM   code_analyses ca
+            WHERE  ca.repository_id = r.id
+              AND  ca.type          = 'metrics'
+              AND  ca.status        = 'completed'
+              AND  ca.deleted_at    IS NULL
+            ORDER BY ca.created_at DESC
+            LIMIT 1
+        ) latest ON true
+        WHERE r.id = ?
+          AND r.deleted_at IS NULL`
+
+	rows, err := pr.db.WithContext(ctx).Raw(listSQL, id).Rows()
+	if err != nil {
 		return nil, fmt.Errorf("get repository: %w", err)
 	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, nil // Not found
+	}
+
+	var e enrichedRepo
+	if err := rows.Scan(
+		&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
+		&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
+		&e.IsPublic, &e.Metadata,
+		&e.AnalysisStatus, &e.ReviewsCount, &e.LastAnalyzedAt,
+		&e.CreatedAt, &e.UpdatedAt,
+		&e.TotalAnalyses,
+		&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
+		&e.TestCoverage, &e.AvgComplexity,
+		&e.LatestAnalyzedAt,
+	); err != nil {
+		return nil, fmt.Errorf("scan repository row: %w", err)
+	}
+
+	repo := enrichedRepoToModel(e)
 	return &repo, nil
 }
 
@@ -247,44 +348,168 @@ func (pr *PostgresRepository) UpdateRepository(ctx context.Context, repo *models
 }
 
 func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *storage.RepositoryFilter) ([]models.Repository, int64, error) {
-	var repos []models.Repository
+	// ── 1. Count query (fast, index-only scan) ──────────────────────────────
+	countSQL := `
+        SELECT COUNT(*)
+        FROM   repositories r
+        WHERE  r.organization_id = ?
+          AND  r.deleted_at IS NULL`
+
 	var total int64
-
-	query := pr.db.WithContext(ctx)
-
-	// Apply filters
-	if filter.OrganizationID != "" {
-		query = query.Where("organization_id = ?", filter.OrganizationID)
-	}
-	if filter.OwnerUserID != "" {
-		query = query.Where("owner_user_id = ?", filter.OwnerUserID)
-	}
-	if filter.Type != "" {
-		query = query.Where("type = ?", filter.Type)
-	}
-	if filter.AnalysisStatus != "" {
-		query = query.Where("analysis_status = ?", filter.AnalysisStatus)
-	}
-
-	// Count total
-	if err := query.Model(&models.Repository{}).Count(&total).Error; err != nil {
+	if err := pr.db.WithContext(ctx).Raw(countSQL, filter.OrganizationID).Scan(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count repositories: %w", err)
 	}
-
-	if filter.Limit > 0 {
-		query = query.Limit(filter.Limit)
-	}
-	if filter.Offset > 0 {
-		query = query.Offset(filter.Offset)
+	if total == 0 {
+		return []models.Repository{}, 0, nil
 	}
 
-	if err := query.
-		Order("created_at DESC").
-		Find(&repos).Error; err != nil {
+	// ── 2. Enriched list query ───────────────────────────────────────────────
+	listSQL := `
+        SELECT
+            r.id,
+            r.name,
+            r.description,
+            r.url,
+            r.type,
+            r.organization_id,
+            r.owner_user_id,
+            r.created_by_user_id,
+            r.is_public,
+            r.metadata,
+            r.analysis_status,
+            r.reviews_count,
+            r.last_analyzed_at,
+            r.created_at,
+            r.updated_at,
+            COALESCE(agg.total_analyses, 0)                        AS total_analyses,
+            latest.issue_count                                      AS issue_count,
+            latest.critical_count                                   AS critical_count,
+            latest.error_count                                      AS error_count,
+            latest.warning_count                                    AS warning_count,
+            (latest.metrics->>'test_coverage')::float               AS test_coverage,
+            (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
+            latest.created_at                                       AS latest_analyzed_at
+        FROM repositories r
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS total_analyses
+            FROM   code_analyses ca
+            WHERE  ca.repository_id = r.id
+              AND  ca.deleted_at IS NULL
+        ) agg ON true
+        LEFT JOIN LATERAL (
+            SELECT
+                ca.issue_count,
+                ca.critical_count,
+                ca.error_count,
+                ca.warning_count,
+                ca.metrics,
+                ca.created_at
+            FROM   code_analyses ca
+            WHERE  ca.repository_id = r.id
+              AND  ca.type          = 'metrics'
+              AND  ca.status        = 'completed'
+              AND  ca.deleted_at    IS NULL
+            ORDER BY ca.created_at DESC
+            LIMIT 1
+        ) latest ON true
+        WHERE r.organization_id = ?
+          AND r.deleted_at IS NULL
+        ORDER BY r.created_at DESC
+        LIMIT  ?
+        OFFSET ?`
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := pr.db.WithContext(ctx).Raw(listSQL, filter.OrganizationID, limit, filter.Offset).Rows()
+	if err != nil {
 		return nil, 0, fmt.Errorf("list repositories: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []models.Repository
+	for rows.Next() {
+		var e enrichedRepo
+		if err := rows.Scan(
+			&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
+			&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
+			&e.IsPublic, &e.Metadata,
+			&e.AnalysisStatus, &e.ReviewsCount, &e.LastAnalyzedAt,
+			&e.CreatedAt, &e.UpdatedAt,
+			&e.TotalAnalyses,
+			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
+			&e.TestCoverage, &e.AvgComplexity,
+			&e.LatestAnalyzedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan repository row: %w", err)
+		}
+		repos = append(repos, enrichedRepoToModel(e))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate repository rows: %w", err)
 	}
 
 	return repos, total, nil
+}
+
+// enrichedRepoToModel converts a flat SQL scan result into a models.Repository.
+// The Stats field is populated from the lateral-join columns.
+func enrichedRepoToModel(e enrichedRepo) models.Repository {
+	var meta models.RepositoryMetadata
+	if len(e.Metadata) > 0 {
+		_ = json.Unmarshal(e.Metadata, &meta) // ignore unmarshal error → empty metadata
+	}
+
+	var ownerUserID, createdByUserID string
+	if e.OwnerUserID != nil {
+		ownerUserID = *e.OwnerUserID
+	}
+	if e.CreatedByUserID != nil {
+		createdByUserID = *e.CreatedByUserID
+	}
+
+	var lastAnalyzedAt time.Time
+	if e.LastAnalyzedAt != nil {
+		lastAnalyzedAt = *e.LastAnalyzedAt
+	}
+
+	repo := models.Repository{
+		ID:              e.ID,
+		Name:            e.Name,
+		Description:     e.Description,
+		URL:             e.URL,
+		Type:            models.RepositoryType(e.Type),
+		OrganizationID:  e.OrganizationID,
+		OwnerUserID:     ownerUserID,
+		CreatedByUserID: createdByUserID,
+		IsPublic:        e.IsPublic,
+		Metadata:        meta,
+		AnalysisStatus:  e.AnalysisStatus,
+		ReviewsCount:    e.ReviewsCount,
+		LastAnalyzedAt:  lastAnalyzedAt,
+		CreatedAt:       e.CreatedAt,
+		UpdatedAt:       e.UpdatedAt,
+	}
+
+	// Attach enriched stats so the service layer can compute quality score
+	repo.EnrichedStats = &models.EnrichedStats{
+		TotalAnalyses:      int(e.TotalAnalyses),
+		IssueCount:         int(e.IssueCount.Int64),
+		CriticalCount:      int(e.CriticalCount.Int64),
+		ErrorCount:         int(e.ErrorCount.Int64),
+		WarningCount:       int(e.WarningCount.Int64),
+		TestCoverage:       e.TestCoverage.Float64,
+		AvgComplexity:      e.AvgComplexity.Float64,
+		HasMetricsAnalysis: e.IssueCount.Valid, // Valid=true only when LATERAL returned a row
+	}
+	if e.LatestAnalyzedAt.Valid {
+		t := e.LatestAnalyzedAt.Time.UTC().Format(time.RFC3339)
+		repo.EnrichedStats.LatestAnalyzedAt = &t
+	}
+
+	return repo
 }
 
 func (pr *PostgresRepository) DeleteRepository(ctx context.Context, id string) error {

@@ -78,7 +78,7 @@ internal/
 
 1. **Authentication & JWT**: Complete — email/password onboarding creates organizations, login supports multi-org selection tickets, JWT access tokens, refresh token rotation (RFC 9700), OAuth (GitHub/GitLab)
 2. **Infrastructure**: Complete — Redis cache layer + asynq job queue wired in `main.go` with no-op fallbacks
-3. **Repository management**: Complete — CRUD endpoints, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
+3. **Repository management**: Complete — CRUD endpoints, enriched list with aggregated stats via LATERAL joins, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
 4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
 5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
 6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, committed docs at `/swagger/index.html`; `make swagger` uses pinned `swag@v1.8.12`
@@ -90,6 +90,7 @@ internal/
 12. **Auto-Generated Documentation + Cross-Reference**: Complete — `TypeGenerateDocs` worker, `doc_generations` JSONB storage, GitHub branch/file/PR creation, `POST /repositories/:id/docs/generate`, and generated docs injected into future analysis prompts as project standards
 13. **Spatial Repository Navigation**: Complete — `repository_relationships` graph model, directed typed repo-to-repo edges, `GET /repositories/graph`, relationship CRUD endpoints, and legacy `repository_dependencies` backfill
 14. **Search Synthesis (opt-in SSE)**: Complete — `?synthesize=true` upgrades the existing search endpoint to SSE, streaming Claude-generated overviews of the matched snippets via `ai.Synthesizer.StreamSearchSynthesis`, with Redis caching, token-budget enforcement, and graceful fallback when no Anthropic key is configured
+15. **Enriched Repository List**: Complete — Optimized SQL with LATERAL joins fetches aggregated stats (total analyses, quality score, latest metrics) in a single query, zero N+1 problem
 
 ## Known Issues & Constraints
 

@@ -91,10 +91,27 @@ type Repository struct {
 	Webhooks     []Webhook              `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
 	Members      []User                 `gorm:"many2many:user_repositories;" json:"members,omitempty"`
 	Dependencies []RepositoryDependency `gorm:"foreignKey:RepositoryID" json:"dependencies,omitempty"`
+
+	// EnrichedStats is populated only during ListRepositories. It is never persisted.
+	EnrichedStats *EnrichedStats `gorm:"-" json:"-"`
 }
 
 func (Repository) TableName() string {
 	return "repositories"
+}
+
+// EnrichedStats carries lateral-join results from the enriched list query.
+// It is a transient field — never stored in the DB.
+type EnrichedStats struct {
+	TotalAnalyses      int
+	IssueCount         int
+	CriticalCount      int
+	ErrorCount         int
+	WarningCount       int
+	TestCoverage       float64
+	AvgComplexity      float64
+	HasMetricsAnalysis bool
+	LatestAnalyzedAt   *string // ISO-8601 or nil
 }
 
 func (r *Repository) IsValid() bool {

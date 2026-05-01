@@ -26,6 +26,13 @@ type RepositoryResponse struct {
 	Metadata        RepositoryMetadata `json:"metadata"`
 	CreatedAt       time.Time          `json:"created_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
+
+	// Zero-cost fields (already on repositories table)
+	AnalysisStatus string `json:"analysis_status,omitempty"`
+	ReviewsCount   int    `json:"reviews_count,omitempty"`
+
+	// Aggregated stats
+	Stats RepositoryStats `json:"stats"`
 }
 
 type RepositoryListResponse struct {
@@ -35,8 +42,16 @@ type RepositoryListResponse struct {
 	Offset int                  `json:"offset"`
 }
 
+// RepositoryStats contains aggregated statistics from related tables.
+type RepositoryStats struct {
+	TotalAnalyses  int     `json:"total_analyses"`
+	LatestScore    int     `json:"latest_quality_score"`
+	HasAnalysis    bool    `json:"has_analysis"`
+	LastAnalyzedAt *string `json:"last_analyzed_at"`
+}
+
 func RepositoryToResponse(r *Repository) *RepositoryResponse {
-	return &RepositoryResponse{
+	resp := &RepositoryResponse{
 		ID:              r.ID,
 		Name:            r.Name,
 		Description:     r.Description,
@@ -49,5 +64,59 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		Metadata:        r.Metadata,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
+		AnalysisStatus:  r.AnalysisStatus,
+		ReviewsCount:    r.ReviewsCount,
 	}
+
+	// Populate Stats from EnrichedStats when available (list endpoint).
+	// Falls back to zero-value RepositoryStats for single-get endpoint.
+	if r.EnrichedStats != nil {
+		es := r.EnrichedStats
+		score := 0
+		if es.HasMetricsAnalysis {
+			// Reuse existing GetQualityScore logic inline to avoid constructing
+			// a full CodeAnalysis object.
+			score = computeQualityScore(es.IssueCount, es.CriticalCount, es.ErrorCount, es.WarningCount, es.TestCoverage, es.AvgComplexity)
+		}
+		resp.Stats = RepositoryStats{
+			TotalAnalyses:  es.TotalAnalyses,
+			LatestScore:    score,
+			HasAnalysis:    es.TotalAnalyses > 0,
+			LastAnalyzedAt: es.LatestAnalyzedAt,
+		}
+	}
+
+	return resp
+}
+
+// computeQualityScore mirrors CodeAnalysis.GetQualityScore() exactly.
+// It is kept here so the DTO layer does not import the analysis model.
+func computeQualityScore(issueCount, criticalCount, errorCount, warningCount int, testCoverage, avgComplexity float64) int {
+	if issueCount == 0 && testCoverage >= 80 {
+		return 100
+	}
+	score := 100
+	issueDeduction := criticalCount*5 + errorCount*3 + warningCount
+	if issueDeduction > 50 {
+		issueDeduction = 50
+	}
+	score -= issueDeduction
+	if testCoverage < 80 {
+		coverageDeduction := int((80.0 - testCoverage) / 4)
+		if coverageDeduction > 20 {
+			coverageDeduction = 20
+		}
+		score -= coverageDeduction
+	}
+	if avgComplexity > 5 {
+		complexityDeduction := int((avgComplexity - 5) * 2)
+		if complexityDeduction > 10 {
+			complexityDeduction = 10
+		}
+		score -= complexityDeduction
+	}
+	if score < 0 {
+		return 0
+	}
+	return score
 }

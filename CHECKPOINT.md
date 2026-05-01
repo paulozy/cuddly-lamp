@@ -17,6 +17,7 @@
 
 ### Repository Management ✅
 - CRUD endpoints (`POST/GET/PUT/DELETE /api/v1/repositories`) with ownership enforcement
+- **Enriched list response** — aggregated stats (analysis status, quality score, total analyses, embeddings count) via optimized SQL with LATERAL joins
 - Duplicate detection via URL before creation
 - GitHub sync on create — fetches branches, commits (last 100), PRs, languages, stars, forks
 - Sync status lifecycle: `idle → syncing → synced / error`
@@ -127,7 +128,7 @@
 - Server boots without Redis — cache and queue degrade silently to no-op
 
 ### Database & Migrations ✅
-- 14 SQL migrations applied and tracked via `schema_migrations`
+- 15 SQL migrations applied and tracked via `schema_migrations`
   - `001`: Initial schema — 8 tables + triggers + pgvector
   - `002`: Auth tables — tokens, password_hash
   - `003`: OAuth connections — provider uniqueness, data migration from users
@@ -142,6 +143,7 @@
   - `012`: Repository relationships — spatial graph edges with kind/source/confidence/metadata and legacy dependency backfill
   - `013`: Code analysis PR lookup index — partial index on `(repository_id, pull_request_id, type, created_at DESC)` for fast latest-analysis-per-PR lookups
   - `014`: Search synthesis analysis type — extends `code_analyses.type` CHECK constraint to allow `search_synthesis` so streamed search summaries can be persisted for token budgeting
+  - `015`: Repository list enrichment indexes — composite indexes on `code_analyses(repository_id, type, created_at DESC)` and `repositories(organization_id, created_at DESC)` for optimized LATERAL join queries
 - `StringArray` custom type for PostgreSQL `text[]` columns (implements `driver.Valuer` + `sql.Scanner`)
 - Baseline detection for databases pre-dating migration tracking
 
@@ -386,6 +388,17 @@ Generated paths:
 - **Tests**: Added prompt builder tests (capping/truncation/escaping/determinism) and SSE handler tests (no-key fallback, cache hit, cache miss with token deltas + persistence, stream error, synthesizer start failure, fingerprint stability/order-independence).
 - **Files**: `internal/ai/provider.go`, `internal/ai/mock_analyzer.go`, `internal/integrations/anthropic/synthesis.go`, `internal/integrations/anthropic/synthesis_test.go`, `internal/storage/redis/keys.go`, `internal/api/handlers/analysis.go`, `internal/api/handlers/analysis_synthesis.go`, `internal/api/handlers/analysis_synthesis_test.go`, `internal/api/factories/make_analysis_handler.go`, `internal/api/routes.go`, `internal/models/code_analysis.go`, `migrations/014-add-search-synthesis-analysis-type.sql`, `CLAUDE.md`, `docs/docs.go`
 
+### Phase 10: Enriched Repository List ✅
+- **Query optimization**: Replaced GORM-based `ListRepositories` with raw SQL using LATERAL joins to fetch aggregated stats in a single query
+- **Aggregated stats**: Total analyses count, latest metrics analysis (issue counts, test coverage, complexity), quality score computation
+- **Zero-cost fields**: Added `analysis_status` and `reviews_count` to response (already on repositories table)
+- **DTO extension**: Extended `RepositoryResponse` with `AnalysisStatus`, `ReviewsCount`, and `Stats` (RepositoryStats) fields
+- **Quality score**: Inline `computeQualityScore` function mirrors `CodeAnalysis.GetQualityScore()` logic without circular imports
+- **Transient enrichment**: Added `EnrichedStats` struct to `Repository` model with `gorm:"-"` tag for temporary storage during list queries
+- **Indexes**: Migration `015` adds composite indexes on `code_analyses(repository_id, type, created_at DESC)` and `repositories(organization_id, created_at DESC)` for optimal LATERAL join performance
+- **Backward compatibility**: All existing fields preserved, new fields are additive with safe defaults
+- **Files**: `migrations/015-add-repo-list-enrichment-indexes.sql`, `internal/models/repository.go`, `internal/models/repository_dto.go`, `internal/storage/postgres/postgres_repository.go`
+
 ---
 
 ## 🎯 Next Steps
@@ -398,6 +411,7 @@ Generated paths:
 - [x] **Auto-generated documentation** — Claude Markdown generation, `TypeGenerateDocs`, GitHub Contents/PR delivery, doc-aware analysis prompts
 - [x] **Spatial repository navigation** — typed repo relationship graph, graph endpoint, relationship CRUD, legacy dependency backfill
 - [x] **AI synthesis on semantic search** — opt-in `?synthesize=true` SSE upgrade, `ai.Synthesizer` interface, Anthropic streaming, Redis-cached summaries, token-budget integration, graceful fallback
+- [x] **Enriched repository list** — aggregated stats via optimized LATERAL joins, quality score, analysis status, zero N+1 queries
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -444,10 +458,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis)
-**Commits this phase**: 12 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph, search synthesis SSE)
-**Total commits (AI + pipeline)**: 16
-**Production Readiness**: ~95% (auth + repo + webhook + encryption + AI analysis + semantic search + synthesis streaming + dependency tracking + docs generation + spatial graph done; needs broader integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats)
+**Commits this phase**: 13 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph, search synthesis SSE, enriched repository list)
+**Total commits (AI + pipeline)**: 17
+**Production Readiness**: ~95% (auth + repo + webhook + encryption + AI analysis + semantic search + synthesis streaming + dependency tracking + docs generation + spatial graph + enriched list done; needs broader integration tests, key rotation)
 
 ---
 
