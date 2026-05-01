@@ -2654,6 +2654,10 @@ const docTemplate = `{
                 "gitlab_client_secret_configured": {
                     "type": "boolean"
                 },
+                "output_language": {
+                    "description": "OutputLanguage is the BCP 47 tag used for AI-generated prose\n(e.g. \"en\", \"pt-BR\"). Defaults to \"en\".",
+                    "type": "string"
+                },
                 "voyage_api_key_configured": {
                     "type": "boolean"
                 },
@@ -3285,6 +3289,10 @@ const docTemplate = `{
         "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryResponse": {
             "type": "object",
             "properties": {
+                "analysis_status": {
+                    "description": "Zero-cost fields (already on repositories table)",
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -3312,6 +3320,17 @@ const docTemplate = `{
                 "owner_user_id": {
                     "type": "string"
                 },
+                "reviews_count": {
+                    "type": "integer"
+                },
+                "stats": {
+                    "description": "Aggregated stats",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryStats"
+                        }
+                    ]
+                },
                 "type": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryType"
                 },
@@ -3320,6 +3339,23 @@ const docTemplate = `{
                 },
                 "url": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryStats": {
+            "type": "object",
+            "properties": {
+                "has_analysis": {
+                    "type": "boolean"
+                },
+                "last_analyzed_at": {
+                    "type": "string"
+                },
+                "latest_quality_score": {
+                    "type": "integer"
+                },
+                "total_analyses": {
+                    "type": "integer"
                 }
             }
         },
@@ -3577,6 +3613,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "gitlab_client_secret": {
+                    "type": "string"
+                },
+                "output_language": {
+                    "description": "OutputLanguage is a BCP 47 tag (e.g. \"en\", \"pt-BR\"). Validated server-side\nvia golang.org/x/text/language. Empty string falls back to the default.",
                     "type": "string"
                 },
                 "voyage_api_key": {

@@ -26,7 +26,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 
 ### Database & Migrations
 - ✅ PostgreSQL 14+ with pgvector extension
-- ✅ 15 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships, code analysis PR lookup index, search synthesis analysis type, repository list enrichment indexes)
+- ✅ 16 SQL migrations (schema, auth, oauth_connections, refresh token rotation, encryption fields, embeddings, multitenancy, package dependencies, code templates, doc generations, repository relationships, code analysis PR lookup index, search synthesis analysis type, repository list enrichment indexes, organization output language)
 - ✅ Migration tracking via `schema_migrations` table (no re-runs on restart)
 - ✅ Baseline detection for existing databases (safe upgrade path)
 - ✅ OAuth connections table (provider + provider_user_id uniqueness)
@@ -100,6 +100,7 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Token rate limiting: hourly budget (default 20K tokens/hour, configurable)
 - ✅ Local metrics: code complexity and line counting via shallow git clone before AI analysis, using `GITHUB_TOKEN` for private repositories when configured
 - ✅ Future-proof architecture: swap providers (Claude → OpenAI, etc.) with one-line change
+- ✅ **Configurable output language** (org-level): `OrganizationConfig.OutputLanguage` (BCP 47, default `en`) drives a System prompt sent on every Claude call so analysis findings, generated documentation, template summaries, and search synthesis come back in the chosen language. Enum-like fields (`severity`, `category`, `cwe_id`, etc.) stay in canonical English. Validated by `golang.org/x/text/language` and surfaced via `PATCH /organizations/configs`.
 
 ### Auto-Generated Documentation
 - ✅ HTTP endpoint: `POST /repositories/:id/docs/generate`

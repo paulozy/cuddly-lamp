@@ -91,6 +91,7 @@ internal/
 13. **Spatial Repository Navigation**: Complete — `repository_relationships` graph model, directed typed repo-to-repo edges, `GET /repositories/graph`, relationship CRUD endpoints, and legacy `repository_dependencies` backfill
 14. **Search Synthesis (opt-in SSE)**: Complete — `?synthesize=true` upgrades the existing search endpoint to SSE, streaming Claude-generated overviews of the matched snippets via `ai.Synthesizer.StreamSearchSynthesis`, with Redis caching, token-budget enforcement, and graceful fallback when no Anthropic key is configured
 15. **Enriched Repository List**: Complete — Optimized SQL with LATERAL joins fetches aggregated stats (total analyses, quality score, latest metrics) in a single query, zero N+1 problem
+16. **Configurable AI Output Language**: Complete — `OrganizationConfig.OutputLanguage` (BCP 47) drives a System prompt injected into every Claude call (analysis, docs, templates, dependency, search synthesis). Validated with `golang.org/x/text/language`. Search synthesis cache fingerprint includes the language. Defaults to `"en"`; enum-like fields stay in canonical English regardless.
 
 ## Known Issues & Constraints
 
@@ -150,6 +151,7 @@ internal/
 - **Rate Limiting**: Token-based rate limiting (default 20K tokens/hour, configurable via `ANTHROPIC_TOKENS_PER_HOUR`) — checks accumulated tokens in last hour via DB SUM query
 - **Local Metrics**: Computed before Claude call via shallow git clone (`Depth:1`) with go-git, no submodules — counts lines of code, estimates cyclomatic complexity, and uses configured `GITHUB_TOKEN` for private repository access.
 - **Doc-aware analysis**: `AnalysisWorker` fetches the latest completed `DocGeneration` for the repository and injects rendered guidelines/ADRs/architecture/service docs into the prompt under `PROJECT STANDARDS / DOCUMENTATION`.
+- **Output language (org-level)**: `OrganizationConfig.OutputLanguage` (BCP 47, default `"en"`) controls the language of AI-generated prose across analysis findings, generated documentation, code template summaries, and search synthesis. Validation lives in `internal/i18n` (`Resolve` wraps `golang.org/x/text/language.Parse`); the canonical English display name is injected via Anthropic's `System` parameter by `BuildSystemPrompt` (`internal/integrations/anthropic/system_prompt.go`). When the tag resolves to English the System param is omitted entirely (zero token cost, behaviour unchanged). Enum-like fields (`severity`, `category`, `pattern`, `cwe_id`, `owasp_category`, `debt_category`) are explicitly held in canonical English by the System prompt so downstream code/UI keeps working. Search synthesis cache fingerprint includes the language so switching languages never serves a stale cached answer.
 - **Future Enhancements**: configurable analysis types ("code_review", "security", "architecture")
 
 ## Auto-Generated Documentation Notes
