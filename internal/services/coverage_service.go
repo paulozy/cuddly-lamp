@@ -149,6 +149,7 @@ func (s *CoverageService) LookupForAnalysis(ctx context.Context, repoID, sha str
 
 // CreateUploadToken generates a fresh token, persists its hash, and returns
 // the plaintext to the caller (shown ONCE).
+// userID is optional — pass "" to leave created_by_user_id NULL.
 func (s *CoverageService) CreateUploadToken(ctx context.Context, repoID, name, userID string, expiresAt *time.Time) (string, *models.CoverageUploadToken, error) {
 	if repoID == "" || name == "" {
 		return "", nil, errors.New("repository_id and name are required")
@@ -159,11 +160,13 @@ func (s *CoverageService) CreateUploadToken(ctx context.Context, repoID, name, u
 	}
 	hashed := hashCoverageToken(plain)
 	model := &models.CoverageUploadToken{
-		RepositoryID:    repoID,
-		Name:            name,
-		TokenHash:       hashed,
-		CreatedByUserID: userID,
-		ExpiresAt:       expiresAt,
+		RepositoryID: repoID,
+		Name:         name,
+		TokenHash:    hashed,
+		ExpiresAt:    expiresAt,
+	}
+	if userID != "" {
+		model.CreatedByUserID = &userID
 	}
 	if err := s.repo.CreateCoverageUploadToken(ctx, model); err != nil {
 		return "", nil, err

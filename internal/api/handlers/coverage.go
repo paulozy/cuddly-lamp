@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 const (
@@ -150,8 +151,9 @@ func (h *CoverageHandler) CreateCoverageToken(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("user_id")
-	uid, _ := userID.(string)
+	// Best-effort: capture the creator for audit. If the auth context is
+	// missing for any reason, we still create the token with a NULL author.
+	uid, _ := utils.GetUserIDFromContext(c)
 
 	plain, model, err := h.service.CreateUploadToken(c.Request.Context(), repoID, req.Name, uid, req.ExpiresAt)
 	if err != nil {

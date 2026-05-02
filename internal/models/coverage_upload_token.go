@@ -16,8 +16,8 @@ type CoverageUploadToken struct {
 	Name      string `gorm:"type:varchar(255);not null" json:"name"`
 	TokenHash string `gorm:"type:varchar(64);not null;uniqueIndex" json:"-"`
 
-	CreatedByUserID string `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
-	CreatedByUser   *User  `gorm:"foreignKey:CreatedByUserID" json:"-"`
+	CreatedByUserID *string `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
+	CreatedByUser   *User   `gorm:"foreignKey:CreatedByUserID" json:"-"`
 
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
