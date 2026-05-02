@@ -93,6 +93,21 @@ func main() {
 		enqueuer = jobs.NewAsynqEnqueuer(&cfg.Redis)
 
 		pgRepo := postgres.NewPostgresRepository(db.GetDB())
+
+		// Recover sync rows that were left in `syncing` because a previous
+		// worker process was killed mid-sync. Reset them to `idle` and
+		// re-enqueue so metadata gets populated on the next worker run.
+		if staleIDs, err := pgRepo.ResetStaleSyncingRepositories(context.Background()); err != nil {
+			utils.Warn("startup: reset stale syncing repos failed", "error", err)
+		} else if len(staleIDs) > 0 {
+			utils.Info("startup: re-enqueuing stale syncing repositories", "count", len(staleIDs))
+			for _, id := range staleIDs {
+				payload := tasks.SyncRepoPayload{RepositoryID: id}
+				if err := enqueuer.Enqueue(context.Background(), tasks.TypeSyncRepo, payload); err != nil {
+					utils.Warn("startup: re-enqueue sync failed", "repo_id", id, "error", err)
+				}
+			}
+		}
 		ghClient := githubclient.NewClient(cfg.API.GithubToken)
 		syncSvc := services.NewSyncService(pgRepo, ghClient, cache, cfg.API.WebhookBaseURL)
 

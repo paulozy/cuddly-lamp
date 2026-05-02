@@ -347,6 +347,27 @@ func (pr *PostgresRepository) CreateRepository(ctx context.Context, repo *models
 	return nil
 }
 
+// ResetStaleSyncingRepositories flips any repository stuck in `sync_status='syncing'`
+// back to `idle` and returns the affected IDs. Workers do not persist across
+// process restarts, so any row left in `syncing` after boot is a stale state
+// from a killed process; the caller should re-enqueue a sync task for each
+// returned ID.
+func (pr *PostgresRepository) ResetStaleSyncingRepositories(ctx context.Context) ([]string, error) {
+	const sql = `
+        UPDATE repositories
+           SET sync_status = 'idle',
+               sync_error  = 'reset on startup (previous sync was interrupted)',
+               updated_at  = (NOW() AT TIME ZONE 'UTC')
+         WHERE sync_status = 'syncing'
+           AND deleted_at IS NULL
+        RETURNING id`
+	var ids []string
+	if err := pr.db.WithContext(ctx).Raw(sql).Scan(&ids).Error; err != nil {
+		return nil, fmt.Errorf("reset stale syncing repos: %w", err)
+	}
+	return ids, nil
+}
+
 func (pr *PostgresRepository) UpdateRepository(ctx context.Context, repo *models.Repository) error {
 	if !repo.IsValid() {
 		return errors.New("invalid repository data")

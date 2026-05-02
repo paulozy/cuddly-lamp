@@ -87,6 +87,9 @@ type Repository interface {
 	UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
 	DeletePackageDependencies(ctx context.Context, repoID string) error
 
+	// Maintenance / startup recovery
+	ResetStaleSyncingRepositories(ctx context.Context) ([]string, error)
+
 	// Coverage upload operations
 	CreateCoverageUpload(ctx context.Context, upload *models.CoverageUpload) error
 	GetLatestCoverageUpload(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
