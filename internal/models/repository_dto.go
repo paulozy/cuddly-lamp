@@ -52,6 +52,12 @@ type RepositoryStats struct {
 	LatestScore    int     `json:"latest_quality_score"`
 	HasAnalysis    bool    `json:"has_analysis"`
 	LastAnalyzedAt *string `json:"last_analyzed_at"`
+	// Coverage from the latest completed analysis. Empty CoverageStatus means
+	// no analysis has populated coverage metrics yet.
+	TestCoverage   float64 `json:"test_coverage"`
+	TestedLines    int     `json:"tested_lines"`
+	UncoveredLines int     `json:"uncovered_lines"`
+	CoverageStatus string  `json:"coverage_status,omitempty"`
 }
 
 func RepositoryToResponse(r *Repository) *RepositoryResponse {
@@ -94,6 +100,10 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 			LatestScore:    score,
 			HasAnalysis:    es.TotalAnalyses > 0,
 			LastAnalyzedAt: es.LatestAnalyzedAt,
+			TestCoverage:   es.TestCoverage,
+			TestedLines:    es.TestedLines,
+			UncoveredLines: es.UncoveredLines,
+			CoverageStatus: es.CoverageStatus,
 		}
 	}
 
