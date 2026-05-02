@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test + coverage
+    runs-on: ubuntu-latest
+    # Job-level env so the upload step's `if:` can read them. Step-level env
+    # is not available during `if:` evaluation (it is set right before run).
+    env:
+      IDP_BASE_URL: ${{ secrets.IDP_BASE_URL }}
+      IDP_REPOSITORY_ID: ${{ secrets.IDP_REPOSITORY_ID }}
+      IDP_COVERAGE_TOKEN: ${{ secrets.IDP_COVERAGE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+
+      # Upload to the IDP backend's own coverage endpoint. Soft-fail on
+      # purpose: this is dogfooding, and a missing/expired token, network
+      # blip, or undeployed backend must never block a merge. The step is
+      # also skipped entirely until the three secrets are configured —
+      # this keeps the workflow valid before the cloud deploy is wired.
+      - name: Upload coverage to IDP (best-effort)
+        if: ${{ env.IDP_BASE_URL != '' && env.IDP_REPOSITORY_ID != '' && env.IDP_COVERAGE_TOKEN != '' }}
+        continue-on-error: true
+        run: |
+          set +e
+          curl --max-time 30 --fail-with-body -X POST \
+            "$IDP_BASE_URL/api/v1/repositories/$IDP_REPOSITORY_ID/coverage" \
+            -H "Authorization: Bearer $IDP_COVERAGE_TOKEN" \
+            -H "X-Coverage-Format: go" \
+            -H "X-Commit-SHA: $GITHUB_SHA" \
+            -H "X-Coverage-Branch: ${GITHUB_REF#refs/heads/}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @coverage.out
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::coverage upload returned non-zero ($status) — backend likely unreachable, ignoring"
+          fi
+          exit 0
