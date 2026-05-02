@@ -282,7 +282,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
                 ca.created_at
             FROM   code_analyses ca
             WHERE  ca.repository_id = r.id
-              AND  ca.type          = 'metrics'
+              AND  ca.type          = 'code_review'
               AND  ca.status        = 'completed'
               AND  ca.deleted_at    IS NULL
             ORDER BY ca.created_at DESC
@@ -422,7 +422,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
                 ca.created_at
             FROM   code_analyses ca
             WHERE  ca.repository_id = r.id
-              AND  ca.type          = 'metrics'
+              AND  ca.type          = 'code_review'
               AND  ca.status        = 'completed'
               AND  ca.deleted_at    IS NULL
             ORDER BY ca.created_at DESC
