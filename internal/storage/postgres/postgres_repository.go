@@ -30,7 +30,7 @@ type enrichedRepo struct {
 	OwnerUserID     *string
 	CreatedByUserID *string
 	IsPublic        bool
-	Metadata        []byte // JSONB → raw bytes
+	Metadata        sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
 	AnalysisStatus  string
 	AnalysisError   sql.NullString
 	ReviewsCount    int
@@ -246,7 +246,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             r.owner_user_id,
             r.created_by_user_id,
             r.is_public,
-            r.metadata,
+            r.metadata::text                                       AS metadata,
             r.analysis_status,
             r.analysis_error,
             r.reviews_count,
@@ -386,7 +386,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             r.owner_user_id,
             r.created_by_user_id,
             r.is_public,
-            r.metadata,
+            r.metadata::text                                       AS metadata,
             r.analysis_status,
             r.analysis_error,
             r.reviews_count,
@@ -475,8 +475,12 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 // The Stats field is populated from the lateral-join columns.
 func enrichedRepoToModel(e enrichedRepo) models.Repository {
 	var meta models.RepositoryMetadata
-	if len(e.Metadata) > 0 {
-		_ = json.Unmarshal(e.Metadata, &meta) // ignore unmarshal error → empty metadata
+	if e.Metadata.Valid && e.Metadata.String != "" {
+		if err := json.Unmarshal([]byte(e.Metadata.String), &meta); err != nil {
+			// Bad data in storage shouldn't crash the list endpoint, but it
+			// is loud enough to investigate.
+			meta = models.RepositoryMetadata{}
+		}
 	}
 
 	var ownerUserID, createdByUserID string
