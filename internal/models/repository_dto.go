@@ -29,7 +29,11 @@ type RepositoryResponse struct {
 
 	// Zero-cost fields (already on repositories table)
 	AnalysisStatus string `json:"analysis_status,omitempty"`
+	AnalysisError  string `json:"analysis_error,omitempty"`
 	ReviewsCount   int    `json:"reviews_count,omitempty"`
+	SyncStatus     string `json:"sync_status,omitempty"`
+	SyncError      string `json:"sync_error,omitempty"`
+	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`
 
 	// Aggregated stats
 	Stats RepositoryStats `json:"stats"`
@@ -65,7 +69,14 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 		AnalysisStatus:  r.AnalysisStatus,
+		AnalysisError:   r.AnalysisError,
 		ReviewsCount:    r.ReviewsCount,
+		SyncStatus:      r.SyncStatus,
+		SyncError:       r.SyncError,
+	}
+	if !r.LastSyncedAt.IsZero() {
+		t := r.LastSyncedAt
+		resp.LastSyncedAt = &t
 	}
 
 	// Populate Stats from EnrichedStats when available (list endpoint).
