@@ -15,7 +15,7 @@ type PackageDependency struct {
 
 	IsDirectDependency bool        `gorm:"default:true" json:"is_direct_dependency"`
 	IsVulnerable       bool        `gorm:"default:false;index" json:"is_vulnerable"`
-	VulnerabilityCVEs  StringArray `gorm:"type:text[]" json:"vulnerability_cves"`
+	VulnerabilityCVEs  StringArray `gorm:"column:vulnerability_cves;type:text[]" json:"vulnerability_cves"`
 	UpdateAvailable    bool        `gorm:"default:false" json:"update_available"`
 
 	LastScannedAt time.Time `json:"last_scanned_at"`
