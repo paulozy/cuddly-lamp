@@ -1,4 +1,4 @@
-# Project Checkpoint - May 1, 2026
+# Project Checkpoint - May 1, 2026 (updated)
 
 ## 📌 What Has Been Implemented
 
@@ -108,6 +108,17 @@
 - **Budget Enforcement**: Token-budget guard runs **before** the SSE upgrade so an exhausted org budget returns a plain HTTP 429 for both SSE and non-SSE clients. Synthesis usage is persisted as `code_analyses` rows of type `search_synthesis` so it counts toward `SumTokensUsedSince`.
 - **Graceful Fallback**: When the org has no `ANTHROPIC_API_KEY`, the stream still emits `results` then `synthesis_unavailable` (reason: `anthropic_not_configured`) and `done`, so clients keep working without AI.
 - **Per-route Write Deadline**: SSE branch raises the connection write deadline to 45s via `http.ResponseController` so the longer stream is not cut by the global `srv.WriteTimeout: 15s`.
+
+### Coverage via CI Upload ✅
+- **Endpoint**: `POST /api/v1/repositories/:id/coverage`. Bearer `cov_*` token, headers `X-Coverage-Format` + `X-Commit-SHA` (+ optional `X-Coverage-Branch`), raw body up to 5 MB, synchronous 200 response with parsed numbers. Status codes 401 (bad token), 415 (unsupported format), 413 (oversize), 422 (parse failure).
+- **Auth**: `coverage_upload_tokens` table. Tokens generated as `cov_<hex>` (32 random bytes), persisted as SHA-256 hash, returned in plaintext only on creation. Scope: single repository. Revocable via DELETE; expiration optional. CRUD via `POST/GET/DELETE /api/v1/repositories/:id/coverage/tokens` (JWT).
+- **Storage**: `coverage_uploads` keeps history (last-wins for the patch, every upload preserved). Files-by-path map persisted as JSONB for the PR rule.
+- **Race resolution**: Upload arrived before analysis completes → analysis worker reads latest upload before writing `code_analyses`. Upload arrives after analysis → handler best-effort `UPDATE` patches the latest completed `code_analyses` row's metrics JSONB. Both paths idempotent; no Claude re-call.
+- **PR rule** (`coverage.PRCoverageGaps`): For PR analyses, files with `status="added"` that are missing from the upload's per-file map (or have `LinesTotal == 0`) generate `severity=medium`, `category=test_coverage` issues. `IsAIGenerated=false`, `Confidence=1.0`. Severity counts run AFTER the append.
+- **Per-file granularity**: All four parsers extended to populate `Report.Files []FileCoverage`. Go cover uses `Profile.FileName`; LCOV uses `SF:` blocks; Cobertura merges classes by `filename` attr; JaCoCo joins `package@name` with `sourcefile@name`.
+- **Quality score guard**: `GetQualityScore` and DTO `computeQualityScore` skip the coverage deduction unless `coverage_status` is `ok` or `partial` — repos without uploads no longer take a 20-point hit.
+- **Worker integration**: New injectable `lookupCoverage` field; default reads from the repository. Resolved at call time (closure) so test mocks with nil receivers don't panic at construction.
+- **Files**: `internal/coverage/types.go`, `internal/coverage/parsers.go`, `internal/coverage/pr_rule.go`, `internal/coverage/parsers_test.go`, `internal/coverage/pr_rule_test.go`, `internal/models/coverage_upload.go`, `internal/models/coverage_upload_token.go`, `internal/models/coverage_upload_dto.go`, `internal/models/code_analysis.go` (CoverageStatus field), `internal/models/code_analysis_test.go`, `internal/services/coverage_service.go`, `internal/services/coverage_service_test.go`, `internal/api/handlers/coverage.go`, `internal/api/handlers/coverage_test.go`, `internal/api/factories/make_coverage_handler.go`, `internal/api/routes.go`, `internal/storage/repository.go` (interface), `internal/storage/postgres/coverage_upload_repository.go`, `internal/storage/postgres/coverage_upload_token_repository.go`, `internal/workers/analysis_worker.go`, migrations `017-add-coverage-uploads.sql`, `018-add-coverage-upload-tokens.sql`.
 
 ### Dependency Tracking ✅
 - **Manifest Parsers**: `internal/dependencies/` parses `go.mod`, `package.json`, `requirements.txt`, and `Cargo.toml`.
@@ -295,13 +306,15 @@ Generated paths:
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, relationship graph, sync pipeline |
+| `internal/services` | Unit tests ✅ | auth refresh, repository CRUD, relationship graph, sync pipeline, **coverage ingest/token lifecycle** |
 | `internal/storage/redis` | Unit tests ✅ | cache get/set/del/exists, no-op fallback |
 | `internal/utils` | Unit tests ✅ | URL parsing |
+| `internal/coverage` | Unit tests ✅ | Go/LCOV/Cobertura/JaCoCo parsers (per-file granularity) + PR rule edge cases |
 | `internal/dependencies` | Unit tests ✅ | manifest parser coverage |
-| `internal/workers` | Unit tests ✅ | analysis, dependency, docs, and template worker coverage |
-| `internal/api/handlers` | Unit tests ✅ | analysis helpers and dependency handler coverage |
+| `internal/workers` | Unit tests ✅ | analysis (incl. coverage lookup populating metrics + unmeasured fallback), dependency, docs, and template workers |
+| `internal/api/handlers` | Unit tests ✅ | analysis helpers, dependency handler, **coverage ingest + token CRUD** |
 | `internal/integrations/anthropic` | Unit tests ✅ | analyzer, documentation, and template generator prompt/parser coverage |
+| `internal/models` | Unit tests ✅ | quality score guard for coverage status |
 | `internal/storage/postgres` | Integration tests ⏳ | requires `TEST_DATABASE_URL` |
 
 ---
@@ -388,6 +401,21 @@ Generated paths:
 - **Tests**: Added prompt builder tests (capping/truncation/escaping/determinism) and SSE handler tests (no-key fallback, cache hit, cache miss with token deltas + persistence, stream error, synthesizer start failure, fingerprint stability/order-independence).
 - **Files**: `internal/ai/provider.go`, `internal/ai/mock_analyzer.go`, `internal/integrations/anthropic/synthesis.go`, `internal/integrations/anthropic/synthesis_test.go`, `internal/storage/redis/keys.go`, `internal/api/handlers/analysis.go`, `internal/api/handlers/analysis_synthesis.go`, `internal/api/handlers/analysis_synthesis_test.go`, `internal/api/factories/make_analysis_handler.go`, `internal/api/routes.go`, `internal/models/code_analysis.go`, `migrations/014-add-search-synthesis-analysis-type.sql`, `CLAUDE.md`, `docs/docs.go`
 
+### Phase 11: Coverage via CI Upload ✅
+- **New endpoints**: `POST /api/v1/repositories/:id/coverage` (Bearer cov_* token, raw report body) and `POST/GET/DELETE /api/v1/repositories/:id/coverage/tokens` for token CRUD (JWT).
+- **Service**: `CoverageService.IngestCoverage` validates token, parses body via the 4 existing parsers, persists in `coverage_uploads`, and best-effort `UPDATE`s `code_analyses.metrics` for the same SHA. `CreateUploadToken`/`RevokeUploadToken`/`ListUploadTokens` cover the token lifecycle. `LookupForAnalysis` is what the worker calls.
+- **Handler**: `IngestCoverage` returns synchronous 200 with parsed numbers. Error mapping: 401 (token), 415 (format), 413 (oversize), 422 (parse). Token CRUD handlers expose plaintext only on creation.
+- **Auth model**: `coverage_upload_tokens` table with SHA-256 hashed tokens, `last_used_at`/`expires_at`/`revoked_at` audit fields, repository scope. New migration `018`.
+- **Storage**: `coverage_uploads` table (migration `017`) with index `(repository_id, commit_sha, created_at DESC)`. Files persisted as JSONB map for PR rule consumption.
+- **Race resolution**: Worker reads latest upload before saving analysis (path A); handler patches latest analysis row after upload (path B). Both idempotent.
+- **PR rule**: `coverage.PRCoverageGaps` flags newly added files without coverage as `medium` issues. Deterministic — no LLM, no extra tokens, runs after `analyzer.AnalyzeCode` and before severity counting.
+- **Per-file parsing**: All 4 parsers extended (Go via `Profile.FileName`, LCOV via `SF:` blocks, Cobertura merged by `filename` attr, JaCoCo joining `package@name + sourcefile@name`).
+- **Worker**: New injectable `lookupCoverage` field; closure-bound at call time so test mocks with nil receivers don't panic.
+- **Quality score**: `coverageMeasured` guard preserved; status `not_configured`/`failed` skips the deduction.
+- **Tests**: parsers (per-file assertions), PR rule (5 scenarios), coverage service (happy path, foreign repo, revoked, expired, invalid format, invalid SHA, last-wins, hash determinism), handlers (200, missing headers, bad token, unsupported format, malformed body, full token lifecycle), worker (coverage populating metrics, missing upload leaving fields zero), models quality score guard.
+- **Cleanup of v1 (clone-based)**: `internal/coverage/coverage.go` (Extract + YAML config), `internal/coverage/coverage_test.go`, `.idp/metrics.yml`, `defaultExtractCoverage` worker plumbing all removed. `goccy/go-yaml` and `cyphar/filepath-securejoin` returned to indirect.
+- **Files**: see "Coverage via CI Upload ✅" section above.
+
 ### Phase 10: Enriched Repository List ✅
 - **Query optimization**: Replaced GORM-based `ListRepositories` with raw SQL using LATERAL joins to fetch aggregated stats in a single query
 - **Aggregated stats**: Total analyses count, latest metrics analysis (issue counts, test coverage, complexity), quality score computation
@@ -412,6 +440,8 @@ Generated paths:
 - [x] **Spatial repository navigation** — typed repo relationship graph, graph endpoint, relationship CRUD, legacy dependency backfill
 - [x] **AI synthesis on semantic search** — opt-in `?synthesize=true` SSE upgrade, `ai.Synthesizer` interface, Anthropic streaming, Redis-cached summaries, token-budget integration, graceful fallback
 - [x] **Enriched repository list** — aggregated stats via optimized LATERAL joins, quality score, analysis status, zero N+1 queries
+- [x] **Coverage via CI upload** — Codecov-style ingestion endpoint, scoped revocable tokens, idempotent dual-path metric patching, deterministic PR rule for added files without coverage
+- [ ] **Full metrics rollout** — duplication, maintainability index, tech debt score, historical `repository_metric_snapshots` + `metrics/history` (remaining scope of `plans/full-metrics.md`)
 - [ ] **Handler tests** — broaden unit tests for repository, analysis, and webhook handlers
 - [ ] **Postgres integration tests** — wire `TEST_DATABASE_URL` in CI
 - [ ] **Key rotation** — store key version in database for multi-key encryption support
@@ -458,10 +488,10 @@ LOG_LEVEL                    # debug / info / warn / error
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats)
-**Commits this phase**: 13 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph, search synthesis SSE, enriched repository list)
-**Total commits (AI + pipeline)**: 17
-**Production Readiness**: ~95% (auth + repo + webhook + encryption + AI analysis + semantic search + synthesis streaming + dependency tracking + docs generation + spatial graph + enriched list done; needs broader integration tests, key rotation)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List + Coverage via CI Upload Complete (Auth + Repo + Webhook + Encryption + Analysis + Real PR Diffs + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats + Codecov-style coverage ingestion + deterministic PR coverage rule)
+**Commits this phase**: 14 planned work units (deduplication, token rate limiting, local metrics, semantic search, metrics clone auth, hybrid semantic relevance, real PR diff analysis, auth onboarding/multi-org login, dependency tracking, auto docs, spatial repository graph, search synthesis SSE, enriched repository list, coverage upload)
+**Total commits (AI + pipeline)**: 18
+**Production Readiness**: ~95% (auth + repo + webhook + encryption + AI analysis + semantic search + synthesis streaming + dependency tracking + docs generation + spatial graph + enriched list + coverage upload done; needs broader integration tests, key rotation)
 
 ---
 

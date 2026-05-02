@@ -92,6 +92,7 @@ internal/
 14. **Search Synthesis (opt-in SSE)**: Complete — `?synthesize=true` upgrades the existing search endpoint to SSE, streaming Claude-generated overviews of the matched snippets via `ai.Synthesizer.StreamSearchSynthesis`, with Redis caching, token-budget enforcement, and graceful fallback when no Anthropic key is configured
 15. **Enriched Repository List**: Complete — Optimized SQL with LATERAL joins fetches aggregated stats (total analyses, quality score, latest metrics) in a single query, zero N+1 problem
 16. **Configurable AI Output Language**: Complete — `OrganizationConfig.OutputLanguage` (BCP 47) drives a System prompt injected into every Claude call (analysis, docs, templates, dependency, search synthesis). Validated with `golang.org/x/text/language`. Search synthesis cache fingerprint includes the language. Defaults to `"en"`; enum-like fields stay in canonical English regardless.
+17. **Coverage via CI Upload (`internal/coverage/`)**: Complete — CI runs upload coverage reports to `POST /api/v1/repositories/:id/coverage` authenticated with a `cov_*` Bearer token. Supported formats: `go` (Go cover via `golang.org/x/tools/cover`), `lcov`, `cobertura` (XML), `jacoco` (XML). Parser stack also returns per-file granularity. Uploads persist in `coverage_uploads` keyed by `(repo, commit_sha)`; the handler also best-effort patches `code_analyses.metrics` for that SHA. The worker reads the latest upload before saving its analysis, populating `test_coverage`/`tested_lines`/`uncovered_lines`/`coverage_status`. PR-mode analyses run a deterministic rule (`coverage.PRCoverageGaps`) that flags newly added files with no recorded coverage as `medium` issues — no LLM call. Tokens are revocable, scoped per repo, and shown only once on creation.
 
 ## Known Issues & Constraints
 
@@ -173,6 +174,21 @@ internal/
 - **Reuse**: `PATCH /api/v1/templates/:id/pin` toggles team reuse metadata (`is_pinned`, `name`, `pinned_by_user_id`, `pinned_at`).
 - **Listing**: `GET /api/v1/templates?pinned=true&status=completed&limit=20&offset=0` lists organization templates with optional filters.
 - **Token budget**: `SumTokensUsedSince` includes both `code_analyses` and completed `code_templates` rows.
+
+## Coverage via CI Upload Notes
+
+- **Source**: Coverage is uploaded by the repository's CI via `POST /api/v1/repositories/:id/coverage`. The backend never reads coverage from the clone, so projects can keep `coverage.out` / `lcov.info` / etc. gitignored as usual.
+- **Auth**: `Authorization: Bearer cov_*` token. Tokens are scoped to a single repository, hashed (SHA-256) at rest, shown plaintext only once on creation, and revocable. Manage via `POST/GET/DELETE /api/v1/repositories/:id/coverage/tokens`.
+- **Headers** (required): `X-Coverage-Format` (`go|lcov|cobertura|jacoco`) and `X-Commit-SHA`. `X-Coverage-Branch` is optional.
+- **Body**: raw report bytes. `Content-Type: application/octet-stream`. Limit: 5 MB.
+- **Response**: synchronous 200 with parsed numbers (`lines_covered`, `lines_total`, `percentage`, `status`). 401 on bad token, 415 on unsupported format, 413 on oversize, 422 on parse failure.
+- **Storage**: `coverage_uploads` table (one row per upload, kept indefinitely; future TTL via cron). The most recent upload for a `(repo, sha)` is the patch winner.
+- **Patch flow**: After persisting, the handler runs an `UPDATE code_analyses.metrics` for the most recent completed analysis with the same SHA. Zero rows affected is normal — the analysis may not exist yet.
+- **Worker integration**: `analysis_worker` looks up `coverage_uploads` before writing `code_analyses` and populates `test_coverage`, `tested_lines`, `uncovered_lines`, `coverage_status`. No clone duplication, no LLM call dependency.
+- **PR rule**: For PRs, after the analyzer returns, the worker calls `coverage.PRCoverageGaps(prFiles, fileCoverage)` to flag newly added files (`status == "added"`) without recorded coverage. Issues are appended with `severity=medium`, `category=test_coverage`, `IsAIGenerated=false`, `Confidence=1.0`. Severity counts are computed AFTER the append.
+- **Quality score**: `GetQualityScore`/`computeQualityScore` skip the coverage deduction when status ≠ `ok`/`partial` so unconfigured repos are not penalized.
+- **Late uploads**: Patching the metrics is idempotent. A coverage upload that arrives after the analysis completes will update `test_coverage`/`tested_lines`/`uncovered_lines`/`coverage_status` on the existing row. The PR rule does NOT retroactively rewrite issues — re-trigger the analysis manually if you need it.
+- **Idempotency**: Multiple uploads for the same `(repo, sha)` are accepted and persisted. Last-wins for the patch. Multi-flag merge (Codecov-style) is out of scope v1.
 
 ## Dependency Tracking Notes
 

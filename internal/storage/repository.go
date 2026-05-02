@@ -87,6 +87,20 @@ type Repository interface {
 	UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
 	DeletePackageDependencies(ctx context.Context, repoID string) error
 
+	// Coverage upload operations
+	CreateCoverageUpload(ctx context.Context, upload *models.CoverageUpload) error
+	GetLatestCoverageUpload(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
+	ListCoverageUploadsForCommit(ctx context.Context, repoID, sha string) ([]*models.CoverageUpload, error)
+	PatchCodeAnalysisCoverage(ctx context.Context, repoID, sha string, covered, total int, percentage float64, status string) (int64, error)
+
+	// Coverage upload tokens
+	CreateCoverageUploadToken(ctx context.Context, token *models.CoverageUploadToken) error
+	GetCoverageUploadTokenByHash(ctx context.Context, hash string) (*models.CoverageUploadToken, error)
+	GetCoverageUploadToken(ctx context.Context, id string) (*models.CoverageUploadToken, error)
+	ListCoverageUploadTokens(ctx context.Context, repoID string) ([]*models.CoverageUploadToken, error)
+	RevokeCoverageUploadToken(ctx context.Context, id string) error
+	TouchCoverageUploadTokenUsage(ctx context.Context, id string) error
+
 	// Code Embedding operations
 	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
 	CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error

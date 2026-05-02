@@ -48,6 +48,7 @@ type enrichedRepo struct {
 	ErrorCount       sql.NullInt64
 	WarningCount     sql.NullInt64
 	TestCoverage     sql.NullFloat64
+	CoverageStatus   sql.NullString
 	AvgComplexity    sql.NullFloat64
 	LatestAnalyzedAt sql.NullTime
 }
@@ -261,6 +262,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             latest.error_count                                      AS error_count,
             latest.warning_count                                    AS warning_count,
             (latest.metrics->>'test_coverage')::float               AS test_coverage,
+            (latest.metrics->>'coverage_status')                    AS coverage_status,
             (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
             latest.created_at                                       AS latest_analyzed_at
         FROM repositories r
@@ -309,7 +311,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 		&e.CreatedAt, &e.UpdatedAt,
 		&e.TotalAnalyses,
 		&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
-		&e.TestCoverage, &e.AvgComplexity,
+		&e.TestCoverage, &e.CoverageStatus, &e.AvgComplexity,
 		&e.LatestAnalyzedAt,
 	); err != nil {
 		return nil, fmt.Errorf("scan repository row: %w", err)
@@ -400,6 +402,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             latest.error_count                                      AS error_count,
             latest.warning_count                                    AS warning_count,
             (latest.metrics->>'test_coverage')::float               AS test_coverage,
+            (latest.metrics->>'coverage_status')                    AS coverage_status,
             (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
             latest.created_at                                       AS latest_analyzed_at
         FROM repositories r
@@ -454,7 +457,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TotalAnalyses,
 			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
-			&e.TestCoverage, &e.AvgComplexity,
+			&e.TestCoverage, &e.CoverageStatus, &e.AvgComplexity,
 			&e.LatestAnalyzedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan repository row: %w", err)
@@ -523,6 +526,7 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		ErrorCount:         int(e.ErrorCount.Int64),
 		WarningCount:       int(e.WarningCount.Int64),
 		TestCoverage:       e.TestCoverage.Float64,
+		CoverageStatus:     e.CoverageStatus.String,
 		AvgComplexity:      e.AvgComplexity.Float64,
 		HasMetricsAnalysis: e.IssueCount.Valid, // Valid=true only when LATERAL returned a row
 	}

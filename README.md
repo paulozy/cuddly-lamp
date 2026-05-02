@@ -131,6 +131,16 @@ Identity Provider (IDP) platform with JWT authentication, multi-provider OAuth 2
 - ✅ Webhook auto-trigger when push/PR changes include supported manifest files
 - ✅ Suggestion-based updates only: recommended versions are stored/commented, no automatic update PR creation
 
+### Coverage via CI Upload
+- ✅ Endpoint `POST /api/v1/repositories/:id/coverage` recebe relatórios brutos (Go cover, LCOV, Cobertura XML, JaCoCo XML) com até 5 MB
+- ✅ Autenticação via Bearer `cov_*` token, escopo por repositório, hash SHA-256 em repouso, exibido só uma vez
+- ✅ CRUD de tokens em `POST/GET/DELETE /api/v1/repositories/:id/coverage/tokens` (auth via JWT)
+- ✅ Cada upload é persistido em `coverage_uploads` keyed por `(repo, commit_sha)`; histórico mantido para auditoria
+- ✅ Handler também faz best-effort `UPDATE` em `code_analyses.metrics` da última análise para o mesmo SHA
+- ✅ Análise lê `coverage_uploads` antes de gravar e popula `test_coverage`/`tested_lines`/`uncovered_lines`/`coverage_status`
+- ✅ Regra determinística (sem LLM): em PR analyses, arquivo novo (`added`) sem coverage vira issue automática com severidade `warning`
+- ✅ Quality score pula dedução de coverage quando não foi medido — repos não configurados não levam penalty injusto
+
 ### Semantic Code Search
 - ✅ Voyage AI embeddings with provider abstraction (`internal/embeddings`)
 - ✅ Default model: `voyage-code-3` with 1024-dimensional vectors
@@ -203,7 +213,37 @@ curl "http://localhost:3000/api/v1/repositories/$REPO_ID/dependencies?vulnerable
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### 6. Test the server
+### 6. Upload coverage from CI (optional)
+
+Generate an upload token (one-time visibility):
+```bash
+TOKEN=$(curl -sX POST http://localhost:3000/api/v1/repositories/$REPO_ID/coverage/tokens \
+  -H "Authorization: Bearer $JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"github-actions"}' | jq -r '.token')
+echo "$TOKEN"   # cov_<hex...>  — store as a CI secret immediately
+```
+
+Upload a report from CI (any of: `go`, `lcov`, `cobertura`, `jacoco`):
+```bash
+go test ./... -coverprofile=coverage.out
+curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/coverage \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Coverage-Format: go" \
+  -H "X-Commit-SHA: $(git rev-parse HEAD)" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @coverage.out
+```
+
+Response: `200 OK` with `{ lines_covered, lines_total, percentage, status }`.
+
+The next analysis for that SHA will read these numbers automatically. Coverage
+that arrives BEFORE the analysis is patched into the analysis row when it
+completes; coverage that arrives AFTER the analysis triggers a best-effort
+`UPDATE` of the metrics on the existing row. Without an upload, the quality
+score skips coverage deductions (no false penalty).
+
+### 7. Test the server
 ```bash
 # Health check
 curl http://localhost:3000/api/v1/health
@@ -248,7 +288,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 curl -L "http://localhost:3000/api/v1/auth/github?organization_name=Acme%20Inc"
 ```
 
-### 7. Generate an intelligent code template
+### 8. Generate an intelligent code template
 ```bash
 # Requires ANTHROPIC_API_KEY and Redis/asynq enabled
 curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/templates \
@@ -265,7 +305,7 @@ curl -X PATCH http://localhost:3000/api/v1/templates/$TEMPLATE_ID/pin \
   -d '{"is_pinned":true,"name":"Go CRUD with JWT"}'
 ```
 
-### 8. Generate repository documentation
+### 9. Generate repository documentation
 ```bash
 # Requires ANTHROPIC_API_KEY, GITHUB_TOKEN, and Redis/asynq enabled
 curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/docs/generate \
@@ -382,6 +422,12 @@ backend/
 │   │   ├── generator.go           # Generator interface + template request/result types
 │   │   ├── mock_analyzer.go       # Mock analyzer + synthesizer for testing
 │   │   └── mock_generator.go      # Mock generator for testing
+│   ├── coverage/                  # Test coverage parsers + PR rule
+│   │   ├── types.go               # Format, Status, Report, FileCoverage
+│   │   ├── parsers.go             # Go cover / LCOV / Cobertura / JaCoCo (per-file)
+│   │   ├── pr_rule.go             # Deterministic "added file w/o coverage" issue
+│   │   ├── parsers_test.go        # Per-format parser tests
+│   │   └── pr_rule_test.go        # PR rule edge cases
 │   ├── dependencies/              # Package manifest parsers
 │   │   ├── parser.go              # go.mod, package.json, requirements.txt, Cargo.toml parsers
 │   │   └── parser_test.go         # Parser unit tests
@@ -745,6 +791,39 @@ Storage:
   code_templates tokens are included in the shared Anthropic hourly budget
 ```
 
+### Coverage via CI Upload
+```
+Tokens (managed by repository owners):
+  POST   /api/v1/repositories/:id/coverage/tokens     # JWT, returns plaintext ONCE
+  GET    /api/v1/repositories/:id/coverage/tokens     # JWT
+  DELETE /api/v1/repositories/:id/coverage/tokens/:tokenID
+
+Upload (called by CI):
+  POST /api/v1/repositories/:id/coverage
+  Authorization: Bearer cov_<hex...>
+  X-Coverage-Format: go|lcov|cobertura|jacoco
+  X-Commit-SHA: <40-char hex>
+  X-Coverage-Branch: <optional>
+  Content-Type: application/octet-stream
+  Body: raw report bytes (max 5 MB)
+  → 200 { id, commit_sha, lines_covered, lines_total, percentage, status }
+
+Storage:
+  coverage_uploads (durable, history kept) keyed by (repository_id, commit_sha, created_at DESC)
+
+Analysis integration:
+  Worker reads latest upload BEFORE writing code_analyses → metrics are accurate when analysis runs after upload
+  Handler patches code_analyses AFTER each upload → metrics are accurate when upload arrives after analysis
+  Both paths idempotent; last-wins on the patch
+
+PR rule (deterministic, no LLM):
+  For PR analyses, files with status="added" and no recorded coverage become medium-severity issues
+  ("New file without test coverage"). IsAIGenerated=false, Confidence=1.0.
+
+Quality score:
+  Coverage deduction is skipped when coverage_status != ok/partial — no false penalty for unconfigured repos
+```
+
 ### Dependency Tracking
 ```
 Supported manifests:
@@ -844,8 +923,8 @@ Para dúvidas ou sugestões, abra uma issue ou entre em contato com o time.
 
 ---
 
-**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats)
-**Última atualização**: May 1, 2026 (Enriched repository list: aggregated stats via optimized LATERAL joins SQL query - quality score, total analyses, embeddings count, dependency counts, relationship counts)
+**Status**: 🤖 AI Integration + Semantic Search + Synthesis Streaming + Dependency Tracking + Auto Docs + Spatial Repository Graph + Enriched Repository List + Coverage via CI Upload Complete (Auth + Sync + Webhook + Encryption + Real PR Diff Analysis + Dedup + Rate Limiting + Metrics + Voyage embeddings + package dependency scans + documentation PRs + graph navigation + opt-in SSE search synthesis + aggregated repository stats + Codecov-style coverage ingestion + deterministic PR coverage rule)
+**Última atualização**: May 1, 2026 (Coverage via CI upload: `POST /repositories/:id/coverage` with Bearer cov_* tokens, parsers for Go/LCOV/Cobertura/JaCoCo with per-file granularity, idempotent dual-path patching of code_analyses, deterministic PR rule for added files without coverage)
 
 ### 📖 Accessing the API Documentation
 ```bash

@@ -83,6 +83,7 @@ type CodeMetrics struct {
 	UncoveredLines int     `json:"uncovered_lines"`
 	TestsCount     int     `json:"tests_count"`
 	TestPassRate   float64 `json:"test_pass_rate,omitempty"`
+	CoverageStatus string  `json:"coverage_status,omitempty"` // ok|not_configured|partial|failed
 
 	DuplicatedLines  int     `json:"duplicated_lines"`
 	DuplicationRatio float64 `json:"duplication_ratio"` // Duplicated / Total
@@ -217,7 +218,9 @@ func (ca *CodeAnalysis) HasCriticalIssues() bool {
 }
 
 func (ca *CodeAnalysis) GetQualityScore() int {
-	if ca.IssueCount == 0 && ca.Metrics.TestCoverage >= 80 {
+	coverageMeasured := ca.Metrics.CoverageStatus == "ok" || ca.Metrics.CoverageStatus == "partial"
+
+	if ca.IssueCount == 0 && coverageMeasured && ca.Metrics.TestCoverage >= 80 {
 		return 100
 	}
 
@@ -230,8 +233,10 @@ func (ca *CodeAnalysis) GetQualityScore() int {
 	}
 	score -= issueDeduction
 
-	// Deduct for low test coverage (max 20 points)
-	if ca.Metrics.TestCoverage < 80 {
+	// Deduct for low test coverage (max 20 points). Skip when coverage was not
+	// measured — penalizing a repo with no .idp/metrics.yml as if it had 0%
+	// coverage would conflate "unmeasured" with "no tests".
+	if coverageMeasured && ca.Metrics.TestCoverage < 80 {
 		coverageDeduction := int((80.0 - ca.Metrics.TestCoverage) / 4)
 		if coverageDeduction > 20 {
 			coverageDeduction = 20

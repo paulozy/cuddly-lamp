@@ -36,8 +36,9 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
+	coverageHandler := factories.MakeCoverageHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler, coverageHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -59,6 +60,7 @@ func setupAPIRoutes(
 	templateHandler *handlers.TemplateHandler,
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
+	coverageHandler *handlers.CoverageHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -79,6 +81,10 @@ func setupAPIRoutes(
 
 		// GitHub webhook receiver — public, authenticated via HMAC signature
 		public.POST("/webhooks/github/:repoID", webhookHandler.HandleGitHubWebhook)
+
+		// Coverage upload — public, authenticated via Bearer cov_* token
+		// (validated inside the handler, not by the JWT middleware).
+		public.POST("/repositories/:id/coverage", coverageHandler.IngestCoverage)
 	}
 
 	protected := router.Group("/api/v1")
@@ -119,5 +125,10 @@ func setupAPIRoutes(
 		protected.GET("/templates", templateHandler.ListTemplates)
 		protected.GET("/templates/:id", templateHandler.GetTemplate)
 		protected.PATCH("/templates/:id/pin", templateHandler.PinTemplate)
+
+		// Coverage upload tokens — managed by repository owners
+		protected.POST("/repositories/:id/coverage/tokens", coverageHandler.CreateCoverageToken)
+		protected.GET("/repositories/:id/coverage/tokens", coverageHandler.ListCoverageTokens)
+		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", coverageHandler.RevokeCoverageToken)
 	}
 }

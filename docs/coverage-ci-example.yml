@@ -1,0 +1,53 @@
+# Sample GitHub Actions workflow for uploading coverage to the IDP backend.
+#
+# Prerequisites:
+#   1. Create an upload token in the IDP UI/API:
+#        POST /api/v1/repositories/:repoID/coverage/tokens  body {"name":"github-actions"}
+#      Save the returned `token` (starts with `cov_`) as a repo secret named
+#      `IDP_COVERAGE_TOKEN`. Save the API base URL as `IDP_BASE_URL` and the
+#      repository ID as `IDP_REPOSITORY_ID`.
+#
+#   2. Drop this file at `.github/workflows/coverage.yml` in the repository
+#      you want analyzed and adjust the `setup-*` steps for your stack.
+#
+# Adapt for other formats by changing only the `X-Coverage-Format` header and
+# the path passed to `--data-binary`:
+#   - go        → coverage.out
+#   - lcov      → coverage/lcov.info  (jest, c8, istanbul, simplecov, etc.)
+#   - cobertura → coverage/cobertura.xml  (gcovr, .NET coverlet, pytest-cov, etc.)
+#   - jacoco    → target/site/jacoco/jacoco.xml
+
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  upload-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run tests with coverage
+        run: go test ./... -coverprofile=coverage.out
+
+      - name: Upload coverage to IDP
+        env:
+          IDP_BASE_URL: ${{ secrets.IDP_BASE_URL }}
+          IDP_REPOSITORY_ID: ${{ secrets.IDP_REPOSITORY_ID }}
+          IDP_COVERAGE_TOKEN: ${{ secrets.IDP_COVERAGE_TOKEN }}
+        run: |
+          curl --fail-with-body -X POST \
+            "$IDP_BASE_URL/api/v1/repositories/$IDP_REPOSITORY_ID/coverage" \
+            -H "Authorization: Bearer $IDP_COVERAGE_TOKEN" \
+            -H "X-Coverage-Format: go" \
+            -H "X-Commit-SHA: $GITHUB_SHA" \
+            -H "X-Coverage-Branch: ${GITHUB_REF#refs/heads/}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @coverage.out

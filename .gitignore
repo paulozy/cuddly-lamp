@@ -21,3 +21,7 @@ docs/swagger.yaml
 .codex
 main
 plans/
+
+# Coverage artifacts (regenerated via `make test-coverage`)
+coverage.out
+coverage.html

@@ -76,7 +76,7 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		if es.HasMetricsAnalysis {
 			// Reuse existing GetQualityScore logic inline to avoid constructing
 			// a full CodeAnalysis object.
-			score = computeQualityScore(es.IssueCount, es.CriticalCount, es.ErrorCount, es.WarningCount, es.TestCoverage, es.AvgComplexity)
+			score = computeQualityScore(es.IssueCount, es.CriticalCount, es.ErrorCount, es.WarningCount, es.TestCoverage, es.AvgComplexity, es.CoverageStatus)
 		}
 		resp.Stats = RepositoryStats{
 			TotalAnalyses:  es.TotalAnalyses,
@@ -91,8 +91,13 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 
 // computeQualityScore mirrors CodeAnalysis.GetQualityScore() exactly.
 // It is kept here so the DTO layer does not import the analysis model.
-func computeQualityScore(issueCount, criticalCount, errorCount, warningCount int, testCoverage, avgComplexity float64) int {
-	if issueCount == 0 && testCoverage >= 80 {
+// coverageStatus controls whether the coverage deduction applies — values
+// other than "ok"/"partial" mean the report was missing or invalid, in which
+// case we don't penalize the repo for an unmeasured 0%.
+func computeQualityScore(issueCount, criticalCount, errorCount, warningCount int, testCoverage, avgComplexity float64, coverageStatus string) int {
+	coverageMeasured := coverageStatus == "ok" || coverageStatus == "partial"
+
+	if issueCount == 0 && coverageMeasured && testCoverage >= 80 {
 		return 100
 	}
 	score := 100
@@ -101,7 +106,7 @@ func computeQualityScore(issueCount, criticalCount, errorCount, warningCount int
 		issueDeduction = 50
 	}
 	score -= issueDeduction
-	if testCoverage < 80 {
+	if coverageMeasured && testCoverage < 80 {
 		coverageDeduction := int((80.0 - testCoverage) / 4)
 		if coverageDeduction > 20 {
 			coverageDeduction = 20

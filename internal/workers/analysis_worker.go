@@ -10,6 +10,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
+	"github.com/paulozy/idp-with-ai-backend/internal/coverage"
 	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -25,15 +26,28 @@ type AnalysisWorker struct {
 	analyzerFactory  func(apiKey string) ai.Analyzer
 	githubFactory    func(token string) github.ClientInterface
 	calculateMetrics func(ctx context.Context, repoURL, githubToken, branch string) (*ai.CodeMetrics, error)
+	// lookupCoverage returns the latest coverage upload for (repoID, sha) or
+	// (nil, nil) when none exists. Injectable for tests.
+	lookupCoverage func(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
 }
 
 func NewAnalysisWorker(repo storage.Repository) *AnalysisWorker {
-	return &AnalysisWorker{
+	w := &AnalysisWorker{
 		repo:             repo,
 		analyzerFactory:  func(apiKey string) ai.Analyzer { return anthropicclient.NewClient(apiKey) },
 		githubFactory:    func(token string) github.ClientInterface { return github.NewClient(token) },
 		calculateMetrics: metrics.Calculate,
 	}
+	// Wrap GetLatestCoverageUpload in a closure so the receiver is resolved at
+	// call time, not at construction time. This lets tests pass nil/mocks
+	// without panicking before any method is invoked.
+	w.lookupCoverage = func(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error) {
+		if w.repo == nil {
+			return nil, nil
+		}
+		return w.repo.GetLatestCoverageUpload(ctx, repoID, sha)
+	}
+	return w
 }
 
 // normalizeSeverity maps ai.CodeIssue.Severity ("critical", "high", "medium", "low", "info")
@@ -135,7 +149,9 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	repoMetrics := &ai.CodeMetrics{}
 	if payload.PullRequestID == 0 {
 		// Calculate code metrics locally (lines of code, complexity).
-		// Note: test coverage is skipped as it's a CI artifact, not a git artifact.
+		// Test coverage is sourced separately via the CI upload endpoint
+		// (POST /repositories/:id/coverage); the analysis worker does not
+		// read it from the clone.
 		repoMetrics, err = w.calculateMetrics(ctx, repository.URL, githubToken, branch)
 		if err != nil {
 			utils.Warn("analysis worker: calculate metrics failed", "repo_id", payload.RepositoryID, "branch", branch, "auth_configured", githubToken != "", "error", err)
@@ -144,7 +160,7 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 
 	// Build analysis request with computed metrics
-	analysisReq, err := w.buildAnalysisRequest(ctx, ghClient, repository, payload, owner, repo, repoMetrics)
+	analysisReq, prFiles, err := w.buildAnalysisRequest(ctx, ghClient, repository, payload, owner, repo, repoMetrics)
 	if err != nil {
 		return w.failAnalysis(ctx, repository, payload, fmt.Sprintf("failed to build analysis request: %v", err))
 	}
@@ -191,11 +207,31 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		codeAnalysis.PullRequestID = &prID
 	}
 
+	// Look up the latest coverage upload for this commit. Missing uploads are
+	// the common case for repos that haven't wired the CI integration yet —
+	// we degrade gracefully (no error, no issue, no metrics).
+	covUpload, err := w.lookupCoverage(ctx, repository.ID, payload.CommitSHA)
+	if err != nil {
+		utils.Warn("analysis worker: coverage lookup failed", "repo_id", repository.ID, "sha", payload.CommitSHA, "error", err)
+		covUpload = nil
+	}
+
+	// Append coverage-driven issues for PR analyses. The rule is deterministic
+	// (no LLM), so the cost is negligible.
+	aiIssues := analysisResult.Issues
+	if payload.PullRequestID > 0 && covUpload != nil && len(prFiles) > 0 {
+		fileMap := covUpload.Files.Data()
+		gaps := coverage.PRCoverageGaps(prFiles, fileMap)
+		if len(gaps) > 0 {
+			aiIssues = append(aiIssues, gaps...)
+		}
+	}
+
 	// Convert and store issues (datatypes.JSONType requires proper type conversion)
-	convertedIssues := mapIssues(analysisResult.Issues)
+	convertedIssues := mapIssues(aiIssues)
 	codeAnalysis.Issues = datatypes.NewJSONType(convertedIssues)
 
-	// Count issues by severity
+	// Count issues by severity (must run AFTER any deterministic rule appends)
 	codeAnalysis.IssueCount = len(convertedIssues)
 	for _, issue := range convertedIssues {
 		switch issue.Severity {
@@ -210,11 +246,22 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		}
 	}
 
-	// Store metrics
+	// Store metrics. Coverage comes from the CI upload table (authoritative);
+	// missing uploads leave the fields zero and CoverageStatus empty, which
+	// the quality-score guard interprets as "not measured" (no penalty).
 	codeAnalysis.Metrics = models.CodeMetrics{
 		TotalLines:           int(analysisResult.Metrics.LinesOfCode),
 		CyclomaticComplexity: float64(analysisResult.Metrics.CyclomaticComplexity),
-		TestCoverage:         float64(analysisResult.Metrics.TestCoverage),
+	}
+	if covUpload != nil {
+		codeAnalysis.Metrics.TestCoverage = covUpload.Percentage
+		codeAnalysis.Metrics.TestedLines = covUpload.LinesCovered
+		uncovered := covUpload.LinesTotal - covUpload.LinesCovered
+		if uncovered < 0 {
+			uncovered = 0
+		}
+		codeAnalysis.Metrics.UncoveredLines = uncovered
+		codeAnalysis.Metrics.CoverageStatus = string(covUpload.Status)
 	}
 
 	if err := w.repo.CreateCodeAnalysis(ctx, codeAnalysis); err != nil {
@@ -234,7 +281,7 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	return nil
 }
 
-func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) (*ai.AnalysisRequest, error) {
+func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) (*ai.AnalysisRequest, []github.PRFile, error) {
 	analysisType := ai.AnalysisType(payload.Type)
 	if analysisType == "" {
 		analysisType = ai.AnalysisTypeCodeReview
@@ -280,7 +327,7 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 	if payload.PullRequestID > 0 {
 		pr, err := ghClient.GetPullRequest(ctx, owner, repoName, payload.PullRequestID)
 		if err != nil {
-			return nil, fmt.Errorf("fetch PR details: %w", err)
+			return nil, nil, fmt.Errorf("fetch PR details: %w", err)
 		}
 		req.PullRequestID = payload.PullRequestID
 		req.PRTitle = pr.Title
@@ -289,12 +336,12 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 
 		files, err := ghClient.GetPullRequestFiles(ctx, owner, repoName, payload.PullRequestID)
 		if err != nil {
-			return nil, fmt.Errorf("fetch PR files: %w", err)
+			return nil, nil, fmt.Errorf("fetch PR files: %w", err)
 		}
 		changed := ai.FilterAndMapPRFiles(files)
 		req.ChangedFiles, req.TruncatedFiles = ai.BudgetChangedFiles(changed)
 
-		return req, nil
+		return req, files, nil
 	}
 
 	// Fetch recent commits for push/branch analysis context.
@@ -313,7 +360,7 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 		})
 	}
 
-	return req, nil
+	return req, nil, nil
 }
 
 func renderDocSummary(doc *models.DocGeneration) string {

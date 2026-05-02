@@ -109,6 +109,7 @@ type EnrichedStats struct {
 	ErrorCount         int
 	WarningCount       int
 	TestCoverage       float64
+	CoverageStatus     string // ok|partial|failed|not_configured (empty when no analysis)
 	AvgComplexity      float64
 	HasMetricsAnalysis bool
 	LatestAnalyzedAt   *string // ISO-8601 or nil

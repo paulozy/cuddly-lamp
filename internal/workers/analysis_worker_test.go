@@ -27,6 +27,7 @@ type mockRepository struct {
 	getLatestDocGenerationFunc            func(ctx context.Context, repoID string) (*models.DocGeneration, error)
 	getLatestAnalysisFunc                 func(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
 	getConfigFunc                         func(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
+	getLatestCoverageUploadFunc           func(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
 	upsertPackageDependencyFunc           func(ctx context.Context, dep *models.PackageDependency) error
 	listPackageDependenciesFunc           func(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
 	updatePackageDependencyVulnStatusFunc func(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
@@ -98,6 +99,13 @@ func (m *mockRepository) GetLatestAnalysis(ctx context.Context, repoID string, a
 func (m *mockRepository) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
 	if m.getConfigFunc != nil {
 		return m.getConfigFunc(ctx, orgID)
+	}
+	return nil, nil
+}
+
+func (m *mockRepository) GetLatestCoverageUpload(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error) {
+	if m.getLatestCoverageUploadFunc != nil {
+		return m.getLatestCoverageUploadFunc(ctx, repoID, sha)
 	}
 	return nil, nil
 }
@@ -247,6 +255,124 @@ func TestAnalysisWorker_Handle(t *testing.T) {
 	err := worker.Handle(context.Background(), task)
 	if err != nil {
 		t.Fatalf("Handle failed: %v", err)
+	}
+}
+
+func TestAnalysisWorker_Handle_PopulatesMetricsFromCoverageUpload(t *testing.T) {
+	var saved *models.CodeAnalysis
+	mockRepo := &mockRepository{
+		getRepoFunc: func(ctx context.Context, id string) (*models.Repository, error) {
+			return &models.Repository{
+				ID:             id,
+				OrganizationID: "org-1",
+				Name:           "test-repo",
+				URL:            "https://github.com/owner/repo",
+				Metadata:       models.RepositoryMetadata{DefaultBranch: "main"},
+			}, nil
+		},
+		updateRepoFunc: func(ctx context.Context, repo *models.Repository) error { return nil },
+		createAnalysisFunc: func(ctx context.Context, analysis *models.CodeAnalysis) error {
+			cp := *analysis
+			saved = &cp
+			return nil
+		},
+		getConfigFunc: func(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+			return &models.OrganizationConfig{OrganizationID: orgID, AnthropicAPIKey: "k", GithubToken: "g"}, nil
+		},
+		getLatestCoverageUploadFunc: func(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error) {
+			if repoID != "repo-1" || sha != "abc123" {
+				t.Fatalf("lookup args = %q/%q", repoID, sha)
+			}
+			return &models.CoverageUpload{
+				RepositoryID: repoID,
+				CommitSHA:    sha,
+				LinesCovered: 30,
+				LinesTotal:   40,
+				Percentage:   75.0,
+				Status:       "ok",
+			}, nil
+		},
+	}
+
+	worker := NewAnalysisWorker(mockRepo)
+	worker.analyzerFactory = func(string) ai.Analyzer {
+		return &ai.MockAnalyzer{
+			AnalyzeCodeFunc: func(ctx context.Context, req *ai.AnalysisRequest) (*ai.AnalysisResult, error) {
+				return &ai.AnalysisResult{Summary: "ok", Issues: []ai.CodeIssue{}, Model: "test", TokensUsed: 50}, nil
+			},
+		}
+	}
+	worker.githubFactory = func(string) github.ClientInterface {
+		return &mockGithubClient{
+			getCommitsFunc: func(ctx context.Context, _, _, _ string, _ int) ([]github.Commit, error) {
+				return nil, nil
+			},
+		}
+	}
+	worker.calculateMetrics = func(context.Context, string, string, string) (*ai.CodeMetrics, error) {
+		return &ai.CodeMetrics{LinesOfCode: 1}, nil
+	}
+
+	payload := tasks.AnalyzeRepoPayload{RepositoryID: "repo-1", Branch: "main", CommitSHA: "abc123", Type: "code_review"}
+	data, _ := json.Marshal(payload)
+	task := asynq.NewTask(tasks.TypeAnalyzeRepo, data)
+
+	if err := worker.Handle(context.Background(), task); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("expected saved analysis")
+	}
+	if saved.Metrics.TestCoverage != 75.0 || saved.Metrics.TestedLines != 30 || saved.Metrics.UncoveredLines != 10 {
+		t.Fatalf("metrics = %+v, want covered=75, tested=30, uncovered=10", saved.Metrics)
+	}
+	if saved.Metrics.CoverageStatus != "ok" {
+		t.Fatalf("CoverageStatus = %q, want ok", saved.Metrics.CoverageStatus)
+	}
+}
+
+func TestAnalysisWorker_Handle_NoCoverageUpload_LeavesMetricsUnmeasured(t *testing.T) {
+	var saved *models.CodeAnalysis
+	mockRepo := &mockRepository{
+		getRepoFunc: func(ctx context.Context, id string) (*models.Repository, error) {
+			return &models.Repository{
+				ID: id, OrganizationID: "org-1", Name: "r",
+				URL: "https://github.com/owner/repo", Metadata: models.RepositoryMetadata{DefaultBranch: "main"},
+			}, nil
+		},
+		updateRepoFunc:     func(context.Context, *models.Repository) error { return nil },
+		createAnalysisFunc: func(_ context.Context, a *models.CodeAnalysis) error { cp := *a; saved = &cp; return nil },
+		getConfigFunc: func(context.Context, string) (*models.OrganizationConfig, error) {
+			return &models.OrganizationConfig{OrganizationID: "org-1", AnthropicAPIKey: "k", GithubToken: "g"}, nil
+		},
+		// getLatestCoverageUploadFunc nil → default returns (nil, nil)
+	}
+
+	worker := NewAnalysisWorker(mockRepo)
+	worker.analyzerFactory = func(string) ai.Analyzer {
+		return &ai.MockAnalyzer{
+			AnalyzeCodeFunc: func(context.Context, *ai.AnalysisRequest) (*ai.AnalysisResult, error) {
+				return &ai.AnalysisResult{Summary: "ok", Issues: []ai.CodeIssue{}, Model: "t"}, nil
+			},
+		}
+	}
+	worker.githubFactory = func(string) github.ClientInterface {
+		return &mockGithubClient{getCommitsFunc: func(context.Context, string, string, string, int) ([]github.Commit, error) { return nil, nil }}
+	}
+	worker.calculateMetrics = func(context.Context, string, string, string) (*ai.CodeMetrics, error) {
+		return &ai.CodeMetrics{}, nil
+	}
+
+	payload := tasks.AnalyzeRepoPayload{RepositoryID: "r1", Branch: "main", CommitSHA: "abc", Type: "code_review"}
+	data, _ := json.Marshal(payload)
+	if err := worker.Handle(context.Background(), asynq.NewTask(tasks.TypeAnalyzeRepo, data)); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("expected saved")
+	}
+	if saved.Metrics.TestCoverage != 0 || saved.Metrics.CoverageStatus != "" {
+		t.Fatalf("metrics should be unmeasured: %+v", saved.Metrics)
 	}
 }
 
@@ -457,7 +583,7 @@ func TestBuildAnalysisRequest_WithProjectStandards(t *testing.T) {
 		},
 	}
 	worker := NewAnalysisWorker(mockRepo)
-	req, err := worker.buildAnalysisRequest(
+	req, _, err := worker.buildAnalysisRequest(
 		context.Background(),
 		&mockGithubClient{},
 		&models.Repository{
