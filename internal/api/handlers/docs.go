@@ -128,6 +128,113 @@ func (h *DocsHandler) GenerateRepositoryDocs(c *gin.Context) {
 	c.JSON(http.StatusAccepted, models.DocGenerationAcceptedResponse{ID: doc.ID, Status: doc.Status})
 }
 
+// ListRepositoryDocs returns the documentation generation history for a
+// repository. The response uses the lightweight summary projection (without
+// the full Markdown `content` blob) so clients can paginate cheaply.
+// @Summary      List documentation generations for a repository
+// @Tags         docs
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id      path   string  true  "Repository ID"
+// @Param        status  query  string  false  "Filter by status (pending, in_progress, completed, failed)"
+// @Success      200  {object}  models.DocGenerationListResponse
+// @Failure      400  {object}  models.ErrorResponse
+// @Failure      401  {object}  models.ErrorResponse
+// @Failure      403  {object}  models.ErrorResponse
+// @Failure      404  {object}  models.ErrorResponse
+// @Router       /repositories/{id}/docs [get]
+func (h *DocsHandler) ListRepositoryDocs(c *gin.Context) {
+	repository, ok := h.fetchAccessibleRepository(c, c.Param("id"))
+	if !ok {
+		return
+	}
+
+	statusFilter := strings.TrimSpace(c.Query("status"))
+	if statusFilter != "" && !isValidDocStatusFilter(statusFilter) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "status must be one of: pending, in_progress, completed, failed",
+		})
+		return
+	}
+
+	docs, err := h.repo.ListDocGenerationsForRepo(c.Request.Context(), repository.ID)
+	if err != nil {
+		utils.Error("docs handler: list doc generations failed", "repo_id", repository.ID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "internal_error", ErrorDescription: "failed to list documentation generations"})
+		return
+	}
+
+	items := make([]models.DocGenerationSummary, 0, len(docs))
+	for i := range docs {
+		if statusFilter != "" && string(docs[i].Status) != statusFilter {
+			continue
+		}
+		items = append(items, models.ToDocGenerationSummary(&docs[i]))
+	}
+	c.JSON(http.StatusOK, models.DocGenerationListResponse{Items: items, Total: len(items)})
+}
+
+// GetDocGeneration returns the full doc generation record, including the
+// Markdown `content` keyed by documentation type.
+// @Summary      Get a documentation generation
+// @Tags         docs
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "DocGeneration ID"
+// @Success      200  {object}  models.DocGeneration
+// @Failure      400  {object}  models.ErrorResponse
+// @Failure      401  {object}  models.ErrorResponse
+// @Failure      403  {object}  models.ErrorResponse
+// @Failure      404  {object}  models.ErrorResponse
+// @Router       /docs/{id} [get]
+func (h *DocsHandler) GetDocGeneration(c *gin.Context) {
+	docID := strings.TrimSpace(c.Param("id"))
+	if docID == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid_request", ErrorDescription: "documentation id is required"})
+		return
+	}
+
+	doc, err := h.repo.GetDocGeneration(c.Request.Context(), docID)
+	if err != nil {
+		utils.Error("docs handler: get doc generation failed", "doc_id", docID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "internal_error", ErrorDescription: "failed to fetch documentation"})
+		return
+	}
+	if doc == nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "not_found", ErrorDescription: "documentation not found"})
+		return
+	}
+
+	repository, err := h.repo.GetRepository(c.Request.Context(), doc.RepositoryID)
+	if err != nil || repository == nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "not_found", ErrorDescription: "documentation not found"})
+		return
+	}
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{Error: "unauthorized", ErrorDescription: "missing or invalid organization"})
+		return
+	}
+	if repository.OrganizationID != orgID {
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "forbidden", ErrorDescription: "you do not have access to this documentation"})
+		return
+	}
+
+	c.JSON(http.StatusOK, doc)
+}
+
+func isValidDocStatusFilter(s string) bool {
+	switch models.DocGenerationStatus(s) {
+	case models.DocGenerationStatusPending,
+		models.DocGenerationStatusInProgress,
+		models.DocGenerationStatusCompleted,
+		models.DocGenerationStatusFailed:
+		return true
+	}
+	return false
+}
+
 func (h *DocsHandler) fetchAccessibleRepository(c *gin.Context, repoID string) (*models.Repository, bool) {
 	if repoID == "" {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid_request", ErrorDescription: "repository id is required"})

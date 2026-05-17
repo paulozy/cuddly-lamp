@@ -342,6 +342,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/docs/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "Get a documentation generation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "DocGeneration ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGeneration"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/organizations/configs": {
             "get": {
                 "security": [
@@ -1155,6 +1212,69 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/repositories/{id}/docs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "List documentation generations for a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by status (pending, in_progress, completed, failed)",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
@@ -2764,6 +2884,62 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.DocGeneration": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "object"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "gen_branch": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "pull_request_number": {
+                    "type": "integer"
+                },
+                "pull_request_url": {
+                    "type": "string"
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                },
+                "triggered_by_user_id": {
+                    "type": "string"
+                },
+                "types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationAcceptedResponse": {
             "type": "object",
             "properties": {
@@ -2772,6 +2948,20 @@ const docTemplate = `{
                 },
                 "status": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationSummary"
+                    }
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -2789,6 +2979,53 @@ const docTemplate = `{
                 "DocGenerationStatusCompleted",
                 "DocGenerationStatusFailed"
             ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationSummary": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "gen_branch": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "pull_request_number": {
+                    "type": "integer"
+                },
+                "pull_request_url": {
+                    "type": "string"
+                },
+                "repository_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                },
+                "triggered_by_user_id": {
+                    "type": "string"
+                },
+                "types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse": {
             "type": "object",
@@ -3627,6 +3864,9 @@ const docTemplate = `{
         "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryResponse": {
             "type": "object",
             "properties": {
+                "analysis_error": {
+                    "type": "string"
+                },
                 "analysis_status": {
                     "description": "Zero-cost fields (already on repositories table)",
                     "type": "string"
@@ -3645,6 +3885,9 @@ const docTemplate = `{
                 },
                 "is_public": {
                     "type": "boolean"
+                },
+                "last_synced_at": {
+                    "type": "string"
                 },
                 "metadata": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryMetadata"
@@ -3669,6 +3912,12 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "sync_error": {
+                    "type": "string"
+                },
+                "sync_status": {
+                    "type": "string"
+                },
                 "type": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryType"
                 },
@@ -3683,6 +3932,9 @@ const docTemplate = `{
         "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryStats": {
             "type": "object",
             "properties": {
+                "coverage_status": {
+                    "type": "string"
+                },
                 "has_analysis": {
                     "type": "boolean"
                 },
@@ -3692,7 +3944,17 @@ const docTemplate = `{
                 "latest_quality_score": {
                     "type": "integer"
                 },
+                "test_coverage": {
+                    "description": "Coverage from the latest completed analysis. Empty CoverageStatus means\nno analysis has populated coverage metrics yet.",
+                    "type": "number"
+                },
+                "tested_lines": {
+                    "type": "integer"
+                },
                 "total_analyses": {
+                    "type": "integer"
+                },
+                "uncovered_lines": {
                     "type": "integer"
                 }
             }

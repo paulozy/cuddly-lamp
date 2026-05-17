@@ -119,6 +119,8 @@ func setupAPIRoutes(
 		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)
 		protected.GET("/repositories/:id/dependencies", dependencyHandler.ListDependencies)
 		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
+		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
+		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
 		protected.POST("/repositories/:id/templates", templateHandler.GenerateForRepository)
 
 		protected.POST("/templates", templateHandler.GenerateForOrganization)
