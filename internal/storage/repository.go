@@ -74,6 +74,9 @@ type Repository interface {
 	GetDocGeneration(ctx context.Context, id string) (*models.DocGeneration, error)
 	GetLatestDocGenerationForRepo(ctx context.Context, repoID string) (*models.DocGeneration, error)
 	ListDocGenerationsForRepo(ctx context.Context, repoID string) ([]models.DocGeneration, error)
+	// Org-scope helpers (scope = 'org')
+	ListOrgDocGenerations(ctx context.Context, orgID string) ([]models.DocGeneration, error)
+	GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
 
 	// Code Template operations
 	CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error

@@ -48,12 +48,15 @@ func TestDocsWorker_Handle(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 
+	repoID := "repo-1"
 	doc := &models.DocGeneration{
-		ID:           "doc-1",
-		RepositoryID: "repo-1",
-		Status:       models.DocGenerationStatusPending,
-		Types:        datatypes.JSONSlice[string]{"guidelines", "adr"},
-		Content:      datatypes.NewJSONType(map[string]string{}),
+		ID:             "doc-1",
+		OrganizationID: "org-1",
+		Scope:          models.DocGenerationScopeRepo,
+		RepositoryID:   &repoID,
+		Status:         models.DocGenerationStatusPending,
+		Types:          datatypes.JSONSlice[string]{"guidelines", "adr"},
+		Content:        datatypes.NewJSONType(map[string]string{}),
 	}
 	var completed *models.DocGeneration
 	mockRepo := &mockRepository{

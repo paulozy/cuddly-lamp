@@ -31,7 +31,7 @@ func (r *docsHandlerRepo) GetRepository(ctx context.Context, id string) (*models
 func (r *docsHandlerRepo) ListDocGenerationsForRepo(ctx context.Context, repoID string) ([]models.DocGeneration, error) {
 	out := make([]models.DocGeneration, 0, len(r.docs))
 	for _, doc := range r.docs {
-		if doc.RepositoryID == repoID {
+		if doc.RepositoryID != nil && *doc.RepositoryID == repoID {
 			out = append(out, doc)
 		}
 	}
@@ -52,6 +52,12 @@ func newDocsHandler(repo *docsHandlerRepo) *DocsHandler {
 	return NewDocsHandler(repo, nil)
 }
 
+// repoIDPtr is a small helper so test fixtures can keep the concise
+// `RepositoryID: repoIDPtr("repo-1")` style now that the model uses *string.
+func repoIDPtr(id string) *string {
+	return &id
+}
+
 func TestDocsHandler_ListRepositoryDocs_ReturnsSummaries(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
@@ -60,7 +66,7 @@ func TestDocsHandler_ListRepositoryDocs_ReturnsSummaries(t *testing.T) {
 		docs: []models.DocGeneration{
 			{
 				ID:                "doc-1",
-				RepositoryID:      "repo-1",
+				RepositoryID:      repoIDPtr("repo-1"),
 				Status:            models.DocGenerationStatusCompleted,
 				Types:             datatypes.JSONSlice[string]([]string{"adr", "architecture"}),
 				PullRequestURL:    "https://github.com/org/repo/pull/42",
@@ -72,7 +78,7 @@ func TestDocsHandler_ListRepositoryDocs_ReturnsSummaries(t *testing.T) {
 			},
 			{
 				ID:           "doc-2",
-				RepositoryID: "repo-1",
+				RepositoryID: repoIDPtr("repo-1"),
 				Status:       models.DocGenerationStatusFailed,
 				Types:        datatypes.JSONSlice[string]([]string{"guidelines"}),
 				ErrorMessage: "anthropic timeout",
@@ -120,8 +126,8 @@ func TestDocsHandler_ListRepositoryDocs_FilterByStatus(t *testing.T) {
 	repo := &docsHandlerRepo{
 		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-1"},
 		docs: []models.DocGeneration{
-			{ID: "doc-1", RepositoryID: "repo-1", Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
-			{ID: "doc-2", RepositoryID: "repo-1", Status: models.DocGenerationStatusFailed, CreatedAt: now, UpdatedAt: now},
+			{ID: "doc-1", RepositoryID: repoIDPtr("repo-1"), Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
+			{ID: "doc-2", RepositoryID: repoIDPtr("repo-1"), Status: models.DocGenerationStatusFailed, CreatedAt: now, UpdatedAt: now},
 		},
 	}
 	handler := newDocsHandler(repo)
@@ -190,7 +196,7 @@ func TestDocsHandler_GetDocGeneration_ReturnsFullContent(t *testing.T) {
 	now := time.Now().UTC()
 	doc := models.DocGeneration{
 		ID:           "doc-1",
-		RepositoryID: "repo-1",
+		RepositoryID: repoIDPtr("repo-1"),
 		Status:       models.DocGenerationStatusCompleted,
 		Types:        datatypes.JSONSlice[string]([]string{"adr"}),
 		Content:      datatypes.NewJSONType(map[string]string{"adr": "# ADR 001\nuse foo"}),
@@ -245,7 +251,7 @@ func TestDocsHandler_GetDocGeneration_CrossOrgForbidden(t *testing.T) {
 	repo := &docsHandlerRepo{
 		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-other"},
 		docs: []models.DocGeneration{
-			{ID: "doc-1", RepositoryID: "repo-1", Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
+			{ID: "doc-1", RepositoryID: repoIDPtr("repo-1"), Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
 		},
 	}
 	handler := newDocsHandler(repo)

@@ -179,8 +179,19 @@ func (w *DocsWorker) loadOrCreateDocGeneration(ctx context.Context, payload task
 		}
 		return doc, nil
 	}
+	// Worker-created fallback row (when DocGenerationID was not preset by the
+	// HTTP handler). The repository is fetched below to derive the organization;
+	// the row stays in `repo` scope here — org generation goes through a
+	// separate worker entry point.
+	repoForOrg, err := w.repo.GetRepository(ctx, payload.RepositoryID)
+	if err != nil || repoForOrg == nil {
+		return nil, fmt.Errorf("docs worker: fallback repo lookup: %w", err)
+	}
+	repoID := payload.RepositoryID
 	doc := &models.DocGeneration{
-		RepositoryID:      payload.RepositoryID,
+		OrganizationID:    repoForOrg.OrganizationID,
+		Scope:             models.DocGenerationScopeRepo,
+		RepositoryID:      &repoID,
 		Status:            models.DocGenerationStatusPending,
 		Types:             datatypes.JSONSlice[string](payload.Types),
 		Branch:            payload.Branch,

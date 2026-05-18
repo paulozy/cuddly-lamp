@@ -90,9 +90,12 @@ func (h *DocsHandler) GenerateRepositoryDocs(c *gin.Context) {
 		return
 	}
 
+	repoID := repository.ID
 	doc := &models.DocGeneration{
 		ID:                uuid.NewString(),
-		RepositoryID:      repository.ID,
+		OrganizationID:    repository.OrganizationID,
+		Scope:             models.DocGenerationScopeRepo,
+		RepositoryID:      &repoID,
 		Status:            models.DocGenerationStatusPending,
 		Types:             datatypes.JSONSlice[string](types),
 		Branch:            strings.TrimSpace(req.Branch),
@@ -206,14 +209,30 @@ func (h *DocsHandler) GetDocGeneration(c *gin.Context) {
 		return
 	}
 
-	repository, err := h.repo.GetRepository(c.Request.Context(), doc.RepositoryID)
-	if err != nil || repository == nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "not_found", ErrorDescription: "documentation not found"})
-		return
-	}
 	orgID, err := utils.GetOrganizationIDFromContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{Error: "unauthorized", ErrorDescription: "missing or invalid organization"})
+		return
+	}
+
+	// Org-scope docs check the organization directly. Repo-scope docs still
+	// resolve through the linked repository (kept for the existing flow).
+	if doc.Scope == models.DocGenerationScopeOrg {
+		if doc.OrganizationID != orgID {
+			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "forbidden", ErrorDescription: "you do not have access to this documentation"})
+			return
+		}
+		c.JSON(http.StatusOK, doc)
+		return
+	}
+
+	if doc.RepositoryID == nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "not_found", ErrorDescription: "documentation not found"})
+		return
+	}
+	repository, err := h.repo.GetRepository(c.Request.Context(), *doc.RepositoryID)
+	if err != nil || repository == nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "not_found", ErrorDescription: "documentation not found"})
 		return
 	}
 	if repository.OrganizationID != orgID {

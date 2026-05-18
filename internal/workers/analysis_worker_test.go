@@ -15,6 +15,11 @@ import (
 	"gorm.io/datatypes"
 )
 
+
+// repoIDPtr returns a pointer to a string
+func repoIDPtr(id string) *string {
+	return &id
+}
 type mockRepository struct {
 	storage.Repository
 	getRepoFunc                           func(ctx context.Context, id string) (*models.Repository, error)
@@ -573,7 +578,7 @@ func TestBuildAnalysisRequest_WithProjectStandards(t *testing.T) {
 				t.Fatalf("repoID = %q, want repo-1", repoID)
 			}
 			return &models.DocGeneration{
-				RepositoryID: repoID,
+				RepositoryID: repoIDPtr(repoID),
 				Status:       models.DocGenerationStatusCompleted,
 				Content: datatypes.NewJSONType(map[string]string{
 					"guidelines": "Use explicit errors.",
