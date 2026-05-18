@@ -15,7 +15,8 @@ ALTER TABLE doc_generations
     ADD COLUMN IF NOT EXISTS organization_id  UUID,
     ADD COLUMN IF NOT EXISTS template_id      VARCHAR(64),
     ADD COLUMN IF NOT EXISTS progress_stage   VARCHAR(48),
-    ADD COLUMN IF NOT EXISTS superseded_by_id UUID;
+    ADD COLUMN IF NOT EXISTS superseded_by_id UUID,
+    ADD COLUMN IF NOT EXISTS user_prompt      TEXT;
 
 -- 2. Backfill organization_id from the repositories table for legacy rows.
 UPDATE doc_generations dg
