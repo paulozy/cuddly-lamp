@@ -121,6 +121,10 @@ func setupAPIRoutes(
 		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
+		protected.PATCH("/docs/:id", docsHandler.UpdateDocContent)
+		protected.GET("/docs/templates", docsHandler.ListDocTemplates)
+		protected.POST("/organizations/docs/generate", docsHandler.GenerateOrgDocs)
+		protected.GET("/organizations/docs", docsHandler.ListOrgDocs)
 		protected.POST("/repositories/:id/templates", templateHandler.GenerateForRepository)
 
 		protected.POST("/templates", templateHandler.GenerateForOrganization)

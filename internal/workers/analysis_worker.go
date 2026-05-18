@@ -310,10 +310,33 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 	}
 	req.DefaultBranch = metadata.DefaultBranch
 
+	// Project standards prompt block: org-wide docs first (more authoritative
+	// — they describe how the whole org is supposed to work), repo-specific
+	// docs last (they describe how this particular service is supposed to
+	// work). The order is preserved when concatenated.
+	var standardsParts []string
+	if orgDocs, err := w.repo.GetLatestOrgDocs(ctx, repository.OrganizationID, []string{
+		string(ai.DocumentationTypeGuidelines),
+		string(ai.DocumentationTypeADR),
+		string(ai.DocumentationTypeArchitecture),
+	}); err == nil {
+		for i := range orgDocs {
+			if s := renderDocSummary(&orgDocs[i]); s != "" {
+				standardsParts = append(standardsParts, s)
+			}
+		}
+	} else if err != nil {
+		utils.Warn("analysis worker: fetch org docs failed", "org_id", repository.OrganizationID, "error", err)
+	}
 	if docs, err := w.repo.GetLatestDocGenerationForRepo(ctx, repository.ID); err == nil && docs != nil {
-		req.ProjectStandards = renderDocSummary(docs)
+		if s := renderDocSummary(docs); s != "" {
+			standardsParts = append(standardsParts, s)
+		}
 	} else if err != nil {
 		utils.Warn("analysis worker: fetch generated docs failed", "repo_id", repository.ID, "error", err)
+	}
+	if len(standardsParts) > 0 {
+		req.ProjectStandards = strings.Join(standardsParts, "\n\n---\n\n")
 	}
 
 	// Fallback to provided branch/commit

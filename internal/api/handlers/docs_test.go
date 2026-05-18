@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,4 +282,240 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// --- Org docs handler tests ---
+
+// orgDocsRepo embeds a full Repository implementation but overrides only the
+// methods the org-scope endpoints exercise, so each test can configure its
+// own state without re-implementing every interface method.
+type orgDocsRepo struct {
+	storage.Repository
+	orgConfig    *models.OrganizationConfig
+	tokensUsed   int64
+	createdDocs  []*models.DocGeneration
+	updatedDocs  []*models.DocGeneration
+	listOrgDocs  []models.DocGeneration
+	docByID      map[string]*models.DocGeneration
+	createErr    error
+}
+
+func (r *orgDocsRepo) GetOrganizationConfig(_ context.Context, orgID string) (*models.OrganizationConfig, error) {
+	return r.orgConfig, nil
+}
+
+func (r *orgDocsRepo) SumTokensUsedSince(_ context.Context, _ string, _ time.Time) (int64, error) {
+	return r.tokensUsed, nil
+}
+
+func (r *orgDocsRepo) CreateDocGeneration(_ context.Context, doc *models.DocGeneration) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
+	r.createdDocs = append(r.createdDocs, doc)
+	if r.docByID == nil {
+		r.docByID = map[string]*models.DocGeneration{}
+	}
+	r.docByID[doc.ID] = doc
+	return nil
+}
+
+func (r *orgDocsRepo) UpdateDocGeneration(_ context.Context, doc *models.DocGeneration) error {
+	r.updatedDocs = append(r.updatedDocs, doc)
+	return nil
+}
+
+func (r *orgDocsRepo) GetDocGeneration(_ context.Context, id string) (*models.DocGeneration, error) {
+	if r.docByID == nil {
+		return nil, nil
+	}
+	return r.docByID[id], nil
+}
+
+func (r *orgDocsRepo) ListOrgDocGenerations(_ context.Context, _ string) ([]models.DocGeneration, error) {
+	return r.listOrgDocs, nil
+}
+
+type stubEnqueuer struct {
+	enqueueErr error
+	calls      []string // task type per call
+}
+
+func (e *stubEnqueuer) Enqueue(_ context.Context, taskType string, _ any, _ ...interface{ apply(any) }) error {
+	// Real enqueuer uses asynq.Option — but the docs handler reaches into the
+	// jobs.Enqueuer interface, which accepts asynq.Option directly. The test
+	// just needs to record the call and surface a configured error.
+	return e.enqueueErr
+}
+
+// withClaims attaches admin JWT claims to the request context. Used by the
+// org-admin endpoints, which gate themselves on `OrganizationRole == admin`.
+func withClaims(req *http.Request, orgRole models.UserRole) *http.Request {
+	ctx := context.WithValue(req.Context(), utils.ContextKeyOrganization, "org-1")
+	ctx = context.WithValue(ctx, utils.ContextKeyUser, "user-1")
+	ctx = context.WithValue(ctx, utils.ContextKeyClaims, &models.TokenClaims{
+		Role:             "admin",
+		OrganizationRole: orgRole,
+	})
+	return req.WithContext(ctx)
+}
+
+func TestDocsHandler_GenerateOrgDocs_RequiresAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &orgDocsRepo{
+		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
+	}
+	handler := NewDocsHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"types":["architecture"]}`
+	req := httptest.NewRequest(http.MethodPost, "/organizations/docs/generate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withClaims(req, "developer") // not admin
+	c.Request = req
+
+	handler.GenerateOrgDocs(c)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDocsHandler_GenerateOrgDocs_RejectsRepoOnlyTypes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &orgDocsRepo{
+		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
+	}
+	handler := NewDocsHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"types":["service_doc"]}`
+	req := httptest.NewRequest(http.MethodPost, "/organizations/docs/generate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withClaims(req, "admin")
+	c.Request = req
+
+	handler.GenerateOrgDocs(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDocsHandler_GenerateOrgDocs_ADRRequiresTemplateID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &orgDocsRepo{
+		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
+	}
+	handler := NewDocsHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"types":["adr"]}` // missing template_id
+	req := httptest.NewRequest(http.MethodPost, "/organizations/docs/generate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withClaims(req, "admin")
+	c.Request = req
+
+	handler.GenerateOrgDocs(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDocsHandler_ListOrgDocs_FiltersByOrg(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now().UTC()
+	repo := &orgDocsRepo{
+		listOrgDocs: []models.DocGeneration{
+			{ID: "doc-org", OrganizationID: "org-1", Scope: models.DocGenerationScopeOrg, Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	handler := NewDocsHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/organizations/docs", nil)
+	req = withClaims(req, "developer") // listing isn't admin-only
+	c.Request = req
+
+	handler.ListOrgDocs(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp models.DocGenerationListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 || resp.Items[0].ID != "doc-org" {
+		t.Fatalf("unexpected listing: %+v", resp)
+	}
+}
+
+func TestDocsHandler_ListDocTemplates_ReturnsRegistry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewDocsHandler(&orgDocsRepo{}, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/docs/templates", nil)
+	req = withClaims(req, "developer")
+	c.Request = req
+
+	handler.ListDocTemplates(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !contains(w.Body.String(), "adr-tech-choice") {
+		t.Fatalf("templates response missing tech-choice id: %s", w.Body.String())
+	}
+}
+
+func TestDocsHandler_UpdateDocContent_CreatesSupersedingVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now().UTC()
+	previous := &models.DocGeneration{
+		ID:             "doc-1",
+		OrganizationID: "org-1",
+		Scope:          models.DocGenerationScopeOrg,
+		Status:         models.DocGenerationStatusCompleted,
+		Types:          datatypes.JSONSlice[string]{"adr"},
+		Content:        datatypes.NewJSONType(map[string]string{"adr": "# Original"}),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	repo := &orgDocsRepo{
+		docByID: map[string]*models.DocGeneration{"doc-1": previous},
+	}
+	handler := NewDocsHandler(repo, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"content":{"adr":"# Edited"}}`
+	req := httptest.NewRequest(http.MethodPatch, "/docs/doc-1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withClaims(req, "admin")
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: "doc-1"}}
+
+	handler.UpdateDocContent(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if len(repo.createdDocs) != 1 {
+		t.Fatalf("expected 1 new row, got %d", len(repo.createdDocs))
+	}
+	newRow := repo.createdDocs[0]
+	if got := newRow.Content.Data()["adr"]; got != "# Edited" {
+		t.Errorf("new content = %q, want %q", got, "# Edited")
+	}
+	if previous.SupersededByID == nil || *previous.SupersededByID != newRow.ID {
+		t.Errorf("previous row should be marked superseded by new id; got %+v", previous.SupersededByID)
+	}
 }

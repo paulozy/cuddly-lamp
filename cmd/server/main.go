@@ -127,6 +127,7 @@ func main() {
 		worker.Register(tasks.TypeScanDependencies, dependencyWorker.Handle)
 		worker.Register(tasks.TypeGenerateTemplate, templateWorker.Handle)
 		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
+		worker.Register(tasks.TypeGenerateOrgDocs, docsWorker.HandleOrgDocs)
 
 		go func() {
 			if err := worker.Run(); err != nil {

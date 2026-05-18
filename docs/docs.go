@@ -342,6 +342,39 @@ const docTemplate = `{
                 }
             }
         },
+        "/docs/templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "List documentation templates",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/docs.DocTemplate"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/docs/{id}": {
             "get": {
                 "security": [
@@ -363,6 +396,73 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGeneration"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "Edit a documentation generation (creates a new version)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "DocGeneration ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New content map",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateDocContentRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -476,6 +576,104 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/docs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "List organization-wide documentation",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/docs/generate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "Generate organization-wide documentation",
+                "parameters": [
+                    {
+                        "description": "Org-wide doc generation options",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GenerateOrgDocsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationAcceptedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
@@ -2336,6 +2534,54 @@ const docTemplate = `{
         "datatypes.JSONType-github_com_paulozy_idp-with-ai-backend_internal_ai_StackProfile": {
             "type": "object"
         },
+        "docs.DocTemplate": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "scope": {
+                    "$ref": "#/definitions/docs.TemplateScope"
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "type": {
+                    "$ref": "#/definitions/docs.TemplateType"
+                }
+            }
+        },
+        "docs.TemplateScope": {
+            "type": "string",
+            "enum": [
+                "org"
+            ],
+            "x-enum-varnames": [
+                "TemplateScopeOrg"
+            ]
+        },
+        "docs.TemplateType": {
+            "type": "string",
+            "enum": [
+                "adr",
+                "architecture",
+                "guidelines"
+            ],
+            "x-enum-varnames": [
+                "TemplateTypeADR",
+                "TemplateTypeArchitecture",
+                "TemplateTypeGuidelines"
+            ]
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse": {
             "type": "object",
             "properties": {
@@ -2908,6 +3154,20 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "organization": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Organization"
+                },
+                "organization_id": {
+                    "type": "string"
+                },
+                "progress_stage": {
+                    "description": "ProgressStage is updated by the worker as it advances through phases.\nNULL when the doc is already in a terminal state.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocProgressStage"
+                        }
+                    ]
+                },
                 "pull_request_number": {
                     "type": "integer"
                 },
@@ -2918,10 +3178,27 @@ const docTemplate = `{
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
                 },
                 "repository_id": {
+                    "description": "RepositoryID is nullable in the DB (org-level rows leave it empty).",
                     "type": "string"
+                },
+                "scope": {
+                    "description": "Scope discriminates org-level docs (no repository_id) from per-repo\ndocs (with repository_id set). Enforced by a DB CHECK constraint.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationScope"
+                        }
+                    ]
                 },
                 "status": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus"
+                },
+                "superseded_by_id": {
+                    "description": "SupersededByID links to the row that replaced this one when the user\nedits the doc manually. The UI lists only the \"head\" of each chain\n(rows where superseded_by_id IS NULL).",
+                    "type": "string"
+                },
+                "template_id": {
+                    "description": "TemplateID stores which template was used for ADR org-level rows\n(e.g. \"adr-tech-choice\"). NULL for non-ADR docs.",
+                    "type": "string"
                 },
                 "tokens_used": {
                     "type": "integer"
@@ -2936,6 +3213,10 @@ const docTemplate = `{
                     }
                 },
                 "updated_at": {
+                    "type": "string"
+                },
+                "user_prompt": {
+                    "description": "UserPrompt holds the free-text \"topic\" the user typed when generating\nan ADR org-level doc (e.g. \"Should we standardize on PostgreSQL?\").\nEmpty for non-ADR and per-repo flows.",
                     "type": "string"
                 }
             }
@@ -2964,6 +3245,17 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationScope": {
+            "type": "string",
+            "enum": [
+                "repo",
+                "org"
+            ],
+            "x-enum-varnames": [
+                "DocGenerationScopeRepo",
+                "DocGenerationScopeOrg"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus": {
             "type": "string",
@@ -2998,6 +3290,12 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "organization_id": {
+                    "type": "string"
+                },
+                "progress_stage": {
+                    "type": "string"
+                },
                 "pull_request_number": {
                     "type": "integer"
                 },
@@ -3007,8 +3305,17 @@ const docTemplate = `{
                 "repository_id": {
                     "type": "string"
                 },
+                "scope": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationScope"
+                },
                 "status": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.DocGenerationStatus"
+                },
+                "superseded_by_id": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
                 },
                 "tokens_used": {
                     "type": "integer"
@@ -3024,8 +3331,24 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                },
+                "user_prompt": {
+                    "type": "string"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.DocProgressStage": {
+            "type": "string",
+            "enum": [
+                "aggregating_context",
+                "calling_claude",
+                "persisting"
+            ],
+            "x-enum-varnames": [
+                "DocProgressStageAggregatingContext",
+                "DocProgressStageCallingClaude",
+                "DocProgressStagePersisting"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse": {
             "type": "object",
@@ -3064,6 +3387,27 @@ const docTemplate = `{
                 },
                 "commit_sha": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.GenerateOrgDocsRequest": {
+            "type": "object",
+            "required": [
+                "types"
+            ],
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "types": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -4170,6 +4514,20 @@ const docTemplate = `{
                 },
                 "user": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserInfo"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateDocContentRequest": {
+            "type": "object",
+            "required": [
+                "content"
+            ],
+            "properties": {
+                "content": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },

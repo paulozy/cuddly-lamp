@@ -362,3 +362,100 @@ func truncateString(value string, maxBytes int) string {
 	}
 	return value[:maxBytes] + "\n\n[truncated]\n"
 }
+
+// HandleOrgDocs processes a TypeGenerateOrgDocs task. Unlike the per-repo
+// flow, this never clones a git repo and never opens a PR — it aggregates
+// the organization context (via OrgContextBuilder), asks Claude to generate
+// one or more documents, and persists everything inline on the
+// `doc_generations` row.
+//
+// The doc row is expected to exist already (created by the HTTP handler in
+// `pending` state) — the worker only loads it, updates `progress_stage` as
+// it moves through phases, and either completes or fails it.
+func (w *DocsWorker) HandleOrgDocs(ctx context.Context, task *asynq.Task) error {
+	var payload tasks.GenerateOrgDocsPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return fmt.Errorf("org docs worker: unmarshal payload: %w", err)
+	}
+	if payload.DocGenerationID == "" || payload.OrganizationID == "" || len(payload.Types) == 0 {
+		return fmt.Errorf("org docs worker: invalid payload")
+	}
+
+	doc, err := w.repo.GetDocGeneration(ctx, payload.DocGenerationID)
+	if err != nil {
+		return fmt.Errorf("org docs worker: get doc generation: %w", err)
+	}
+	if doc == nil {
+		return fmt.Errorf("org docs worker: doc generation not found: %s", payload.DocGenerationID)
+	}
+
+	cfg, err := w.repo.GetOrganizationConfig(ctx, payload.OrganizationID)
+	if err != nil || cfg == nil || cfg.AnthropicAPIKey == "" {
+		return w.failDocGeneration(ctx, doc, "anthropic api key is not configured for this organization")
+	}
+
+	w.updateOrgProgress(ctx, doc, models.DocProgressStageAggregatingContext)
+
+	builder := anthropicclient.NewOrgContextBuilder(w.repo)
+	snapshot, err := builder.Build(ctx, payload.OrganizationID)
+	if err != nil {
+		return w.failDocGeneration(ctx, doc, fmt.Sprintf("build org context: %v", err))
+	}
+	if snapshot == nil {
+		return w.failDocGeneration(ctx, doc, "organization has no repositories; nothing to document")
+	}
+
+	w.updateOrgProgress(ctx, doc, models.DocProgressStageCallingClaude)
+
+	generator := w.generatorFactory(cfg.AnthropicAPIKey)
+	contentMap := map[string]string{}
+	totalTokens := 0
+	model := ""
+
+	for _, t := range payload.Types {
+		result, err := generator.GenerateOrgDocumentation(ctx, &ai.OrgDocumentationRequest{
+			Type:               ai.DocumentationType(t),
+			OrganizationID:     snapshot.OrganizationID,
+			OrganizationName:   snapshot.OrganizationName,
+			OrgContextMarkdown: snapshot.Markdown,
+			TemplateID:         payload.TemplateID,
+			UserPrompt:         payload.UserPrompt,
+			OutputLanguage:     cfg.OutputLanguage,
+		})
+		if err != nil {
+			return w.failDocGeneration(ctx, doc, fmt.Sprintf("generate %s: %v", t, err))
+		}
+		contentMap[t] = result.Content
+		totalTokens += result.TokensUsed
+		model = result.Model
+	}
+
+	w.updateOrgProgress(ctx, doc, models.DocProgressStagePersisting)
+
+	doc.Content = datatypes.NewJSONType(contentMap)
+	doc.TokensUsed = totalTokens
+	doc.Status = models.DocGenerationStatusCompleted
+	doc.ProgressStage = nil
+	doc.UpdatedAt = time.Now().UTC()
+	if model != "" {
+		// Persist the model name in the error message field… no — keep things
+		// clean by not adding a new column for it. The model identity already
+		// lives in DocumentationResult and shows up in logs.
+		_ = model
+	}
+	if err := w.repo.UpdateDocGeneration(ctx, doc); err != nil {
+		return fmt.Errorf("org docs worker: persist completion: %w", err)
+	}
+	return nil
+}
+
+// updateOrgProgress writes the next progress stage to the row. Errors are
+// only logged — a missed progress update never blocks generation itself.
+func (w *DocsWorker) updateOrgProgress(ctx context.Context, doc *models.DocGeneration, stage models.DocProgressStage) {
+	doc.ProgressStage = &stage
+	doc.Status = models.DocGenerationStatusInProgress
+	doc.UpdatedAt = time.Now().UTC()
+	if err := w.repo.UpdateDocGeneration(ctx, doc); err != nil {
+		utils.Error("org docs worker: progress update failed", "doc_id", doc.ID, "stage", string(stage), "error", err)
+	}
+}

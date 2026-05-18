@@ -36,6 +36,7 @@ type mockRepository struct {
 	upsertPackageDependencyFunc           func(ctx context.Context, dep *models.PackageDependency) error
 	listPackageDependenciesFunc           func(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
 	updatePackageDependencyVulnStatusFunc func(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
+	getLatestOrgDocsFunc                  func(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
 }
 
 func (m *mockRepository) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
@@ -135,6 +136,13 @@ func (m *mockRepository) UpdatePackageDependencyVulnStatus(ctx context.Context, 
 	}
 	return nil
 }
+func (m *mockRepository) GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error) {
+	if m.getLatestOrgDocsFunc != nil {
+		return m.getLatestOrgDocsFunc(ctx, orgID, types)
+	}
+	return []models.DocGeneration{}, nil
+}
+
 
 type mockGithubClient struct {
 	github.ClientInterface
