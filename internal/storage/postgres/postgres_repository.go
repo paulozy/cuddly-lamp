@@ -497,6 +497,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.IsPublic, &e.Metadata,
 			&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
 			&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
+			&e.EmbeddingsStatus, &e.EmbeddingsCount, &e.EmbeddingsIndexedAt, &e.EmbeddingsError,
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TotalAnalyses,
 			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
