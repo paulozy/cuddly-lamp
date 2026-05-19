@@ -300,6 +300,7 @@ func (h *AnalysisHandler) GenerateEmbeddings(c *gin.Context) {
 	err = h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeGenerateEmbeddings, payload,
 		asynq.TaskID(taskID),
 		asynq.Retention(10*time.Minute),
+		asynq.Queue("embeddings"),
 	)
 	if err != nil {
 		if errors.Is(err, asynq.ErrTaskIDConflict) {
@@ -315,6 +316,14 @@ func (h *AnalysisHandler) GenerateEmbeddings(c *gin.Context) {
 			ErrorDescription: "failed to enqueue embeddings job",
 		})
 		return
+	}
+
+	// Mark the repository as `pending` so the UI shows the right state until
+	// the worker picks the job up. Best-effort — log a warning on failure.
+	repository.EmbeddingsStatus = models.EmbeddingsStatusPending
+	repository.EmbeddingsError = ""
+	if err := h.repo.UpdateRepository(c.Request.Context(), repository); err != nil {
+		utils.Warn("embeddings handler: pending status update failed", "repo_id", repoID, "error", err)
 	}
 
 	c.JSON(http.StatusAccepted, models.JobResponse{

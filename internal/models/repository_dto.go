@@ -35,8 +35,23 @@ type RepositoryResponse struct {
 	SyncError      string `json:"sync_error,omitempty"`
 	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`
 
+	// Embeddings state — same shape as `EmbeddingsState` in repository_dto.go
+	// but inlined as flat fields so the frontend doesn't need a nested object.
+	EmbeddingsState EmbeddingsState `json:"embeddings_state"`
+
 	// Aggregated stats
 	Stats RepositoryStats `json:"stats"`
+}
+
+// EmbeddingsState mirrors the columns added in migration 021 plus a runtime
+// `ProviderConfigured` flag derived from `OrganizationConfig.VoyageAPIKey`.
+// The frontend uses it to pick the right label/badge for the repo.
+type EmbeddingsState struct {
+	Status             string     `json:"status"`              // idle|pending|indexing|indexed|stale|failed
+	Count              int        `json:"count"`               // chunks indexed so far
+	IndexedAt          *time.Time `json:"indexed_at,omitempty"`
+	Error              string     `json:"error,omitempty"`
+	ProviderConfigured bool       `json:"provider_configured"`
 }
 
 type RepositoryListResponse struct {
@@ -83,6 +98,19 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 	if !r.LastSyncedAt.IsZero() {
 		t := r.LastSyncedAt
 		resp.LastSyncedAt = &t
+	}
+
+	// Embeddings state — `ProviderConfigured` defaults to false here; the
+	// service/handler layer can override it after looking up
+	// `OrganizationConfig.VoyageAPIKey`.
+	resp.EmbeddingsState = EmbeddingsState{
+		Status:    r.EmbeddingsStatus,
+		Count:     r.EmbeddingsCount,
+		IndexedAt: r.EmbeddingsIndexedAt,
+		Error:     r.EmbeddingsError,
+	}
+	if resp.EmbeddingsState.Status == "" {
+		resp.EmbeddingsState.Status = EmbeddingsStatusIdle
 	}
 
 	// Populate Stats from EnrichedStats when available (list endpoint).

@@ -82,6 +82,14 @@ type Repository struct {
 	SyncStatus   string    `gorm:"type:varchar(50);default:'idle'" json:"sync_status"` // idle, syncing, synced, error
 	SyncError    string    `gorm:"type:text" json:"sync_error,omitempty"`
 
+	// Embeddings pipeline state — see migration 021. Lifecycle:
+	// idle → pending → indexing → indexed → stale (after push) → re-indexing.
+	// `EmbeddingsCount` is updated incrementally by the worker.
+	EmbeddingsStatus    string     `gorm:"type:varchar(20);default:'idle'" json:"embeddings_status"`
+	EmbeddingsCount     int        `gorm:"default:0" json:"embeddings_count"`
+	EmbeddingsIndexedAt *time.Time `json:"embeddings_indexed_at,omitempty"`
+	EmbeddingsError     string     `gorm:"type:text" json:"embeddings_error,omitempty"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
@@ -98,6 +106,26 @@ type Repository struct {
 
 func (Repository) TableName() string {
 	return "repositories"
+}
+
+// Embeddings status constants — kept as exported string consts (not a typed
+// alias) for forward compatibility with the GORM struct tag and the SQL
+// CHECK constraint added in migration 021.
+const (
+	EmbeddingsStatusIdle     = "idle"
+	EmbeddingsStatusPending  = "pending"
+	EmbeddingsStatusIndexing = "indexing"
+	EmbeddingsStatusIndexed  = "indexed"
+	EmbeddingsStatusStale    = "stale"
+	EmbeddingsStatusFailed   = "failed"
+)
+
+// CanIndex reports whether the repository is in a state that allows the
+// embedding worker to start. We block only on an explicit sync error — a
+// repo that has never been synced (`idle`) is allowed because the worker
+// itself clones the upstream URL, it doesn't need a local cache.
+func (r *Repository) CanIndex() bool {
+	return r.SyncStatus != "error"
 }
 
 // EnrichedStats carries lateral-join results from the enriched list query.

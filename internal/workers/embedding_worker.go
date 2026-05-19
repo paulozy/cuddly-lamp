@@ -48,6 +48,7 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		return fmt.Errorf("embedding worker: get organization config: %w", err)
 	}
 	if cfg == nil || cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
+		w.failEmbeddings(ctx, repository, "provider not configured for organization")
 		return fmt.Errorf("embedding worker: provider not configured for organization")
 	}
 	provider := embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, cfg.EmbeddingsDimensions)
@@ -60,9 +61,14 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		branch = "main"
 	}
 
+	// Mark indexing immediately so the UI polling shows progress instead of
+	// the previous `pending` state.
+	w.markEmbeddingsStatus(ctx, repository, models.EmbeddingsStatusIndexing, 0, "")
+
 	utils.Info("embedding worker: collecting chunks", "repo_id", repository.ID, "branch", branch)
 	chunks, err := embeddings.CollectRepositoryChunks(ctx, repository.URL, cfg.GithubToken, branch)
 	if err != nil {
+		w.failEmbeddings(ctx, repository, fmt.Sprintf("collect chunks: %v", err))
 		return fmt.Errorf("embedding worker: collect chunks: %w", err)
 	}
 
@@ -74,14 +80,20 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		Branch:       branch,
 	}
 	if err := w.repo.DeleteEmbeddings(ctx, deleteFilter); err != nil {
+		w.failEmbeddings(ctx, repository, fmt.Sprintf("delete old embeddings: %v", err))
 		return fmt.Errorf("embedding worker: delete old embeddings: %w", err)
 	}
 	if len(chunks) == 0 {
 		utils.Warn("embedding worker: no chunks found", "repo_id", repository.ID)
+		// Treat "no indexable code" as `indexed` with count 0 — it's a valid
+		// terminal state; the UI then shows "Indexado · 0" instead of leaving
+		// the user in "Indexando…" forever.
+		w.markEmbeddingsIndexed(ctx, repository, 0)
 		return nil
 	}
 
 	now := time.Now().UTC()
+	indexedCount := 0
 	for start := 0; start < len(chunks); start += embeddingBatchSize {
 		end := start + embeddingBatchSize
 		if end > len(chunks) {
@@ -96,9 +108,11 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 
 		result, err := provider.Embed(ctx, input, embeddings.InputTypeDocument)
 		if err != nil {
+			w.failEmbeddings(ctx, repository, fmt.Sprintf("embed batch: %v", err))
 			return fmt.Errorf("embedding worker: embed batch: %w", err)
 		}
 		if len(result.Embeddings) != len(batch) {
+			w.failEmbeddings(ctx, repository, "embedding count mismatch")
 			return fmt.Errorf("embedding worker: embedding count mismatch: got %d, want %d", len(result.Embeddings), len(batch))
 		}
 
@@ -125,10 +139,51 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		}
 
 		if err := w.repo.CreateCodeEmbeddings(ctx, records); err != nil {
+			w.failEmbeddings(ctx, repository, fmt.Sprintf("save embeddings: %v", err))
 			return fmt.Errorf("embedding worker: save embeddings: %w", err)
 		}
+		indexedCount += len(records)
+		// Surface partial progress between batches — the UI polls every 5s
+		// and shows this count so a long index doesn't look stuck.
+		w.markEmbeddingsStatus(ctx, repository, models.EmbeddingsStatusIndexing, indexedCount, "")
 	}
 
+	w.markEmbeddingsIndexed(ctx, repository, indexedCount)
 	utils.Info("embedding worker: completed", "repo_id", repository.ID, "chunks", len(chunks), "provider", provider.Provider(), "model", provider.Model())
 	return nil
+}
+
+// markEmbeddingsStatus persists the current pipeline status + count without
+// touching `indexed_at`. Errors are only warned — never failing the job for
+// a status-write hiccup.
+func (w *EmbeddingWorker) markEmbeddingsStatus(ctx context.Context, repo *models.Repository, status string, count int, errMsg string) {
+	repo.EmbeddingsStatus = status
+	repo.EmbeddingsCount = count
+	repo.EmbeddingsError = errMsg
+	if err := w.repo.UpdateRepository(ctx, repo); err != nil {
+		utils.Warn("embedding worker: status update failed", "repo_id", repo.ID, "status", status, "error", err)
+	}
+}
+
+// markEmbeddingsIndexed is the terminal happy-path: status=indexed, error
+// cleared, indexed_at=now.
+func (w *EmbeddingWorker) markEmbeddingsIndexed(ctx context.Context, repo *models.Repository, count int) {
+	now := time.Now().UTC()
+	repo.EmbeddingsStatus = models.EmbeddingsStatusIndexed
+	repo.EmbeddingsCount = count
+	repo.EmbeddingsIndexedAt = &now
+	repo.EmbeddingsError = ""
+	if err := w.repo.UpdateRepository(ctx, repo); err != nil {
+		utils.Warn("embedding worker: mark indexed failed", "repo_id", repo.ID, "error", err)
+	}
+}
+
+// failEmbeddings is the terminal sad path: status=failed + error message.
+func (w *EmbeddingWorker) failEmbeddings(ctx context.Context, repo *models.Repository, msg string) {
+	utils.Error("embedding worker: failing", "repo_id", repo.ID, "error", msg)
+	repo.EmbeddingsStatus = models.EmbeddingsStatusFailed
+	repo.EmbeddingsError = msg
+	if err := w.repo.UpdateRepository(ctx, repo); err != nil {
+		utils.Warn("embedding worker: persist failure status failed", "repo_id", repo.ID, "error", err)
+	}
 }
