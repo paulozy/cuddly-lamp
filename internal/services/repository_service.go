@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hibiken/asynq"
+	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -76,9 +78,51 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID
 		if err := s.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
 			utils.Warn("repository: failed to enqueue initial analysis", "repo_id", repo.ID, "error", err)
 		}
+
+		// Auto-trigger embeddings only when the org has Voyage configured.
+		// We rely on the dedicated `embeddings` queue (low concurrency) so a
+		// batch import doesn't flood Voyage.
+		s.maybeEnqueueInitialEmbeddings(ctx, repo)
 	}
 
 	return models.RepositoryToResponse(repo), nil
+}
+
+// maybeEnqueueInitialEmbeddings fires the embedding job for a freshly
+// created repository when the organisation's Voyage provider is set up.
+// The job is delayed 30s so the sync worker has a chance to populate
+// `Metadata.DefaultBranch` before the embedding worker clones the repo.
+//
+// Failure is logged but never surfaced — embeddings are an optional
+// enhancement and the user can always retrigger from the UI.
+func (s *RepositoryService) maybeEnqueueInitialEmbeddings(ctx context.Context, repo *models.Repository) {
+	cfg, err := s.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
+	if err != nil || cfg == nil {
+		return
+	}
+	if cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
+		return
+	}
+
+	payload := tasks.GenerateEmbeddingsPayload{RepositoryID: repo.ID}
+	taskID := fmt.Sprintf("embeddings:generate:%s:initial", repo.ID)
+	err = s.enqueuer.Enqueue(ctx, tasks.TypeGenerateEmbeddings, payload,
+		asynq.TaskID(taskID),
+		asynq.Retention(10*time.Minute),
+		asynq.ProcessIn(30*time.Second),
+		asynq.Queue("embeddings"),
+	)
+	if err != nil {
+		utils.Warn("repository: failed to enqueue initial embeddings", "repo_id", repo.ID, "error", err)
+		return
+	}
+
+	// Flip status to `pending` immediately so the UI reflects that an index
+	// is on the way without waiting 30s for the worker to start.
+	repo.EmbeddingsStatus = models.EmbeddingsStatusPending
+	if err := s.repo.UpdateRepository(ctx, repo); err != nil {
+		utils.Warn("repository: failed to mark embeddings pending", "repo_id", repo.ID, "error", err)
+	}
 }
 
 func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationID string) (*models.RepositoryResponse, error) {
