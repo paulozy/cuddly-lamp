@@ -21,25 +21,32 @@ import (
 // It matches the SELECT column order exactly.
 type enrichedRepo struct {
 	// Core repository fields
-	ID              string
-	Name            string
-	Description     string
-	URL             string
-	Type            string
-	OrganizationID  string
-	OwnerUserID     *string
-	CreatedByUserID *string
-	IsPublic        bool
-	Metadata        sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
-	AnalysisStatus  string
-	AnalysisError   sql.NullString
-	ReviewsCount    int
-	LastAnalyzedAt  *time.Time
-	LastSyncedAt    *time.Time
-	SyncStatus      string
-	SyncError       sql.NullString
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                  string
+	Name                string
+	Description         string
+	URL                 string
+	Type                string
+	OrganizationID      string
+	OwnerUserID         *string
+	CreatedByUserID     *string
+	IsPublic            bool
+	Metadata            sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
+	AnalysisStatus      string
+	AnalysisError       sql.NullString
+	ReviewsCount        int
+	LastAnalyzedAt      *time.Time
+	LastSyncedAt        *time.Time
+	SyncStatus          string
+	SyncError           sql.NullString
+	// Embeddings columns must be scanned — otherwise the model loads with the
+	// Go zero-value ("") and a subsequent `db.Save(repo)` writes '' back over
+	// the DB default, violating the CHECK constraint added in migration 021.
+	EmbeddingsStatus    string
+	EmbeddingsCount     int
+	EmbeddingsIndexedAt *time.Time
+	EmbeddingsError     sql.NullString
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 
 	// Aggregated stats from LATERAL joins
 	TotalAnalyses    int64
@@ -256,6 +263,10 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
+            r.embeddings_status,
+            r.embeddings_count,
+            r.embeddings_indexed_at,
+            r.embeddings_error,
             r.created_at,
             r.updated_at,
             COALESCE(agg.total_analyses, 0)                        AS total_analyses,
@@ -312,6 +323,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 		&e.IsPublic, &e.Metadata,
 		&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
 		&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
+		&e.EmbeddingsStatus, &e.EmbeddingsCount, &e.EmbeddingsIndexedAt, &e.EmbeddingsError,
 		&e.CreatedAt, &e.UpdatedAt,
 		&e.TotalAnalyses,
 		&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
@@ -419,6 +431,10 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
+            r.embeddings_status,
+            r.embeddings_count,
+            r.embeddings_indexed_at,
+            r.embeddings_error,
             r.created_at,
             r.updated_at,
             COALESCE(agg.total_analyses, 0)                        AS total_analyses,
@@ -481,6 +497,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.IsPublic, &e.Metadata,
 			&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
 			&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
+			&e.EmbeddingsStatus, &e.EmbeddingsCount, &e.EmbeddingsIndexedAt, &e.EmbeddingsError,
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TotalAnalyses,
 			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
@@ -538,15 +555,19 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		CreatedByUserID: createdByUserID,
 		IsPublic:        e.IsPublic,
 		Metadata:        meta,
-		AnalysisStatus:  e.AnalysisStatus,
-		AnalysisError:   e.AnalysisError.String,
-		ReviewsCount:    e.ReviewsCount,
-		LastAnalyzedAt:  lastAnalyzedAt,
-		LastSyncedAt:    lastSyncedAt,
-		SyncStatus:      e.SyncStatus,
-		SyncError:       e.SyncError.String,
-		CreatedAt:       e.CreatedAt,
-		UpdatedAt:       e.UpdatedAt,
+		AnalysisStatus:      e.AnalysisStatus,
+		AnalysisError:       e.AnalysisError.String,
+		ReviewsCount:        e.ReviewsCount,
+		LastAnalyzedAt:      lastAnalyzedAt,
+		LastSyncedAt:        lastSyncedAt,
+		SyncStatus:          e.SyncStatus,
+		SyncError:           e.SyncError.String,
+		EmbeddingsStatus:    e.EmbeddingsStatus,
+		EmbeddingsCount:     e.EmbeddingsCount,
+		EmbeddingsIndexedAt: e.EmbeddingsIndexedAt,
+		EmbeddingsError:     e.EmbeddingsError.String,
+		CreatedAt:           e.CreatedAt,
+		UpdatedAt:           e.UpdatedAt,
 	}
 
 	// Attach enriched stats so the service layer can compute quality score

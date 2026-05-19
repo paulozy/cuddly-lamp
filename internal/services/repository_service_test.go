@@ -21,10 +21,19 @@ type mockRepoStore struct {
 	createErr error
 	updateErr error
 	deleteErr error
+
+	// orgConfig lets individual tests opt-in to a Voyage-configured org so
+	// `maybeEnqueueInitialEmbeddings` can fire. nil → returns nil (no
+	// provider configured → no embeddings enqueue).
+	orgConfig *models.OrganizationConfig
 }
 
 func newMockRepoStore() *mockRepoStore {
 	return &mockRepoStore{repos: make(map[string]*models.Repository)}
+}
+
+func (m *mockRepoStore) GetOrganizationConfig(_ context.Context, _ string) (*models.OrganizationConfig, error) {
+	return m.orgConfig, nil
 }
 
 func (m *mockRepoStore) GetRepository(_ context.Context, id string) (*models.Repository, error) {
@@ -234,6 +243,59 @@ func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
 	}
 	if analyzePayload.Type != "code_review" {
 		t.Errorf("analyze payload Type = %q, want %q", analyzePayload.Type, "code_review")
+	}
+}
+
+func TestRepositoryService_Create_AutoTriggersEmbeddingsWhenVoyageConfigured(t *testing.T) {
+	eq := &mockEnqueuer{}
+	store := newMockRepoStore()
+	store.orgConfig = &models.OrganizationConfig{
+		VoyageAPIKey:       "voy-test",
+		EmbeddingsProvider: "voyage",
+	}
+	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
+
+	resp, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(eq.tasks) != 3 {
+		t.Fatalf("enqueued tasks = %d, want 3 (sync + analyze + embeddings); got %+v", len(eq.tasks), eq.tasks)
+	}
+	if eq.tasks[2].taskType != tasks.TypeGenerateEmbeddings {
+		t.Errorf("third task = %q, want %q", eq.tasks[2].taskType, tasks.TypeGenerateEmbeddings)
+	}
+	embPayload, ok := eq.tasks[2].payload.(tasks.GenerateEmbeddingsPayload)
+	if !ok {
+		t.Fatalf("third payload type = %T, want GenerateEmbeddingsPayload", eq.tasks[2].payload)
+	}
+	if embPayload.RepositoryID != resp.ID {
+		t.Errorf("embeddings payload RepositoryID = %q, want %q", embPayload.RepositoryID, resp.ID)
+	}
+
+	// `pending` was persisted so the UI reflects the in-flight indexing
+	// without waiting for the worker to start.
+	stored := store.repos[resp.ID]
+	if stored.EmbeddingsStatus != models.EmbeddingsStatusPending {
+		t.Errorf("stored embeddings_status = %q, want %q", stored.EmbeddingsStatus, models.EmbeddingsStatusPending)
+	}
+}
+
+func TestRepositoryService_Create_SkipsEmbeddingsWhenProviderMissing(t *testing.T) {
+	eq := &mockEnqueuer{}
+	store := newMockRepoStore()
+	// No orgConfig → provider unavailable → embeddings should be skipped.
+	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
+
+	if _, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, task := range eq.tasks {
+		if task.taskType == tasks.TypeGenerateEmbeddings {
+			t.Fatalf("embeddings task should not be enqueued without provider; got %+v", task)
+		}
 	}
 }
 

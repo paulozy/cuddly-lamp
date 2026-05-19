@@ -108,6 +108,19 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 			}
 		}
 
+		// Mark embeddings as stale when the push touches indexable code. We
+		// only escalate `indexed` → `stale` so we don't regress a job that's
+		// already pending/indexing/failed.
+		repoForStale, err := w.repo.GetRepository(ctx, repoID)
+		if err == nil && repoForStale != nil &&
+			repoForStale.EmbeddingsStatus == models.EmbeddingsStatusIndexed &&
+			webhookPayloadHasIndexableChanges(webhook.EventPayload.RawData) {
+			repoForStale.EmbeddingsStatus = models.EmbeddingsStatusStale
+			if err := w.repo.UpdateRepository(ctx, repoForStale); err != nil {
+				utils.Warn("webhook processor: mark embeddings stale failed", "repo_id", repoID, "error", err)
+			}
+		}
+
 		// Trigger analysis for push events if repository needs analysis
 		repo, err := w.repo.GetRepository(ctx, repoID)
 		if err == nil && repo != nil && repo.AnalysisStatus != "in_progress" {
@@ -203,6 +216,45 @@ func webhookPayloadHasManifestChanges(raw map[string]interface{}) bool {
 	for _, commit := range payload.Commits {
 		for _, file := range append(commit.Added, commit.Modified...) {
 			if dependencies.IsManifestFile(filepath.Base(file)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// indexableExtensions is the set of source-code extensions that the embedding
+// chunker recognises. A push that only touches docs (README/CHANGELOG/etc.)
+// shouldn't invalidate the index.
+var indexableExtensions = map[string]struct{}{
+	".go": {}, ".ts": {}, ".tsx": {}, ".js": {}, ".jsx": {},
+	".py": {}, ".rs": {}, ".java": {}, ".rb": {}, ".php": {},
+	".cs": {}, ".kt": {}, ".swift": {}, ".cpp": {}, ".c": {}, ".h": {}, ".hpp": {},
+	".scala": {}, ".sql": {}, ".sh": {}, ".bash": {},
+}
+
+// webhookPayloadHasIndexableChanges returns true when at least one
+// added/modified file in any of the push's commits has a source-code
+// extension that the embedding worker would index. Pure-doc pushes return
+// false so we don't mark indexes as `stale` for README edits.
+func webhookPayloadHasIndexableChanges(raw map[string]interface{}) bool {
+	body, _ := raw["body"].(string)
+	if body == "" {
+		return false
+	}
+	var payload struct {
+		Commits []struct {
+			Added    []string `json:"added"`
+			Modified []string `json:"modified"`
+		} `json:"commits"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return false
+	}
+	for _, commit := range payload.Commits {
+		for _, file := range append(commit.Added, commit.Modified...) {
+			ext := strings.ToLower(filepath.Ext(file))
+			if _, ok := indexableExtensions[ext]; ok {
 				return true
 			}
 		}

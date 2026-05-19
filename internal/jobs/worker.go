@@ -28,11 +28,15 @@ func NewWorker(cfg *config.RedisConfig) *Worker {
 			DB:       cfg.DB,
 		},
 		asynq.Config{
-			// Weighted priority queues: critical > default > low
+			// Weighted priority queues: critical > default > low.
+			// `embeddings` is a dedicated low-concurrency lane so a batch
+			// import of N repos doesn't spawn N parallel clones + Voyage
+			// calls; we serve at most 2 indexings at a time.
 			Queues: map[string]int{
-				"critical": 6,
-				"default":  3,
-				"low":      1,
+				"critical":   6,
+				"default":    3,
+				"low":        1,
+				"embeddings": 2,
 			},
 			Concurrency:    10,
 			RetryDelayFunc: asynq.DefaultRetryDelayFunc,

@@ -14,7 +14,13 @@ import (
 
 const (
 	defaultModel = "claude-haiku-4-5-20251001"
-	maxTokens    = 4096
+	// maxTokens caps Claude's output. 4096 was too tight for full-repo
+	// analyses — the model would truncate mid-JSON and parseResponse failed
+	// with `unexpected end of JSON input`. Haiku 4.5 supports up to 64K
+	// output tokens; 8192 gives plenty of headroom for the response shape we
+	// ask for (summary + ~10 issues + metrics) without spending on the
+	// average case.
+	maxTokens = 8192
 )
 
 // Client implements ai.Analyzer using the Anthropic SDK
@@ -53,6 +59,13 @@ func (c *Client) AnalyzeCode(ctx context.Context, req *ai.AnalysisRequest) (*ai.
 	message, err := c.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic api error: %w", err)
+	}
+
+	// Surface output truncation explicitly. Without this, parseResponse below
+	// fails with a misleading "unexpected end of JSON input" — the real
+	// problem is that Claude hit MaxTokens before closing the JSON object.
+	if message.StopReason == anthropic.StopReasonMaxTokens {
+		return nil, fmt.Errorf("anthropic truncated output at max_tokens=%d; bump maxTokens or shrink the prompt", maxTokens)
 	}
 
 	// Extract text content from response
