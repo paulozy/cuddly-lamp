@@ -131,30 +131,45 @@ func TestClient_BuildPrompt_InjectsProjectStandards(t *testing.T) {
 	}
 }
 
-func TestClient_ParseResponse_RecommendedVersion(t *testing.T) {
+func TestClient_MapResponse_RecommendedVersion(t *testing.T) {
 	client := NewClient("test-key")
-	result, err := client.parseResponse(`{
-		"summary": "dependency issue",
-		"issues": [{
-			"category": "vulnerable_dependency",
-			"severity": "high",
-			"title": "x/crypto vulnerable",
-			"description": "CVE-2024-0001",
-			"suggestion": "Upgrade package",
-			"file_path": "go.mod",
-			"line": 4,
-			"recommended_version": "v0.31.0"
-		}],
-		"metrics": {"lines_of_code": 0, "cyclomatic_complexity": 0}
-	}`, 123)
-	if err != nil {
-		t.Fatalf("parseResponse returned error: %v", err)
+	parsed := &claudeAnalysisResponse{
+		Summary: "dependency issue",
+		Issues: []claudeIssueResponse{{
+			Category:           "vulnerable_dependency",
+			Severity:           "high",
+			Title:              "x/crypto vulnerable",
+			Description:        "CVE-2024-0001",
+			Suggestion:         "Upgrade package",
+			FilePath:           "go.mod",
+			Line:               4,
+			RecommendedVersion: "v0.31.0",
+		}},
 	}
+	result := client.mapResponse(parsed, 123)
 	if len(result.Issues) != 1 {
 		t.Fatalf("issues = %d, want 1", len(result.Issues))
 	}
 	if !contains(result.Issues[0].Suggestion, "recommended: v0.31.0") {
 		t.Fatalf("suggestion = %q", result.Issues[0].Suggestion)
+	}
+	if result.TokensUsed != 123 {
+		t.Fatalf("tokensUsed = %d, want 123", result.TokensUsed)
+	}
+}
+
+func TestClient_MapResponse_RecommendedVersionWithoutExistingSuggestion(t *testing.T) {
+	client := NewClient("test-key")
+	parsed := &claudeAnalysisResponse{
+		Issues: []claudeIssueResponse{{
+			Severity:           "medium",
+			Title:              "outdated",
+			RecommendedVersion: "v2.0.0",
+		}},
+	}
+	result := client.mapResponse(parsed, 0)
+	if result.Issues[0].Suggestion != "Update to v2.0.0" {
+		t.Fatalf("suggestion = %q, want %q", result.Issues[0].Suggestion, "Update to v2.0.0")
 	}
 }
 
