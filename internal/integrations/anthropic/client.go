@@ -125,7 +125,14 @@ func (c *Client) callOnce(ctx context.Context, prompt string, sys []anthropic.Be
 		// the struct pointer and auto-parses the response back into it.
 		// No markdown fences, no prose, no JSON repair — the decoder is
 		// grammatically restricted to schema-valid tokens.
-		OutputFormat: anthropic.BetaJSONOutputFormatParam{Schema: &parsed},
+		//
+		// We use `output_config.format` (nested) instead of the top-level
+		// `output_format`, which the API deprecated and now rejects with
+		// 400. The SDK still exposes both fields for backward compat, but
+		// only the nested form is accepted by the wire.
+		OutputConfig: anthropic.BetaOutputConfigParam{
+			Format: anthropic.BetaJSONOutputFormatParam{Schema: &parsed},
+		},
 	}
 	if len(sys) > 0 {
 		params.System = sys
