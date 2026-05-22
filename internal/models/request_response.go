@@ -20,8 +20,8 @@ type JobResponse struct {
 type AnalysisListResponse struct {
 	Total    int64          `json:"total"`
 	Analyses []CodeAnalysis `json:"analyses"`
-	Limit    int            `json:"limit,omitempty"`
-	Offset   int            `json:"offset,omitempty"`
+	Limit    int            `json:"limit"`
+	Offset   int            `json:"offset"`
 }
 
 type PackageDependencyResponse struct {

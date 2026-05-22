@@ -28,6 +28,33 @@ func TestCodeAnalysis_MarshalJSON_InProgressIncludesZeroNumericFields(t *testing
 	}
 }
 
+// TestAnalysisListResponse_MarshalJSON_IncludesLimitAndOffsetWhenZero guards
+// the pagination envelope. Frontend Zod schema declares `limit` and `offset`
+// as required numbers; if either is `omitempty`-omitted when zero, the whole
+// response parse fails and the consumer (e.g. the issues page) renders a
+// silent empty state.
+func TestAnalysisListResponse_MarshalJSON_IncludesLimitAndOffsetWhenZero(t *testing.T) {
+	resp := AnalysisListResponse{
+		Total:    0,
+		Analyses: nil,
+		Limit:    0,
+		Offset:   0,
+	}
+
+	out, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal AnalysisListResponse: %v", err)
+	}
+
+	got := string(out)
+	if !strings.Contains(got, `"limit":0`) {
+		t.Errorf("expected limit:0 to be present; got %s", got)
+	}
+	if !strings.Contains(got, `"offset":0`) {
+		t.Errorf("expected offset:0 to be present; got %s", got)
+	}
+}
+
 func TestGetQualityScore_NotConfigured_SkipsCoverageDeduction(t *testing.T) {
 	withStatus := CodeAnalysis{
 		IssueCount: 0,
