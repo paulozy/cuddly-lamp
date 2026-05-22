@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
+	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
@@ -128,6 +131,35 @@ func TestTemplateWorkerHandleFailed(t *testing.T) {
 	}
 	if mockRepo.template.ErrorMessage == "" {
 		t.Fatal("ErrorMessage is empty, want failure reason")
+	}
+}
+
+func TestTemplateWorkerHandleTruncated_PersistsFriendlyMessage(t *testing.T) {
+	mockRepo := &templateRepoMock{
+		template: &models.CodeTemplate{
+			ID:             "template-truncated",
+			OrganizationID: "org-1",
+			Prompt:         "Generate a giant scaffold",
+			Status:         models.TemplateStatusPending,
+			Files:          datatypes.NewJSONType([]ai.GeneratedFile{}),
+		},
+	}
+
+	worker := NewTemplateWorker(mockRepo)
+	worker.generatorFactory = func(apiKey string) ai.Generator {
+		return &ai.MockGenerator{GenerateTemplateFunc: func(ctx context.Context, req *ai.TemplateRequest) (*ai.TemplateResult, error) {
+			return nil, fmt.Errorf("%w: even at MaxTokens=32768", anthropicclient.ErrTemplateTruncated)
+		}}
+	}
+
+	if err := worker.Handle(context.Background(), newTemplateTask(t)); err != nil {
+		t.Fatalf("Handle failed: %v", err)
+	}
+	if got, want := mockRepo.updates, []models.TemplateStatus{models.TemplateStatusGenerating, models.TemplateStatusFailed}; !sameStatuses(got, want) {
+		t.Fatalf("updates = %+v, want %+v", got, want)
+	}
+	if !strings.Contains(mockRepo.template.ErrorMessage, "Geração excedeu o limite") {
+		t.Fatalf("ErrorMessage = %q, want user-friendly truncation message", mockRepo.template.ErrorMessage)
 	}
 }
 

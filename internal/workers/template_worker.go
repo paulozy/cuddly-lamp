@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -87,7 +88,11 @@ func (w *TemplateWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	processingMs := time.Since(started).Milliseconds()
 	if err != nil {
 		utils.Error("template worker: generator failed", "template_id", template.ID, "error", err)
-		return w.failTemplate(ctx, template, fmt.Sprintf("generator error: %v", err))
+		userMsg := fmt.Sprintf("generator error: %v", err)
+		if errors.Is(err, anthropicclient.ErrTemplateTruncated) {
+			userMsg = "Geração excedeu o limite de saída do modelo. Tente reduzir o escopo do prompt (menos arquivos ou instruções mais focadas)."
+		}
+		return w.failTemplate(ctx, template, userMsg)
 	}
 
 	template.Status = models.TemplateStatusCompleted
