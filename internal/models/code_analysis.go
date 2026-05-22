@@ -149,8 +149,8 @@ type CodeAnalysis struct {
 
 	IsAIAnalysis bool   `gorm:"default:true" json:"is_ai_analysis"`
 	AIModel      string `gorm:"type:varchar(100)" json:"ai_model,omitempty"` // claude-3-sonnet, etc
-	TokensUsed   int    `json:"tokens_used,omitempty"`
-	ProcessingMs int64  `json:"processing_ms,omitempty"`
+	TokensUsed   int    `json:"tokens_used"`
+	ProcessingMs int64  `json:"processing_ms"`
 
 	ErrorMessage string `gorm:"type:text" json:"error_message,omitempty"`
 	// Audit

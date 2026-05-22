@@ -49,7 +49,7 @@ func TestGetAnalysesByRepository_ReturnsOrderedPaginatedResults(t *testing.T) {
 	}
 
 	repo := NewPostgresRepository(db)
-	got, total, err := repo.GetAnalysesByRepository(context.Background(), "repo-1", 10, 0)
+	got, total, err := repo.GetAnalysesByRepository(context.Background(), "repo-1", "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("GetAnalysesByRepository: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestGetAnalysesByRepository_ReturnsOrderedPaginatedResults(t *testing.T) {
 		t.Fatalf("order = %s, %s; want a2, a1", got[0].ID, got[1].ID)
 	}
 
-	got, total, err = repo.GetAnalysesByRepository(context.Background(), "repo-1", 1, 1)
+	got, total, err = repo.GetAnalysesByRepository(context.Background(), "repo-1", "", "", 1, 1)
 	if err != nil {
 		t.Fatalf("GetAnalysesByRepository paginated: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestGetAnalysesByRepository_ReturnsOrderedPaginatedResults(t *testing.T) {
 		t.Fatalf("paginated result = %+v, want a1", got)
 	}
 
-	got, total, err = repo.GetAnalysesByRepository(context.Background(), "repo-empty", 10, 0)
+	got, total, err = repo.GetAnalysesByRepository(context.Background(), "repo-empty", "", "", 10, 0)
 	if err != nil {
 		t.Fatalf("GetAnalysesByRepository empty: %v", err)
 	}
@@ -83,6 +83,18 @@ func TestGetAnalysesByRepository_ReturnsOrderedPaginatedResults(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("empty len = %d, want 0", len(got))
+	}
+
+	// Filter by type — only code_review should come back for repo-1.
+	got, total, err = repo.GetAnalysesByRepository(context.Background(), "repo-1", string(models.AnalysisTypeCodeReview), "", 10, 0)
+	if err != nil {
+		t.Fatalf("GetAnalysesByRepository filtered by type: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("filtered total = %d, want 1", total)
+	}
+	if len(got) != 1 || got[0].ID != "a1" {
+		t.Fatalf("filtered result = %+v, want a1", got)
 	}
 }
 

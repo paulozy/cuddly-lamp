@@ -1083,6 +1083,18 @@ const docTemplate = `{
                         "in": "path"
                     },
                     {
+                        "type": "string",
+                        "description": "Filter by analysis type (code_review, security, architecture, dependency, search_synthesis, metrics)",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by analysis status (pending, processing, completed, failed, partial)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Result limit (default 20)",
                         "name": "limit",
@@ -1100,6 +1112,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
                     },
                     "401": {

@@ -176,9 +176,12 @@ func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
 // @Produce      json
 // @Security     BearerAuth
 // @Param        id       path      string false "Repository ID"
+// @Param        type     query     string false "Filter by analysis type (code_review, security, architecture, dependency, search_synthesis, metrics)"
+// @Param        status   query     string false "Filter by analysis status (pending, processing, completed, failed, partial)"
 // @Param        limit    query     int    false "Result limit (default 20)"
 // @Param        offset   query     int    false "Result offset (default 0)"
 // @Success      200      {object}  models.AnalysisListResponse
+// @Failure      400      {object}  models.ErrorResponse
 // @Failure      401      {object}  models.ErrorResponse
 // @Failure      404      {object}  models.ErrorResponse
 // @Router       /repositories/{id}/analyses [get]
@@ -210,6 +213,24 @@ func (h *AnalysisHandler) ListAnalyses(c *gin.Context) {
 		return
 	}
 
+	analysisType := strings.TrimSpace(c.Query("type"))
+	if analysisType != "" && !validAnalysisType(analysisType) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "type must be one of: code_review, security, architecture, dependency, search_synthesis, metrics",
+		})
+		return
+	}
+
+	status := strings.TrimSpace(c.Query("status"))
+	if status != "" && !validAnalysisStatus(status) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "status must be one of: pending, processing, completed, failed, partial",
+		})
+		return
+	}
+
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -219,7 +240,7 @@ func (h *AnalysisHandler) ListAnalyses(c *gin.Context) {
 		offset = 0
 	}
 
-	analyses, total, err := h.repo.GetAnalysesByRepository(c.Request.Context(), repoID, limit, offset)
+	analyses, total, err := h.repo.GetAnalysesByRepository(c.Request.Context(), repoID, analysisType, status, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "internal_error",
@@ -234,6 +255,24 @@ func (h *AnalysisHandler) ListAnalyses(c *gin.Context) {
 		Limit:    limit,
 		Offset:   offset,
 	})
+}
+
+func validAnalysisType(s string) bool {
+	switch models.AnalysisType(s) {
+	case models.AnalysisTypeCodeReview, models.AnalysisTypeSecurity, models.AnalysisTypeArchitecture,
+		models.AnalysisTypeDependency, models.AnalysisTypeSearchSynthesis, models.AnalysisTypeMetrics:
+		return true
+	}
+	return false
+}
+
+func validAnalysisStatus(s string) bool {
+	switch models.AnalysisStatus(s) {
+	case models.AnalysisStatusPending, models.AnalysisStatusProcessing, models.AnalysisStatusCompleted,
+		models.AnalysisStatusFailed, models.AnalysisStatusPartial:
+		return true
+	}
+	return false
 }
 
 // GenerateEmbeddings queues semantic index generation for a repository.
