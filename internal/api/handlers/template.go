@@ -284,6 +284,39 @@ func (h *TemplateHandler) PinTemplate(c *gin.Context) {
 	c.JSON(http.StatusOK, template)
 }
 
+// DeleteTemplate soft-deletes a template in a terminal state (completed or
+// failed). Templates still generating cannot be deleted via this endpoint
+// because the worker is still in-flight; cancellation is a separate feature.
+// @Summary      Delete code template
+// @Tags         templates
+// @Security     BearerAuth
+// @Param        id    path   string  true  "Template ID"
+// @Success      204
+// @Failure      401   {object}  models.ErrorResponse
+// @Failure      403   {object}  models.ErrorResponse
+// @Failure      404   {object}  models.ErrorResponse
+// @Failure      409   {object}  models.ErrorResponse  "Template is still being generated"
+// @Router       /templates/{id} [delete]
+func (h *TemplateHandler) DeleteTemplate(c *gin.Context) {
+	template, ok := h.fetchAccessibleTemplate(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	if template.Status != models.TemplateStatusCompleted && template.Status != models.TemplateStatusFailed {
+		c.JSON(http.StatusConflict, models.ErrorResponse{
+			Error:            "template_in_progress",
+			ErrorDescription: "não é possível excluir um template que ainda está sendo gerado",
+		})
+		return
+	}
+	if err := h.repo.DeleteCodeTemplate(c.Request.Context(), template.ID); err != nil {
+		utils.Error("template handler: delete failed", "template_id", template.ID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "internal_error", ErrorDescription: "failed to delete template"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 func (h *TemplateHandler) fetchAccessibleTemplate(c *gin.Context, templateID string) (*models.CodeTemplate, bool) {
 	if templateID == "" {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "invalid_request", ErrorDescription: "template id is required"})

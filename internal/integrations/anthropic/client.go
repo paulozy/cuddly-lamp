@@ -30,6 +30,13 @@ const (
 // the caller may want to log differently or shrink the prompt.
 var errClaudeTruncated = errors.New("anthropic truncated output at MaxTokens")
 
+// ErrTemplateTruncated wraps a final truncation failure from the template
+// generator after the retry budget is exhausted. Exported so the worker can
+// surface a user-friendly message via errors.Is. Distinct from
+// errClaudeTruncated, which is the per-attempt signal used internally by the
+// retry loop.
+var ErrTemplateTruncated = errors.New("template generation truncated by model output limit")
+
 // Client implements ai.Analyzer using the Anthropic SDK
 type Client struct {
 	client *anthropic.Client
