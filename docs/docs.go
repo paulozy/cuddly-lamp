@@ -2355,6 +2355,55 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "templates"
+                ],
+                "summary": "Delete code template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Template is still being generated",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
             }
         },
         "/templates/{id}/pin": {
@@ -3350,6 +3399,28 @@ const docTemplate = `{
                 "DocProgressStagePersisting"
             ]
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.EmbeddingsState": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "description": "chunks indexed so far",
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "indexed_at": {
+                    "type": "string"
+                },
+                "provider_configured": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "description": "idle|pending|indexing|indexed|stale|failed",
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -4001,6 +4072,19 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "embeddings_count": {
+                    "type": "integer"
+                },
+                "embeddings_error": {
+                    "type": "string"
+                },
+                "embeddings_indexed_at": {
+                    "type": "string"
+                },
+                "embeddings_status": {
+                    "description": "Embeddings pipeline state — see migration 021. Lifecycle:\nidle → pending → indexing → indexed → stale (after push) → re-indexing.\n` + "`" + `EmbeddingsCount` + "`" + ` is updated incrementally by the worker.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -4223,6 +4307,14 @@ const docTemplate = `{
                 },
                 "description": {
                     "type": "string"
+                },
+                "embeddings_state": {
+                    "description": "Embeddings state — same shape as ` + "`" + `EmbeddingsState` + "`" + ` in repository_dto.go\nbut inlined as flat fields so the frontend doesn't need a nested object.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.EmbeddingsState"
+                        }
+                    ]
                 },
                 "id": {
                     "type": "string"

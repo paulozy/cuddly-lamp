@@ -932,7 +932,9 @@ func (pr *PostgresRepository) CreateCodeTemplate(ctx context.Context, template *
 
 func (pr *PostgresRepository) GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error) {
 	var template models.CodeTemplate
-	if err := pr.db.WithContext(ctx).First(&template, "id = ?", id).Error; err != nil {
+	if err := pr.db.WithContext(ctx).
+		Where("deleted_at IS NULL").
+		First(&template, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -945,8 +947,22 @@ func (pr *PostgresRepository) UpdateCodeTemplate(ctx context.Context, template *
 	if !template.IsValid() {
 		return errors.New("invalid code template data")
 	}
-	if err := pr.db.WithContext(ctx).Save(template).Error; err != nil {
+	// Guard against resurrecting a soft-deleted row: a late worker update or a
+	// stale pin request must not write back over deleted_at.
+	if err := pr.db.WithContext(ctx).Where("deleted_at IS NULL").Save(template).Error; err != nil {
 		return fmt.Errorf("update code template: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) DeleteCodeTemplate(ctx context.Context, id string) error {
+	now := time.Now().UTC()
+	result := pr.db.WithContext(ctx).
+		Model(&models.CodeTemplate{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Update("deleted_at", now)
+	if result.Error != nil {
+		return fmt.Errorf("delete code template: %w", result.Error)
 	}
 	return nil
 }
@@ -955,7 +971,7 @@ func (pr *PostgresRepository) ListCodeTemplates(ctx context.Context, filter stor
 	var templates []models.CodeTemplate
 	var total int64
 
-	query := pr.db.WithContext(ctx).Model(&models.CodeTemplate{})
+	query := pr.db.WithContext(ctx).Model(&models.CodeTemplate{}).Where("deleted_at IS NULL")
 	if filter.OrganizationID != "" {
 		query = query.Where("organization_id = ?", filter.OrganizationID)
 	}
@@ -1268,6 +1284,9 @@ func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, organizati
 	if organizationID != "" {
 		query += " AND r.organization_id = ?"
 	}
+	// Intentionally not filtering deleted_at IS NULL: soft-deleted templates
+	// still consumed tokens against the org budget. Excluding them would let
+	// users reset their quota by hard-deleting via the UI.
 	query += `
 			UNION ALL
 			SELECT ct.tokens_used

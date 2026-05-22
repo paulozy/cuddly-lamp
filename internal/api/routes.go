@@ -131,6 +131,7 @@ func setupAPIRoutes(
 		protected.GET("/templates", templateHandler.ListTemplates)
 		protected.GET("/templates/:id", templateHandler.GetTemplate)
 		protected.PATCH("/templates/:id/pin", templateHandler.PinTemplate)
+		protected.DELETE("/templates/:id", templateHandler.DeleteTemplate)
 
 		// Coverage upload tokens — managed by repository owners
 		protected.POST("/repositories/:id/coverage/tokens", coverageHandler.CreateCoverageToken)

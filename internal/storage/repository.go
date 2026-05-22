@@ -83,6 +83,7 @@ type Repository interface {
 	GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error)
 	UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
 	ListCodeTemplates(ctx context.Context, filter CodeTemplateFilter) ([]models.CodeTemplate, int64, error)
+	DeleteCodeTemplate(ctx context.Context, id string) error
 
 	// Package Dependency operations
 	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
