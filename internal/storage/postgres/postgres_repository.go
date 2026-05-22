@@ -821,11 +821,17 @@ func (pr *PostgresRepository) UpdateCodeAnalysis(ctx context.Context, analysis *
 	return nil
 }
 
-func (pr *PostgresRepository) GetAnalysesByRepository(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
+func (pr *PostgresRepository) GetAnalysesByRepository(ctx context.Context, repoID string, analysisType, status string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
 	var analyses []models.CodeAnalysis
 	var total int64
 
 	query := pr.db.WithContext(ctx).Where("repository_id = ?", repoID)
+	if analysisType != "" {
+		query = query.Where("type = ?", analysisType)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
 
 	if err := query.Model(&models.CodeAnalysis{}).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count analyses: %w", err)
@@ -843,7 +849,7 @@ func (pr *PostgresRepository) GetAnalysesByRepository(ctx context.Context, repoI
 }
 
 func (pr *PostgresRepository) ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
-	return pr.GetAnalysesByRepository(ctx, repoID, limit, offset)
+	return pr.GetAnalysesByRepository(ctx, repoID, "", "", limit, offset)
 }
 
 func (pr *PostgresRepository) GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {

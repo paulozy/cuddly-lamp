@@ -1083,6 +1083,18 @@ const docTemplate = `{
                         "in": "path"
                     },
                     {
+                        "type": "string",
+                        "description": "Filter by analysis type (code_review, security, architecture, dependency, search_synthesis, metrics)",
+                        "name": "type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by analysis status (pending, processing, completed, failed, partial)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Result limit (default 20)",
                         "name": "limit",
@@ -1100,6 +1112,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AnalysisListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
                     },
                     "401": {
@@ -3350,6 +3368,28 @@ const docTemplate = `{
                 "DocProgressStagePersisting"
             ]
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.EmbeddingsState": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "description": "chunks indexed so far",
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "indexed_at": {
+                    "type": "string"
+                },
+                "provider_configured": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "description": "idle|pending|indexing|indexed|stale|failed",
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -4001,6 +4041,19 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "embeddings_count": {
+                    "type": "integer"
+                },
+                "embeddings_error": {
+                    "type": "string"
+                },
+                "embeddings_indexed_at": {
+                    "type": "string"
+                },
+                "embeddings_status": {
+                    "description": "Embeddings pipeline state — see migration 021. Lifecycle:\nidle → pending → indexing → indexed → stale (after push) → re-indexing.\n` + "`" + `EmbeddingsCount` + "`" + ` is updated incrementally by the worker.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -4223,6 +4276,14 @@ const docTemplate = `{
                 },
                 "description": {
                     "type": "string"
+                },
+                "embeddings_state": {
+                    "description": "Embeddings state — same shape as ` + "`" + `EmbeddingsState` + "`" + ` in repository_dto.go\nbut inlined as flat fields so the frontend doesn't need a nested object.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.EmbeddingsState"
+                        }
+                    ]
                 },
                 "id": {
                     "type": "string"

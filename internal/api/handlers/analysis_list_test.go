@@ -14,20 +14,24 @@ import (
 
 type analysisListRepo struct {
 	storage.Repository
-	repo       *models.Repository
-	analyses   []models.CodeAnalysis
-	total      int64
-	lastLimit  int
-	lastOffset int
+	repo         *models.Repository
+	analyses     []models.CodeAnalysis
+	total        int64
+	lastLimit    int
+	lastOffset   int
+	lastType     string
+	lastStatus   string
 }
 
 func (m *analysisListRepo) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
 	return m.repo, nil
 }
 
-func (m *analysisListRepo) GetAnalysesByRepository(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
+func (m *analysisListRepo) GetAnalysesByRepository(ctx context.Context, repoID string, analysisType, status string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
 	m.lastLimit = limit
 	m.lastOffset = offset
+	m.lastType = analysisType
+	m.lastStatus = status
 	return m.analyses, m.total, nil
 }
 
@@ -62,6 +66,82 @@ func TestAnalysisHandler_ListAnalyses_ReturnsStoredAnalyses(t *testing.T) {
 	}
 	if want := `"id":"analysis-1"`; !containsString(w.Body.String(), want) {
 		t.Fatalf("body = %s, want %s", w.Body.String(), want)
+	}
+}
+
+func TestAnalysisHandler_ListAnalyses_FiltersByTypeAndStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &analysisListRepo{
+		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-1"},
+		analyses: []models.CodeAnalysis{
+			{ID: "analysis-1", RepositoryID: "repo-1", Type: models.AnalysisTypeCodeReview, Status: models.AnalysisStatusCompleted},
+		},
+		total: 1,
+	}
+	handler := NewAnalysisHandler(repo, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/repositories/repo-1/analyses?type=code_review&status=completed&limit=5", nil)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: "repo-1"}}
+
+	handler.ListAnalyses(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if repo.lastType != "code_review" {
+		t.Fatalf("lastType = %q, want code_review", repo.lastType)
+	}
+	if repo.lastStatus != "completed" {
+		t.Fatalf("lastStatus = %q, want completed", repo.lastStatus)
+	}
+	if repo.lastLimit != 5 {
+		t.Fatalf("lastLimit = %d, want 5", repo.lastLimit)
+	}
+}
+
+func TestAnalysisHandler_ListAnalyses_InvalidType_Returns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &analysisListRepo{
+		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-1"},
+	}
+	handler := NewAnalysisHandler(repo, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/repositories/repo-1/analyses?type=bogus", nil)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: "repo-1"}}
+
+	handler.ListAnalyses(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if !containsString(w.Body.String(), "type must be one of") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestAnalysisHandler_ListAnalyses_InvalidStatus_Returns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &analysisListRepo{
+		repo: &models.Repository{ID: "repo-1", OrganizationID: "org-1"},
+	}
+	handler := NewAnalysisHandler(repo, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/repositories/repo-1/analyses?status=bogus", nil)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: "repo-1"}}
+
+	handler.ListAnalyses(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 }
 
