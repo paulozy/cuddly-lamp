@@ -32,8 +32,8 @@ type CodeTemplate struct {
 	Summary         string                                 `gorm:"type:text" json:"summary,omitempty"`
 	Files           datatypes.JSONType[[]ai.GeneratedFile] `gorm:"type:jsonb" json:"files"`
 	AIModel         string                                 `gorm:"type:varchar(100)" json:"ai_model,omitempty"`
-	TokensUsed      int                                    `json:"tokens_used,omitempty"`
-	ProcessingMs    int64                                  `json:"processing_ms,omitempty"`
+	TokensUsed      int                                    `json:"tokens_used"`
+	ProcessingMs    int64                                  `json:"processing_ms"`
 	ErrorMessage    string                                 `gorm:"type:text" json:"error_message,omitempty"`
 	IsPinned        bool                                   `gorm:"default:false;index" json:"is_pinned"`
 	PinnedByUserID  *string                                `gorm:"type:uuid" json:"pinned_by_user_id,omitempty"`
