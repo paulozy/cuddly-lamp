@@ -51,7 +51,7 @@ func (w *EmbeddingWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		w.failEmbeddings(ctx, repository, "provider not configured for organization")
 		return fmt.Errorf("embedding worker: provider not configured for organization")
 	}
-	provider := embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, cfg.EmbeddingsDimensions)
+	provider := embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, embeddings.DefaultDimension)
 
 	branch := payload.Branch
 	if branch == "" {

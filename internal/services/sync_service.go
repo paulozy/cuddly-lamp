@@ -190,7 +190,9 @@ func (s *SyncService) githubClientForRepository(ctx context.Context, repo *model
 			return nil, "", err
 		}
 		if cfg != nil {
-			return github.NewClient(cfg.GithubToken), cfg.WebhookBaseURL, nil
+			// Webhook base URL is a deployment-level fact (the public URL GitHub
+			// must reach), so it comes solely from the server env, not per-org config.
+			return github.NewClient(cfg.GithubToken), s.webhookBaseURL, nil
 		}
 	}
 	if s.github != nil {

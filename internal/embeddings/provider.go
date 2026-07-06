@@ -7,6 +7,12 @@ const (
 
 	InputTypeDocument = "document"
 	InputTypeQuery    = "query"
+
+	// DefaultDimension is the fixed embedding dimension used across the system.
+	// It is pinned to the `code_embeddings.embedding` pgvector column type
+	// (VECTOR(1024), migration 007) — changing it would break inserts, so it is
+	// not configurable per organization.
+	DefaultDimension = 1024
 )
 
 type Provider interface {

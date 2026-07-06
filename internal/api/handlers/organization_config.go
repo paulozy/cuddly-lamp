@@ -158,9 +158,6 @@ func applyOrganizationConfigUpdate(cfg *models.OrganizationConfig, req models.Up
 	if req.GitHubPRReviewEnabled != nil {
 		cfg.GitHubPRReviewEnabled = *req.GitHubPRReviewEnabled
 	}
-	if req.WebhookBaseURL != nil {
-		cfg.WebhookBaseURL = *req.WebhookBaseURL
-	}
 	if req.EmbeddingsProvider != nil {
 		cfg.EmbeddingsProvider = *req.EmbeddingsProvider
 	}
@@ -169,9 +166,6 @@ func applyOrganizationConfigUpdate(cfg *models.OrganizationConfig, req models.Up
 	}
 	if req.EmbeddingsModel != nil {
 		cfg.EmbeddingsModel = *req.EmbeddingsModel
-	}
-	if req.EmbeddingsDimensions != nil {
-		cfg.EmbeddingsDimensions = *req.EmbeddingsDimensions
 	}
 	if req.GitHubClientID != nil {
 		cfg.GitHubClientID = *req.GitHubClientID
