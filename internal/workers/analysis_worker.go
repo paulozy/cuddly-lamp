@@ -11,6 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/coverage"
+	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
 	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -281,6 +282,110 @@ func (w *AnalysisWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	return nil
 }
 
+// RAG tuning for PR review context injection.
+const (
+	ragMaxFiles    = 8    // changed files to build queries from
+	ragPerFile     = 3    // semantic matches per changed file
+	ragGlobalCap   = 12   // total related snippets injected into the prompt
+	ragMinScore    = 0.5  // cosine-similarity floor
+	ragQueryChars  = 600  // cap on each per-file query text
+	ragAddedBudget = 2000 // cap on added-lines extracted per file for the query
+)
+
+// collectRelatedContext runs semantic search for each changed file and returns
+// deduplicated repository snippets to give the reviewer surrounding context
+// (RAG). It degrades gracefully to nil when the org has no embeddings provider
+// configured or the repo isn't indexed yet.
+func (w *AnalysisWorker) collectRelatedContext(ctx context.Context, repository *models.Repository, changed []ai.ChangedFile) []ai.RelatedSnippet {
+	if len(changed) == 0 {
+		return nil
+	}
+	cfg, err := w.repo.GetOrganizationConfig(ctx, repository.OrganizationID)
+	if err != nil || cfg == nil || cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
+		return nil
+	}
+	provider := embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, embeddings.DefaultDimension)
+
+	files := changed
+	if len(files) > ragMaxFiles {
+		files = files[:ragMaxFiles]
+	}
+	queries := make([]string, 0, len(files))
+	for _, f := range files {
+		q := f.Path + "\n" + addedLines(f.Patch)
+		if len(q) > ragQueryChars {
+			q = q[:ragQueryChars]
+		}
+		queries = append(queries, q)
+	}
+
+	res, err := provider.Embed(ctx, queries, embeddings.InputTypeQuery)
+	if err != nil || res == nil || len(res.Embeddings) != len(files) {
+		utils.Warn("analysis worker: RAG embed failed", "repo_id", repository.ID, "error", err)
+		return nil
+	}
+
+	changedPaths := make(map[string]struct{}, len(changed))
+	for _, f := range changed {
+		changedPaths[f.Path] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	var snippets []ai.RelatedSnippet
+	for _, vec := range res.Embeddings {
+		matches, err := w.repo.SearchEmbeddings(ctx, storage.EmbeddingSearchFilter{
+			RepositoryID: repository.ID,
+			Vector:       vec,
+			Provider:     provider.Provider(),
+			Model:        provider.Model(),
+			Dimension:    provider.Dimension(),
+			Limit:        ragPerFile,
+			MinScore:     ragMinScore,
+		})
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			// Never feed the reviewer the very files it is already reviewing.
+			if _, isChanged := changedPaths[m.FilePath]; isChanged {
+				continue
+			}
+			key := fmt.Sprintf("%s:%d-%d", m.FilePath, m.StartLine, m.EndLine)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			snippets = append(snippets, ai.RelatedSnippet{
+				FilePath:  m.FilePath,
+				Content:   m.Content,
+				StartLine: m.StartLine,
+				EndLine:   m.EndLine,
+			})
+			if len(snippets) >= ragGlobalCap {
+				return snippets
+			}
+		}
+	}
+	return snippets
+}
+
+// addedLines extracts the added lines (`+`, excluding the `+++` file header)
+// from a unified diff, capped at ragAddedBudget bytes — enough signal to embed
+// a meaningful semantic query without sending the whole patch.
+func addedLines(patch string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			b.WriteString(strings.TrimPrefix(line, "+"))
+			b.WriteByte('\n')
+		}
+		if b.Len() > ragAddedBudget {
+			break
+		}
+	}
+	return b.String()
+}
+
 func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, payload tasks.AnalyzeRepoPayload, owner, repoName string, repoMetrics *ai.CodeMetrics) (*ai.AnalysisRequest, []github.PRFile, error) {
 	analysisType := ai.AnalysisType(payload.Type)
 	if analysisType == "" {
@@ -363,6 +468,7 @@ func (w *AnalysisWorker) buildAnalysisRequest(ctx context.Context, ghClient gith
 		}
 		changed := ai.FilterAndMapPRFiles(files)
 		req.ChangedFiles, req.TruncatedFiles = ai.BudgetChangedFiles(changed)
+		req.RelatedContext = w.collectRelatedContext(ctx, repository, req.ChangedFiles)
 
 		return req, files, nil
 	}

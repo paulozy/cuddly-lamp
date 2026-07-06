@@ -207,6 +207,13 @@ func (c *Client) buildPrompt(req *ai.AnalysisRequest) string {
 				sb.WriteString(fmt.Sprintf("- %s\n", path))
 			}
 		}
+
+		if len(req.RelatedContext) > 0 {
+			sb.WriteString("\nRELATED CODE FROM THE REPOSITORY (context only — NOT part of the diff; do NOT report issues on these lines):\n")
+			for _, s := range req.RelatedContext {
+				sb.WriteString(fmt.Sprintf("\n<context file=\"%s\" lines=\"%d-%d\">\n%s\n</context>\n", html.EscapeString(s.FilePath), s.StartLine, s.EndLine, s.Content))
+			}
+		}
 	}
 
 	// For commit-based analysis

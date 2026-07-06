@@ -27,6 +27,15 @@ type ChangedFile struct {
 	Status string // "added", "modified", "removed"
 }
 
+// RelatedSnippet is a chunk of existing repository code pulled in via semantic
+// search to give the reviewer surrounding context for the changed files.
+type RelatedSnippet struct {
+	FilePath  string
+	Content   string
+	StartLine int
+	EndLine   int
+}
+
 // AnalysisRequest contains all info needed for AI to analyze code
 type AnalysisRequest struct {
 	// Repository context
@@ -51,6 +60,11 @@ type AnalysisRequest struct {
 	PRAuthor       string
 	ChangedFiles   []ChangedFile
 	TruncatedFiles []string
+
+	// RelatedContext holds repository snippets semantically related to the
+	// changed files (RAG). They are context only — the reviewer must not report
+	// issues on them. Empty when the repo is not indexed.
+	RelatedContext []RelatedSnippet
 
 	// Computed metrics (populated by local analysis)
 	Metrics *CodeMetrics
@@ -161,9 +175,10 @@ type AnalysisResult struct {
 
 // PRReviewComment represents a single comment on a specific line
 type PRReviewComment struct {
-	Path     string // file path in the PR
-	Position int    // position in the diff (not absolute line number)
-	Body     string // comment content
+	Path string // file path in the PR
+	Line int    // line number in the file (post-image)
+	Side string // "RIGHT" (added/context) or "LEFT" (deleted)
+	Body string // comment content
 }
 
 // PRReviewRequest represents a GitHub PR review to be posted
