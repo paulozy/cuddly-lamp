@@ -7,7 +7,6 @@ const (
 	TypeAnalyzeRepo        = "repo:analyze"
 	TypeProcessWebhook     = "webhook:process"
 	TypeGenerateEmbeddings = "embeddings:generate"
-	TypeScanDependencies   = "dependency:scan"
 	TypeGenerateTemplate   = "template:generate"
 	TypeGenerateDocs       = "docs:generate"
 )
@@ -34,14 +33,6 @@ type GenerateEmbeddingsPayload struct {
 	AnalysisID   string `json:"analysis_id,omitempty"`
 	Branch       string `json:"branch,omitempty"`
 	CommitSHA    string `json:"commit_sha,omitempty"`
-}
-
-type ScanDependenciesPayload struct {
-	RepositoryID  string `json:"repository_id"`
-	Branch        string `json:"branch,omitempty"`
-	CommitSHA     string `json:"commit_sha,omitempty"`
-	PullRequestID int    `json:"pull_request_id,omitempty"`
-	TriggeredBy   string `json:"triggered_by"`
 }
 
 type GenerateTemplatePayload struct {

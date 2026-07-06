@@ -32,13 +32,12 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
 	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, params.Cache)
-	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
 	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler, coverageHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, templateHandler, docsHandler, orgConfigHandler, coverageHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -56,7 +55,6 @@ func setupAPIRoutes(
 	relationshipHandler *handlers.RepositoryRelationshipHandler,
 	webhookHandler *handlers.WebhookHandler,
 	analysisHandler *handlers.AnalysisHandler,
-	dependencyHandler *handlers.DependencyHandler,
 	templateHandler *handlers.TemplateHandler,
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
@@ -107,7 +105,6 @@ func setupAPIRoutes(
 		protected.DELETE("/repository-relationships/:id", relationshipHandler.DeleteRelationship)
 
 		// Analysis routes
-		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)
 		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
 		protected.GET("/repositories/:id/pull-requests", analysisHandler.ListPullRequests)
 		protected.GET("/repositories/:id/pull-requests/:pr_number", analysisHandler.GetPullRequest)
@@ -116,8 +113,6 @@ func setupAPIRoutes(
 		protected.POST("/repositories/:id/pull-requests/:pr_number/reviews", analysisHandler.CreatePullRequestReview)
 		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
 		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
-		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)
-		protected.GET("/repositories/:id/dependencies", dependencyHandler.ListDependencies)
 		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)

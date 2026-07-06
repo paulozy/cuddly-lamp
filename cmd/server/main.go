@@ -115,7 +115,6 @@ func main() {
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
 		embeddingWorker := workers.NewEmbeddingWorker(pgRepo)
 		analysisWorker := workers.NewAnalysisWorker(pgRepo)
-		dependencyWorker := workers.NewDependencyWorker(pgRepo, nil, ghClient)
 		templateWorker := workers.NewTemplateWorker(pgRepo)
 		docsWorker := workers.NewDocsWorker(pgRepo)
 
@@ -124,7 +123,6 @@ func main() {
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
 		worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
 		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
-		worker.Register(tasks.TypeScanDependencies, dependencyWorker.Handle)
 		worker.Register(tasks.TypeGenerateTemplate, templateWorker.Handle)
 		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
 		worker.Register(tasks.TypeGenerateOrgDocs, docsWorker.HandleOrgDocs)

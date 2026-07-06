@@ -57,119 +57,6 @@ func NewAnalysisHandler(
 	}
 }
 
-// AnalyzeRepository triggers code analysis for a repository
-// @Summary      Analyze repository
-// @Tags         analysis
-// @Accept       json
-// @Produce      json
-// @Security     BearerAuth
-// @Param        id       path      string                          true   "Repository ID"
-// @Param        body     body      models.AnalyzeRepositoryRequest false  "Analysis options"
-// @Success      202      {object}  models.JobResponse
-// @Failure      400      {object}  models.ErrorResponse
-// @Failure      401      {object}  models.ErrorResponse
-// @Failure      404      {object}  models.ErrorResponse
-// @Router       /repositories/{id}/analyze [post]
-func (h *AnalysisHandler) AnalyzeRepository(c *gin.Context) {
-	repoID := c.Param("id")
-	if repoID == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_request",
-			ErrorDescription: "repository id is required",
-		})
-		return
-	}
-
-	repo, ok := h.fetchAccessibleRepository(c, repoID)
-	if !ok {
-		return
-	}
-
-	// Parse optional request body
-	var req models.AnalyzeRepositoryRequest
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{
-				Error:            "invalid_request",
-				ErrorDescription: err.Error(),
-			})
-			return
-		}
-	}
-
-	// Set defaults
-	if req.Type == "" {
-		req.Type = "code_review"
-	}
-
-	// Validate analysis type
-	allowedTypes := map[string]bool{
-		"code_review": true, "security": true, "architecture": true,
-	}
-	if !allowedTypes[req.Type] {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_analysis_type",
-			ErrorDescription: "type must be one of: code_review, security, architecture",
-		})
-		return
-	}
-
-	// Check token budget
-	cfg, err := h.repo.GetOrganizationConfig(c.Request.Context(), repo.OrganizationID)
-	if err != nil || cfg == nil || cfg.AnthropicAPIKey == "" {
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "analysis_unavailable",
-			ErrorDescription: "anthropic api key is not configured for this organization",
-		})
-		return
-	}
-	used, err := h.repo.SumTokensUsedSince(c.Request.Context(), repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
-	if err == nil && used >= int64(cfg.AnthropicTokensPerHour) {
-		c.JSON(http.StatusTooManyRequests, models.ErrorResponse{
-			Error:            "rate_limit_exceeded",
-			ErrorDescription: fmt.Sprintf("token budget exhausted (%d/%d tokens used in last hour)", used, cfg.AnthropicTokensPerHour),
-		})
-		return
-	}
-
-	// Enqueue analysis job with deduplication: manual triggers get a deterministic TaskID
-	payload := tasks.AnalyzeRepoPayload{
-		RepositoryID: repoID,
-		Branch:       req.Branch,
-		CommitSHA:    req.CommitSHA,
-		Type:         req.Type,
-		TriggeredBy:  "user",
-	}
-
-	// Use TaskID to prevent duplicate manual triggers (one per repo at a time)
-	taskID := fmt.Sprintf("analyze:manual:%s", repoID)
-	err = h.enqueuer.Enqueue(c.Request.Context(), tasks.TypeAnalyzeRepo, payload,
-		asynq.TaskID(taskID),
-		asynq.Retention(10*time.Minute), // keep record for 10m after completion so ID stays locked
-	)
-	if err != nil {
-		if errors.Is(err, asynq.ErrTaskIDConflict) {
-			c.JSON(http.StatusConflict, models.ErrorResponse{
-				Error:            "analysis_in_progress",
-				ErrorDescription: "an analysis for this repository is already queued or running",
-			})
-			return
-		}
-		utils.Error("analysis handler: enqueue failed", "repo_id", repoID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error:            "queue_error",
-			ErrorDescription: "failed to enqueue analysis job",
-		})
-		return
-	}
-
-	c.JSON(http.StatusAccepted, models.JobResponse{
-		Status: "queued",
-		Type:   tasks.TypeAnalyzeRepo,
-		Target: repoID,
-	})
-}
-
 // ListAnalyses retrieves all analyses for a repository
 // @Summary      List repository analyses
 // @Tags         analysis
@@ -592,5 +479,5 @@ func (h *AnalysisHandler) embeddingProviderForOrganization(ctx context.Context, 
 	if cfg == nil || cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
 		return nil, fmt.Errorf("embedding provider is not configured")
 	}
-	return embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, cfg.EmbeddingsDimensions), nil
+	return embeddings.NewVoyageClient(cfg.VoyageAPIKey, cfg.EmbeddingsModel, embeddings.DefaultDimension), nil
 }

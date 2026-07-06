@@ -2,13 +2,6 @@ package models
 
 import "time"
 
-// AnalyzeRepositoryRequest represents a request to analyze a repository
-type AnalyzeRepositoryRequest struct {
-	Type      string `json:"type,omitempty"`       // code_review, security, architecture
-	Branch    string `json:"branch,omitempty"`     // branch to analyze (default: main/master)
-	CommitSHA string `json:"commit_sha,omitempty"` // specific commit to analyze
-}
-
 // JobResponse represents a queued job
 type JobResponse struct {
 	Status string `json:"status"` // queued, processing, completed, failed
