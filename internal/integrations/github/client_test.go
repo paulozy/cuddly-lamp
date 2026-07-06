@@ -183,15 +183,15 @@ func TestClient_CreatePullRequestReview(t *testing.T) {
 				if body.Body != "review body" || body.Event != tt.event {
 					t.Fatalf("body = %+v, want review body/%s", body, tt.event)
 				}
-				if len(body.Comments) != 1 || body.Comments[0].Path != "main.go" || body.Comments[0].Position != 2 {
-					t.Fatalf("comments = %+v, want main.go position 2", body.Comments)
+				if len(body.Comments) != 1 || body.Comments[0].Path != "main.go" || body.Comments[0].Line != 2 || body.Comments[0].Side != "RIGHT" {
+					t.Fatalf("comments = %+v, want main.go line 2 side RIGHT", body.Comments)
 				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{"id": 123})
 			}))
 			defer srv.Close()
 
-			id, err := newTestClient(srv).CreatePullRequestReview(context.Background(), "owner", "repo", 42, "review body", tt.event, []ReviewCommentInput{{Path: "main.go", Position: 2, Body: "fix"}})
+			id, err := newTestClient(srv).CreatePullRequestReview(context.Background(), "owner", "repo", 42, "review body", tt.event, []ReviewCommentInput{{Path: "main.go", Line: 2, Side: "RIGHT", Body: "fix"}})
 			if err != nil {
 				t.Fatalf("CreatePullRequestReview returned error: %v", err)
 			}

@@ -257,6 +257,24 @@ func (h *AnalysisHandler) CreatePullRequestReview(c *gin.Context) {
 		return
 	}
 
+	// Posting a review back to GitHub is gated per organization. The in-IDP
+	// review still works without this; only publishing to GitHub is blocked.
+	orgID, orgErr := utils.GetOrganizationIDFromContext(c)
+	if orgErr != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid authentication",
+		})
+		return
+	}
+	if cfg, cfgErr := h.repo.GetOrganizationConfig(c.Request.Context(), orgID); cfgErr != nil || cfg == nil || !cfg.GitHubPRReviewEnabled {
+		c.JSON(http.StatusForbidden, models.ErrorResponse{
+			Error:            "pr_review_posting_disabled",
+			ErrorDescription: "publicação de review no GitHub está desativada; habilite a revisão de PR nas configurações da organização",
+		})
+		return
+	}
+
 	var req models.CreatePullRequestReviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
@@ -435,17 +453,22 @@ func normalizePullRequestReviewRequest(c *gin.Context, req models.CreatePullRequ
 	for _, comment := range req.Comments {
 		path := strings.TrimSpace(comment.Path)
 		commentBody := strings.TrimSpace(comment.Body)
-		if path == "" || commentBody == "" || comment.Position <= 0 {
+		if path == "" || commentBody == "" || comment.Line <= 0 {
 			c.JSON(http.StatusUnprocessableEntity, models.ErrorResponse{
 				Error:            "invalid_review",
-				ErrorDescription: "inline comments require path, position > 0, and body",
+				ErrorDescription: "inline comments require path, line > 0, and body",
 			})
 			return "", "", nil, false
 		}
+		side := strings.ToUpper(strings.TrimSpace(comment.Side))
+		if side != "LEFT" && side != "RIGHT" {
+			side = "RIGHT"
+		}
 		comments = append(comments, github.ReviewCommentInput{
-			Path:     path,
-			Position: comment.Position,
-			Body:     commentBody,
+			Path: path,
+			Line: comment.Line,
+			Side: side,
+			Body: commentBody,
 		})
 	}
 

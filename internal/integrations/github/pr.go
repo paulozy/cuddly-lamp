@@ -18,11 +18,16 @@ type PRFile struct {
 	Patch     string `json:"patch"` // Unified diff
 }
 
-// ReviewCommentInput represents a comment to add during review
+// ReviewCommentInput represents a comment to add during review.
+//
+// Uses the current GitHub reviews API fields `line` + `side` (post-image line
+// on the "RIGHT" for added/context lines). The legacy `position` field is
+// deprecated and intentionally not used.
 type ReviewCommentInput struct {
-	Path     string `json:"path"`
-	Position int    `json:"position"`
-	Body     string `json:"body"`
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Side string `json:"side"`
+	Body string `json:"body"`
 }
 
 // GetPullRequest fetches details about a specific PR

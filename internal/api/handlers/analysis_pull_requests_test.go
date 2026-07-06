@@ -122,7 +122,7 @@ func TestAnalysisHandler_ListPullRequests_AttachesLatestAnalysis(t *testing.T) {
 	prID := 42
 	repo := &pullRequestHandlerRepo{
 		repo:   &models.Repository{ID: "repo-1", OrganizationID: "org-1", Type: models.RepositoryTypeGitHub, URL: "https://github.com/owner/repo"},
-		config: &models.OrganizationConfig{GithubToken: "github-token"},
+		config: &models.OrganizationConfig{GithubToken: "github-token", GitHubPRReviewEnabled: true},
 		latestByPR: map[int]models.CodeAnalysis{
 			42: {
 				ID:            "analysis-1",
@@ -165,7 +165,7 @@ func TestAnalysisHandler_GetPullRequest_ReturnsDetailFilesAndAnalysis(t *testing
 	prID := 42
 	repo := &pullRequestHandlerRepo{
 		repo:   &models.Repository{ID: "repo-1", OrganizationID: "org-1", Type: models.RepositoryTypeGitHub, URL: "https://github.com/owner/repo"},
-		config: &models.OrganizationConfig{GithubToken: "github-token"},
+		config: &models.OrganizationConfig{GithubToken: "github-token", GitHubPRReviewEnabled: true},
 		latest: &models.CodeAnalysis{
 			ID:            "analysis-1",
 			RepositoryID:  "repo-1",
@@ -233,7 +233,7 @@ func TestAnalysisHandler_CreatePullRequestReview_ApproveAndRequestChangesValidat
 	gin.SetMode(gin.TestMode)
 	repo := &pullRequestHandlerRepo{
 		repo:   &models.Repository{ID: "repo-1", OrganizationID: "org-1", Type: models.RepositoryTypeGitHub, URL: "https://github.com/owner/repo"},
-		config: &models.OrganizationConfig{GithubToken: "github-token"},
+		config: &models.OrganizationConfig{GithubToken: "github-token", GitHubPRReviewEnabled: true},
 	}
 	gh := &pullRequestMockGitHub{reviewID: 99}
 	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
@@ -259,13 +259,13 @@ func TestAnalysisHandler_CreatePullRequestReview_CommentWithInlineComments(t *te
 	gin.SetMode(gin.TestMode)
 	repo := &pullRequestHandlerRepo{
 		repo:   &models.Repository{ID: "repo-1", OrganizationID: "org-1", Type: models.RepositoryTypeGitHub, URL: "https://github.com/owner/repo"},
-		config: &models.OrganizationConfig{GithubToken: "github-token"},
+		config: &models.OrganizationConfig{GithubToken: "github-token", GitHubPRReviewEnabled: true},
 	}
 	gh := &pullRequestMockGitHub{reviewID: 100}
 	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
 	handler.githubFactory = func(string) github.ClientInterface { return gh }
 
-	body := `{"event":"COMMENT","body":"review body","comments":[{"path":"main.go","position":3,"body":"fix this"}]}`
+	body := `{"event":"COMMENT","body":"review body","comments":[{"path":"main.go","line":3,"side":"RIGHT","body":"fix this"}]}`
 	c, w := newPullRequestHandlerTestContext(http.MethodPost, "/repositories/repo-1/pull-requests/42/reviews", body)
 	handler.CreatePullRequestReview(c)
 
@@ -275,7 +275,27 @@ func TestAnalysisHandler_CreatePullRequestReview_CommentWithInlineComments(t *te
 	if gh.reviewEvent != "COMMENT" || gh.reviewBody != "review body" {
 		t.Fatalf("review = %q %q, want COMMENT review body", gh.reviewEvent, gh.reviewBody)
 	}
-	if len(gh.comments) != 1 || gh.comments[0].Path != "main.go" || gh.comments[0].Position != 3 {
-		t.Fatalf("comments = %+v, want main.go position 3", gh.comments)
+	if len(gh.comments) != 1 || gh.comments[0].Path != "main.go" || gh.comments[0].Line != 3 || gh.comments[0].Side != "RIGHT" {
+		t.Fatalf("comments = %+v, want main.go line 3 side RIGHT", gh.comments)
+	}
+}
+
+func TestAnalysisHandler_CreatePullRequestReview_PostingDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &pullRequestHandlerRepo{
+		repo:   &models.Repository{ID: "repo-1", OrganizationID: "org-1", Type: models.RepositoryTypeGitHub, URL: "https://github.com/owner/repo"},
+		config: &models.OrganizationConfig{GithubToken: "github-token"}, // GitHubPRReviewEnabled defaults to false
+	}
+	gh := &pullRequestMockGitHub{reviewID: 1}
+	handler := NewAnalysisHandler(repo, &pullRequestHandlerEnqueuer{}, nil, nil)
+	handler.githubFactory = func(string) github.ClientInterface { return gh }
+
+	c, w := newPullRequestHandlerTestContext(http.MethodPost, "/repositories/repo-1/pull-requests/42/reviews", `{"event":"COMMENT","body":"x"}`)
+	handler.CreatePullRequestReview(c)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 when GitHubPRReviewEnabled is off; body=%s", w.Code, w.Body.String())
+	}
+	if gh.reviewEvent != "" {
+		t.Fatalf("no review should be posted when disabled, got event %q", gh.reviewEvent)
 	}
 }

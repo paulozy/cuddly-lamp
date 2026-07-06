@@ -83,9 +83,10 @@ type CreatePullRequestReviewRequest struct {
 }
 
 type PullRequestReviewComment struct {
-	Path     string `json:"path" binding:"required"`
-	Position int    `json:"position" binding:"required"`
-	Body     string `json:"body" binding:"required"`
+	Path string `json:"path" binding:"required"`
+	Line int    `json:"line" binding:"required"`
+	Side string `json:"side,omitempty"`
+	Body string `json:"body" binding:"required"`
 }
 
 type CreatePullRequestReviewResponse struct {
