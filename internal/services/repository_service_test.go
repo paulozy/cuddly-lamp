@@ -152,6 +152,70 @@ func newRepoServiceWithEnqueuer(store *mockRepoStore, cache rediscache.Cache, eq
 	return NewRepositoryService(store, cache, eq)
 }
 
+func syncTaskCount(eq *mockEnqueuer) int {
+	n := 0
+	for _, t := range eq.tasks {
+		if t.taskType == tasks.TypeSyncRepo {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRepositoryService_TriggerSync(t *testing.T) {
+	const orgID = "org-1"
+
+	t.Run("enqueues a sync when the repo is stale", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !enqueued || syncTaskCount(eq) != 1 {
+			t.Fatalf("expected one sync enqueued, got enqueued=%v count=%d", enqueued, syncTaskCount(eq))
+		}
+	})
+
+	t.Run("skips when a sync ran recently", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now()}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil || enqueued || syncTaskCount(eq) != 0 {
+			t.Fatalf("expected skip, got enqueued=%v count=%d err=%v", enqueued, syncTaskCount(eq), err)
+		}
+	})
+
+	t.Run("skips when a sync is already running", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "syncing", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, _ := svc.TriggerSync(context.Background(), "r1", orgID)
+		if enqueued || syncTaskCount(eq) != 0 {
+			t.Fatalf("expected skip while syncing, got enqueued=%v", enqueued)
+		}
+	})
+
+	t.Run("forbids a repo from another organization", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: "other-org", SyncStatus: "synced", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		if _, err := svc.TriggerSync(context.Background(), "r1", orgID); err != ErrForbidden {
+			t.Fatalf("expected ErrForbidden, got %v", err)
+		}
+	})
+}
+
 const (
 	orgID      = "org-1"
 	otherOrgID = "org-2"

@@ -98,6 +98,7 @@ func setupAPIRoutes(
 		protected.GET("/repositories", repoHandler.ListRepositories)
 		protected.GET("/repositories/graph", relationshipHandler.GetGraph)
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
+		protected.POST("/repositories/:id/sync", repoHandler.SyncRepository)
 		protected.PUT("/repositories/:id", repoHandler.UpdateRepository)
 		protected.DELETE("/repositories/:id", repoHandler.DeleteRepository)
 		protected.POST("/repository-relationships", relationshipHandler.CreateRelationship)

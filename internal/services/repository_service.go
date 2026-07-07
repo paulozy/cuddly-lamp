@@ -157,6 +157,40 @@ func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationI
 	return resp, nil
 }
 
+// resyncThrottle keeps "auto re-sync on open" from hammering the provider when
+// the repo view is opened/refreshed repeatedly.
+const resyncThrottle = 60 * time.Second
+
+// TriggerSync enqueues a metadata re-sync for a repository (refreshing PR/issue
+// counts, stars, branches, etc.). It is throttled: skipped when a sync is
+// already running or one ran within resyncThrottle. Returns true when a sync
+// was actually enqueued.
+func (s *RepositoryService) TriggerSync(ctx context.Context, id, organizationID string) (bool, error) {
+	repo, err := s.repo.GetRepository(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("get repository: %w", err)
+	}
+	if repo == nil {
+		return false, ErrRepositoryNotFound
+	}
+	if repo.OrganizationID != organizationID {
+		return false, ErrForbidden
+	}
+	if s.enqueuer == nil {
+		return false, nil
+	}
+	if repo.SyncStatus == "syncing" {
+		return false, nil
+	}
+	if !repo.LastSyncedAt.IsZero() && time.Since(repo.LastSyncedAt) < resyncThrottle {
+		return false, nil
+	}
+	if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, tasks.SyncRepoPayload{RepositoryID: repo.ID}); err != nil {
+		return false, fmt.Errorf("enqueue sync: %w", err)
+	}
+	return true, nil
+}
+
 func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID string, limit, offset int) (*models.RepositoryListResponse, error) {
 	if limit <= 0 {
 		limit = 20

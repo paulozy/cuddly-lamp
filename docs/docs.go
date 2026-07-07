@@ -1940,6 +1940,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/repositories/{id}/sync": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repositories"
+                ],
+                "summary": "Re-sync repository metadata",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/repositories/{id}/templates": {
             "post": {
                 "security": [
@@ -3682,18 +3733,21 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "body",
-                "path",
-                "position"
+                "line",
+                "path"
             ],
             "properties": {
                 "body": {
                     "type": "string"
                 },
+                "line": {
+                    "type": "integer"
+                },
                 "path": {
                     "type": "string"
                 },
-                "position": {
-                    "type": "integer"
+                "side": {
+                    "type": "string"
                 }
             }
         },
