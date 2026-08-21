@@ -4,13 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/paulozy/idp-with-ai-backend/internal/dependencies"
-	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -20,10 +16,9 @@ import (
 )
 
 type WebhookProcessor struct {
-	repo          storage.Repository
-	syncService   *services.SyncService
-	enqueuer      jobs.Enqueuer
-	githubFactory func(token string) github.ClientInterface
+	repo        storage.Repository
+	syncService *services.SyncService
+	enqueuer    jobs.Enqueuer
 }
 
 func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enqueuer jobs.Enqueuer) *WebhookProcessor {
@@ -31,9 +26,6 @@ func NewWebhookProcessor(repo storage.Repository, svc *services.SyncService, enq
 		repo:        repo,
 		syncService: svc,
 		enqueuer:    enqueuer,
-		githubFactory: func(token string) github.ClientInterface {
-			return github.NewClient(token)
-		},
 	}
 }
 
@@ -96,100 +88,6 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 		if err := w.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, syncPayload); err != nil {
 			return fmt.Errorf("enqueue sync job: %w", err)
 		}
-		if webhookPayloadHasManifestChanges(webhook.EventPayload.RawData) {
-			scanPayload := tasks.ScanDependenciesPayload{
-				RepositoryID: repoID,
-				Branch:       webhook.EventPayload.Branch,
-				CommitSHA:    webhook.EventPayload.CommitSHA,
-				TriggeredBy:  "webhook",
-			}
-			if err := w.enqueuer.Enqueue(ctx, tasks.TypeScanDependencies, scanPayload); err != nil {
-				utils.Warn("webhook processor: failed to enqueue dependency scan", "repo_id", repoID, "error", err)
-			}
-		}
-
-		// Mark embeddings as stale when the push touches indexable code. We
-		// only escalate `indexed` → `stale` so we don't regress a job that's
-		// already pending/indexing/failed.
-		repoForStale, err := w.repo.GetRepository(ctx, repoID)
-		if err == nil && repoForStale != nil &&
-			repoForStale.EmbeddingsStatus == models.EmbeddingsStatusIndexed &&
-			webhookPayloadHasIndexableChanges(webhook.EventPayload.RawData) {
-			repoForStale.EmbeddingsStatus = models.EmbeddingsStatusStale
-			if err := w.repo.UpdateRepository(ctx, repoForStale); err != nil {
-				utils.Warn("webhook processor: mark embeddings stale failed", "repo_id", repoID, "error", err)
-			}
-		}
-
-		// Trigger analysis for push events if repository needs analysis
-		repo, err := w.repo.GetRepository(ctx, repoID)
-		if err == nil && repo != nil && repo.AnalysisStatus != "in_progress" {
-			// Check token budget
-			limit := w.tokenLimitForRepository(ctx, repo)
-			used, err := w.repo.SumTokensUsedSince(ctx, repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
-			if err != nil || used < limit {
-				analyzePayload := tasks.AnalyzeRepoPayload{
-					RepositoryID: repoID,
-					Branch:       webhook.EventPayload.Branch,
-					CommitSHA:    webhook.EventPayload.CommitSHA,
-					Type:         "code_review",
-					TriggeredBy:  "webhook",
-				}
-				if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
-					utils.Warn("webhook processor: failed to enqueue analysis", "repo_id", repoID, "error", err)
-					// Don't fail the whole webhook if analysis fails to enqueue
-				}
-			} else {
-				utils.Warn("webhook processor: skipping analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", limit)
-			}
-		}
-
-	case models.WebhookEventPullRequest:
-		utils.Info("webhook processor: triggering analysis for PR", "event", webhook.EventType, "repo_id", repoID)
-
-		// Check token budget
-		repo, repoErr := w.repo.GetRepository(ctx, repoID)
-		if repoErr != nil || repo == nil {
-			return fmt.Errorf("fetch repository: %w", repoErr)
-		}
-		limit := w.tokenLimitForRepository(ctx, repo)
-		used, err := w.repo.SumTokensUsedSince(ctx, repo.OrganizationID, time.Now().UTC().Add(-time.Hour))
-		if err != nil || used < limit {
-			// For PR events, trigger analysis directly
-			var prID int64
-			if webhook.EventPayload.PullRequestID != nil {
-				prID = int64(*webhook.EventPayload.PullRequestID)
-			}
-			analyzePayload := tasks.AnalyzeRepoPayload{
-				RepositoryID:  repoID,
-				Branch:        webhook.EventPayload.Branch,
-				CommitSHA:     webhook.EventPayload.CommitSHA,
-				PullRequestID: prID,
-				Type:          "code_review",
-				TriggeredBy:   "webhook",
-			}
-			if err := w.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
-				return fmt.Errorf("enqueue analysis job: %w", err)
-			}
-		} else {
-			utils.Warn("webhook processor: skipping PR analysis due to token budget", "repo_id", repoID, "tokens_used", used, "limit", limit)
-		}
-		if w.pullRequestHasManifestChanges(ctx, repo, webhook) {
-			prID := 0
-			if webhook.EventPayload.PullRequestID != nil {
-				prID = *webhook.EventPayload.PullRequestID
-			}
-			scanPayload := tasks.ScanDependenciesPayload{
-				RepositoryID:  repoID,
-				Branch:        webhook.EventPayload.Branch,
-				CommitSHA:     webhook.EventPayload.CommitSHA,
-				PullRequestID: prID,
-				TriggeredBy:   "webhook",
-			}
-			if err := w.enqueuer.Enqueue(ctx, tasks.TypeScanDependencies, scanPayload); err != nil {
-				utils.Warn("webhook processor: failed to enqueue PR dependency scan", "repo_id", repoID, "error", err)
-			}
-		}
 
 	default:
 		utils.Info("webhook processor: ignoring event type", "event", webhook.EventType)
@@ -197,104 +95,3 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 	return nil
 }
 
-func webhookPayloadHasManifestChanges(raw map[string]interface{}) bool {
-	body, _ := raw["body"].(string)
-	if body == "" {
-		return false
-	}
-	var payload struct {
-		Commits []struct {
-			Added    []string `json:"added"`
-			Modified []string `json:"modified"`
-		} `json:"commits"`
-		Ref   string `json:"ref"`
-		After string `json:"after"`
-	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return false
-	}
-	for _, commit := range payload.Commits {
-		for _, file := range append(commit.Added, commit.Modified...) {
-			if dependencies.IsManifestFile(filepath.Base(file)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// indexableExtensions is the set of source-code extensions that the embedding
-// chunker recognises. A push that only touches docs (README/CHANGELOG/etc.)
-// shouldn't invalidate the index.
-var indexableExtensions = map[string]struct{}{
-	".go": {}, ".ts": {}, ".tsx": {}, ".js": {}, ".jsx": {},
-	".py": {}, ".rs": {}, ".java": {}, ".rb": {}, ".php": {},
-	".cs": {}, ".kt": {}, ".swift": {}, ".cpp": {}, ".c": {}, ".h": {}, ".hpp": {},
-	".scala": {}, ".sql": {}, ".sh": {}, ".bash": {},
-}
-
-// webhookPayloadHasIndexableChanges returns true when at least one
-// added/modified file in any of the push's commits has a source-code
-// extension that the embedding worker would index. Pure-doc pushes return
-// false so we don't mark indexes as `stale` for README edits.
-func webhookPayloadHasIndexableChanges(raw map[string]interface{}) bool {
-	body, _ := raw["body"].(string)
-	if body == "" {
-		return false
-	}
-	var payload struct {
-		Commits []struct {
-			Added    []string `json:"added"`
-			Modified []string `json:"modified"`
-		} `json:"commits"`
-	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return false
-	}
-	for _, commit := range payload.Commits {
-		for _, file := range append(commit.Added, commit.Modified...) {
-			ext := strings.ToLower(filepath.Ext(file))
-			if _, ok := indexableExtensions[ext]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (w *WebhookProcessor) pullRequestHasManifestChanges(ctx context.Context, repo *models.Repository, webhook *models.Webhook) bool {
-	if webhook.EventPayload.PullRequestID == nil {
-		return false
-	}
-	cfg, err := w.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
-	if err != nil || cfg == nil {
-		return false
-	}
-	ownerRepo, _, err := utils.ParseRepositoryURL(repo.URL)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(ownerRepo, "/")
-	if len(parts) != 2 {
-		return false
-	}
-	files, err := w.githubFactory(cfg.GithubToken).GetPullRequestFiles(ctx, parts[0], parts[1], int64(*webhook.EventPayload.PullRequestID))
-	if err != nil {
-		utils.Warn("webhook processor: failed to fetch PR files for dependency scan", "repo_id", repo.ID, "error", err)
-		return false
-	}
-	for _, file := range files {
-		if dependencies.IsManifestFile(filepath.Base(file.Filename)) {
-			return true
-		}
-	}
-	return false
-}
-
-func (w *WebhookProcessor) tokenLimitForRepository(ctx context.Context, repo *models.Repository) int64 {
-	cfg, err := w.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
-	if err != nil || cfg == nil || cfg.AnthropicTokensPerHour <= 0 {
-		return 20000
-	}
-	return int64(cfg.AnthropicTokensPerHour)
-}

@@ -109,6 +109,42 @@ func (h *RepositoryHandler) GetRepository(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// SyncRepository enqueues a background metadata re-sync for a repository.
+// @Summary      Re-sync repository metadata
+// @Tags         repositories
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "Repository ID"
+// @Success      202  {object}  models.JobResponse
+// @Failure      401  {object}  models.ErrorResponse
+// @Failure      403  {object}  models.ErrorResponse
+// @Failure      404  {object}  models.ErrorResponse
+// @Router       /repositories/{id}/sync [post]
+func (h *RepositoryHandler) SyncRepository(c *gin.Context) {
+	id := c.Param("id")
+
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid authentication",
+		})
+		return
+	}
+
+	enqueued, err := h.repoService.TriggerSync(c.Request.Context(), id, orgID)
+	if err != nil {
+		repoErrToJSON(c, err)
+		return
+	}
+
+	status := "skipped"
+	if enqueued {
+		status = "queued"
+	}
+	c.JSON(http.StatusAccepted, models.JobResponse{Status: status, Type: "repo:sync", Target: id})
+}
+
 // ListRepositories lists all repositories for the authenticated user.
 // @Summary      List repositories
 // @Tags         repositories
@@ -159,6 +195,17 @@ func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
 // @Failure      403   {object}  models.ErrorResponse  "Access denied"
 // @Failure      404   {object}  models.ErrorResponse
 // @Router       /repositories/{id} [put]
+// actorFromContext builds the caller identity the service needs to evaluate
+// repository ownership.
+func actorFromContext(c *gin.Context) services.Actor {
+	userID, _ := utils.GetUserIDFromContext(c)
+	actor := services.Actor{UserID: userID}
+	if claims, ok := c.Request.Context().Value(utils.ContextKeyClaims).(*models.TokenClaims); ok {
+		actor.Role = claims.OrganizationRole
+	}
+	return actor
+}
+
 func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 	id := c.Param("id")
 
@@ -180,7 +227,7 @@ func (h *RepositoryHandler) UpdateRepository(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.repoService.UpdateRepository(c.Request.Context(), id, orgID, req)
+	resp, err := h.repoService.UpdateRepository(c.Request.Context(), id, orgID, actorFromContext(c), req)
 	if err != nil {
 		repoErrToJSON(c, err)
 		return
@@ -211,7 +258,7 @@ func (h *RepositoryHandler) DeleteRepository(c *gin.Context) {
 		return
 	}
 
-	if err := h.repoService.DeleteRepository(c.Request.Context(), id, orgID); err != nil {
+	if err := h.repoService.DeleteRepository(c.Request.Context(), id, orgID, actorFromContext(c)); err != nil {
 		repoErrToJSON(c, err)
 		return
 	}
@@ -230,6 +277,11 @@ func repoErrToJSON(c *gin.Context, err error) {
 		c.JSON(http.StatusForbidden, models.ErrorResponse{
 			Error:            "forbidden",
 			ErrorDescription: "you do not have access to this repository",
+		})
+	case errors.Is(err, services.ErrNotRepositoryOwner):
+		c.JSON(http.StatusForbidden, models.ErrorResponse{
+			Error:            "not_repository_owner",
+			ErrorDescription: "only the owning team or a maintainer can change this repository",
 		})
 	default:
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{

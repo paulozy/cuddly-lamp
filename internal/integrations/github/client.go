@@ -26,7 +26,8 @@ type ClientInterface interface {
 	DeleteWebhook(ctx context.Context, owner, repo string, webhookID int64) error
 	GetPullRequest(ctx context.Context, owner, repo string, prID int64) (*PullRequest, error)
 	GetPullRequestFiles(ctx context.Context, owner, repo string, prID int64) ([]PRFile, error)
-	CreatePullRequestReview(ctx context.Context, owner, repo string, prID int64, body string, event string, comments []ReviewCommentInput) (int64, error)
+	GetRepositoryTree(ctx context.Context, owner, repo, ref string) (*RepoTree, error)
+	GetLanguages(ctx context.Context, owner, repo string) (map[string]int, error)
 	CreateBranch(ctx context.Context, owner, repo, baseBranch, newBranch string) error
 	CreateOrUpdateFile(ctx context.Context, owner, repo, branch, path, message, content string) error
 	CreatePullRequest(ctx context.Context, owner, repo, title, head, base, body string) (*PullRequest, error)

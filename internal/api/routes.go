@@ -7,6 +7,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
+	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	swaggerFiles "github.com/swaggo/files"
@@ -31,14 +32,14 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, params.Cache)
-	dependencyHandler := factories.MakeDependencyHandler(repository, params.Enqueuer)
-	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
+	pullRequestHandler := factories.MakePullRequestHandler(repository)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
+	memberHandler := factories.MakeOrganizationMemberHandler(repository)
+	teamHandler := factories.MakeTeamHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, dependencyHandler, templateHandler, docsHandler, orgConfigHandler, coverageHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -55,12 +56,12 @@ func setupAPIRoutes(
 	repoHandler *handlers.RepositoryHandler,
 	relationshipHandler *handlers.RepositoryRelationshipHandler,
 	webhookHandler *handlers.WebhookHandler,
-	analysisHandler *handlers.AnalysisHandler,
-	dependencyHandler *handlers.DependencyHandler,
-	templateHandler *handlers.TemplateHandler,
+	pullRequestHandler *handlers.PullRequestHandler,
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 	coverageHandler *handlers.CoverageHandler,
+	memberHandler *handlers.OrganizationMemberHandler,
+	teamHandler *handlers.TeamHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -96,46 +97,71 @@ func setupAPIRoutes(
 		protected.GET("/organizations/configs", orgConfigHandler.GetConfig)
 		protected.PATCH("/organizations/configs", orgConfigHandler.UpdateConfig)
 
-		protected.POST("/repositories", repoHandler.CreateRepository)
+		// Role gates. Reads are open to any member; writes escalate with the
+		// blast radius of the action. The service layer still enforces that the
+		// resource belongs to the caller's organization — these two checks are
+		// complementary, not redundant.
+		developer := middleware.RequireRole(models.RoleDeveloper)
+		maintainer := middleware.RequireRole(models.RoleMaintainer)
+		admin := middleware.RequireRole(models.RoleAdmin)
+
+		// Membership is an admin concern: who is in the organization, and who
+		// gets invited in.
+		protected.GET("/organizations/members", admin, memberHandler.ListMembers)
+		protected.PATCH("/organizations/members/:userID", admin, memberHandler.UpdateMemberRole)
+		protected.DELETE("/organizations/members/:userID", admin, memberHandler.RemoveMember)
+		protected.POST("/organizations/invites", admin, memberHandler.CreateInvite)
+		protected.GET("/organizations/invites", admin, memberHandler.ListInvites)
+		protected.DELETE("/organizations/invites/:id", admin, memberHandler.RevokeInvite)
+
+		protected.POST("/repositories", developer, repoHandler.CreateRepository)
 		protected.GET("/repositories", repoHandler.ListRepositories)
 		protected.GET("/repositories/graph", relationshipHandler.GetGraph)
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
-		protected.PUT("/repositories/:id", repoHandler.UpdateRepository)
-		protected.DELETE("/repositories/:id", repoHandler.DeleteRepository)
-		protected.POST("/repository-relationships", relationshipHandler.CreateRelationship)
-		protected.PATCH("/repository-relationships/:id", relationshipHandler.UpdateRelationship)
-		protected.DELETE("/repository-relationships/:id", relationshipHandler.DeleteRelationship)
+		protected.POST("/repositories/:id/sync", developer, repoHandler.SyncRepository)
+		// `developer` here is the floor, not the whole check: the service layer
+		// additionally requires the caller's team to own the repository, and lets
+		// maintainer+ through regardless. Gating these at maintainer in middleware
+		// would make the ownership rule unreachable.
+		protected.PUT("/repositories/:id", developer, repoHandler.UpdateRepository)
+		protected.DELETE("/repositories/:id", developer, repoHandler.DeleteRepository)
+		protected.PUT("/repositories/:id/owner", maintainer, teamHandler.SetRepositoryOwner)
+		protected.POST("/repository-relationships", developer, relationshipHandler.CreateRelationship)
+		protected.PATCH("/repository-relationships/:id", developer, relationshipHandler.UpdateRelationship)
+		protected.DELETE("/repository-relationships/:id", developer, relationshipHandler.DeleteRelationship)
 
-		// Analysis routes
-		protected.POST("/repositories/:id/analyze", analysisHandler.AnalyzeRepository)
-		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
-		protected.GET("/repositories/:id/pull-requests", analysisHandler.ListPullRequests)
-		protected.GET("/repositories/:id/pull-requests/:pr_number", analysisHandler.GetPullRequest)
-		protected.GET("/repositories/:id/pull-requests/:pr_number/files", analysisHandler.GetPullRequestFiles)
-		protected.POST("/repositories/:id/pull-requests/:pr_number/analyze", analysisHandler.AnalyzePullRequest)
-		protected.POST("/repositories/:id/pull-requests/:pr_number/reviews", analysisHandler.CreatePullRequestReview)
-		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
-		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
-		protected.POST("/repositories/:id/dependencies/scan", dependencyHandler.ScanDependencies)
-		protected.GET("/repositories/:id/dependencies", dependencyHandler.ListDependencies)
-		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
+		// Teams. Reads are open to any member — everyone should be able to see
+		// who owns what — while mutations are a maintainer concern.
+		protected.GET("/teams", teamHandler.ListTeams)
+		protected.GET("/teams/:id", teamHandler.GetTeam)
+		protected.GET("/teams/:id/members", teamHandler.ListMembers)
+		protected.POST("/teams", maintainer, teamHandler.CreateTeam)
+		protected.PATCH("/teams/:id", maintainer, teamHandler.UpdateTeam)
+		protected.DELETE("/teams/:id", maintainer, teamHandler.DeleteTeam)
+		protected.POST("/teams/:id/members", maintainer, teamHandler.AddMember)
+		protected.DELETE("/teams/:id/members/:userID", maintainer, teamHandler.RemoveMember)
+
+		// Pull request routes (read-only GitHub pass-through)
+		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)
+		protected.GET("/repositories/:id/pull-requests/:pr_number", pullRequestHandler.GetPullRequest)
+		protected.GET("/repositories/:id/pull-requests/:pr_number/files", pullRequestHandler.GetPullRequestFiles)
+
+		// Doc generation spends the organization's Anthropic budget, so it is
+		// gated even though the result is harmless.
+		protected.POST("/repositories/:id/docs/generate", developer, docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
-		protected.PATCH("/docs/:id", docsHandler.UpdateDocContent)
+		protected.PATCH("/docs/:id", developer, docsHandler.UpdateDocContent)
 		protected.GET("/docs/templates", docsHandler.ListDocTemplates)
+		// GenerateOrgDocs/ListOrgDocs additionally require admin inside the
+		// handler (requireOrgAdmin) — org-wide documents are an admin concern.
 		protected.POST("/organizations/docs/generate", docsHandler.GenerateOrgDocs)
 		protected.GET("/organizations/docs", docsHandler.ListOrgDocs)
-		protected.POST("/repositories/:id/templates", templateHandler.GenerateForRepository)
 
-		protected.POST("/templates", templateHandler.GenerateForOrganization)
-		protected.GET("/templates", templateHandler.ListTemplates)
-		protected.GET("/templates/:id", templateHandler.GetTemplate)
-		protected.PATCH("/templates/:id/pin", templateHandler.PinTemplate)
-		protected.DELETE("/templates/:id", templateHandler.DeleteTemplate)
-
-		// Coverage upload tokens — managed by repository owners
-		protected.POST("/repositories/:id/coverage/tokens", coverageHandler.CreateCoverageToken)
-		protected.GET("/repositories/:id/coverage/tokens", coverageHandler.ListCoverageTokens)
-		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", coverageHandler.RevokeCoverageToken)
+		// Coverage upload tokens are credentials — minting and revoking them is
+		// a maintainer action.
+		protected.POST("/repositories/:id/coverage/tokens", maintainer, coverageHandler.CreateCoverageToken)
+		protected.GET("/repositories/:id/coverage/tokens", maintainer, coverageHandler.ListCoverageTokens)
+		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", maintainer, coverageHandler.RevokeCoverageToken)
 	}
 }

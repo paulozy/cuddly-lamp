@@ -24,8 +24,42 @@ type Repository interface {
 	ListOrganizationMembersForUser(ctx context.Context, userID string) ([]models.OrganizationMember, error)
 	CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error
 	CountOrganizationMembers(ctx context.Context, orgID string) (int64, error)
+	ListOrganizationMembers(ctx context.Context, orgID string) ([]models.OrganizationMember, error)
+	CountOrganizationAdmins(ctx context.Context, orgID string) (int64, error)
+	UpdateOrganizationMemberRole(ctx context.Context, orgID, userID string, role models.UserRole) error
+	DeleteOrganizationMember(ctx context.Context, orgID, userID string) error
 	GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
 	UpsertOrganizationConfig(ctx context.Context, cfg *models.OrganizationConfig) error
+
+	// Team operations — teams are the unit of repository ownership.
+	CreateTeam(ctx context.Context, team *models.Team) error
+	GetTeam(ctx context.Context, id string) (*models.Team, error)
+	GetTeamBySlug(ctx context.Context, orgID, slug string) (*models.Team, error)
+	ListTeams(ctx context.Context, orgID string) ([]models.Team, error)
+	UpdateTeam(ctx context.Context, team *models.Team) error
+	// DeleteTeam soft-deletes the team and clears owner_team_id on its
+	// repositories in the same transaction. ON DELETE SET NULL does not fire on
+	// a soft delete, so without this the repositories keep pointing at a team
+	// that no longer exists.
+	DeleteTeam(ctx context.Context, id string) error
+
+	ListTeamMembers(ctx context.Context, teamID string) ([]models.TeamMember, error)
+	ListTeamIDsForUser(ctx context.Context, orgID, userID string) ([]string, error)
+	UpsertTeamMember(ctx context.Context, member *models.TeamMember) error
+	DeleteTeamMember(ctx context.Context, teamID, userID string) error
+
+	SetRepositoryOwnerTeam(ctx context.Context, repoID string, teamID *string) error
+
+	// Organization invite operations — the gate for joining an existing org.
+	CreateOrganizationInvite(ctx context.Context, invite *models.OrganizationInvite) error
+	GetOrganizationInviteByHash(ctx context.Context, hash string) (*models.OrganizationInvite, error)
+	GetOrganizationInvite(ctx context.Context, id string) (*models.OrganizationInvite, error)
+	ListOrganizationInvites(ctx context.Context, orgID string) ([]models.OrganizationInvite, error)
+	RevokeOrganizationInvite(ctx context.Context, id string) error
+	// AcceptOrganizationInvite marks the invite spent and creates the membership in
+	// one transaction, so a crash between the two cannot leave a redeemed invite
+	// without a member, or a member admitted by an invite still marked pending.
+	AcceptOrganizationInvite(ctx context.Context, inviteID string, member *models.OrganizationMember) error
 
 	// Repository operations
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
@@ -56,16 +90,8 @@ type Repository interface {
 	CreateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
 	UpdateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
 
-	// Code Analysis operations
-	GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error)
-	CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	GetAnalysesByRepository(ctx context.Context, repoID string, analysisType, status string, limit, offset int) ([]models.CodeAnalysis, int64, error)
-	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
-	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
-	GetLatestAnalysisForPullRequest(ctx context.Context, repoID string, pullRequestID int, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
-	ListLatestAnalysesForPullRequests(ctx context.Context, repoID string, pullRequestIDs []int, analysisType models.AnalysisType) (map[int]models.CodeAnalysis, error)
-	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
+	// AI token accounting — budgets documentation generation, the only
+	// remaining LLM-backed feature.
 	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
 	// Documentation generation operations
@@ -78,18 +104,6 @@ type Repository interface {
 	ListOrgDocGenerations(ctx context.Context, orgID string) ([]models.DocGeneration, error)
 	GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
 
-	// Code Template operations
-	CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
-	GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error)
-	UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
-	ListCodeTemplates(ctx context.Context, filter CodeTemplateFilter) ([]models.CodeTemplate, int64, error)
-	DeleteCodeTemplate(ctx context.Context, id string) error
-
-	// Package Dependency operations
-	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
-	ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
-	UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
-	DeletePackageDependencies(ctx context.Context, repoID string) error
 
 	// Maintenance / startup recovery
 	ResetStaleSyncingRepositories(ctx context.Context) ([]string, error)
@@ -98,7 +112,6 @@ type Repository interface {
 	CreateCoverageUpload(ctx context.Context, upload *models.CoverageUpload) error
 	GetLatestCoverageUpload(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
 	ListCoverageUploadsForCommit(ctx context.Context, repoID, sha string) ([]*models.CoverageUpload, error)
-	PatchCodeAnalysisCoverage(ctx context.Context, repoID, sha string, covered, total int, percentage float64, status string) (int64, error)
 
 	// Coverage upload tokens
 	CreateCoverageUploadToken(ctx context.Context, token *models.CoverageUploadToken) error
@@ -107,12 +120,6 @@ type Repository interface {
 	ListCoverageUploadTokens(ctx context.Context, repoID string) ([]*models.CoverageUploadToken, error)
 	RevokeCoverageUploadToken(ctx context.Context, id string) error
 	TouchCoverageUploadTokenUsage(ctx context.Context, id string) error
-
-	// Code Embedding operations
-	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
-	CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error
-	SearchEmbeddings(ctx context.Context, filter EmbeddingSearchFilter) ([]models.CodeEmbedding, error)
-	DeleteEmbeddings(ctx context.Context, filter EmbeddingDeleteFilter) error
 
 	// Token operations
 	CreateToken(ctx context.Context, token *models.Token) error
@@ -129,6 +136,12 @@ type Repository interface {
 
 type RepositoryFilter struct {
 	OrganizationID string
+	// OwnerTeamIDs restricts the list to repositories owned by any of these
+	// teams. Empty means no filtering.
+	OwnerTeamIDs []string
+	// UnownedOnly lists repositories with no owning team — the input to the
+	// first scorecard check.
+	UnownedOnly bool
 	OwnerUserID    string
 	Type           models.RepositoryType
 	IsPublic       bool
@@ -143,33 +156,4 @@ type RepositoryRelationshipFilter struct {
 	RepositoryID   string
 	Kind           models.RepositoryRelationshipKind
 	Source         models.RepositoryRelationshipSource
-}
-
-type CodeTemplateFilter struct {
-	OrganizationID string
-	RepositoryID   string
-	IsPinned       *bool
-	Status         string
-	Limit          int
-	Offset         int
-}
-
-type EmbeddingSearchFilter struct {
-	RepositoryID string
-	Query        string
-	Vector       []float32
-	Provider     string
-	Model        string
-	Dimension    int
-	Branch       string
-	Limit        int
-	MinScore     float64
-}
-
-type EmbeddingDeleteFilter struct {
-	RepositoryID string
-	Provider     string
-	Model        string
-	Dimension    int
-	Branch       string
 }

@@ -18,7 +18,6 @@ type RepositoryGraphNode struct {
 	URL            string             `json:"url"`
 	Type           RepositoryType     `json:"type"`
 	Metadata       RepositoryMetadata `json:"metadata"`
-	AnalysisStatus string             `json:"analysis_status"`
 	SyncStatus     string             `json:"sync_status"`
 }
 
@@ -93,7 +92,6 @@ func RepositoryToGraphNode(r *Repository) RepositoryGraphNode {
 		URL:            r.URL,
 		Type:           r.Type,
 		Metadata:       r.Metadata,
-		AnalysisStatus: r.AnalysisStatus,
 		SyncStatus:     r.SyncStatus,
 	}
 }

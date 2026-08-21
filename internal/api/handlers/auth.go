@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -117,20 +119,37 @@ func (h *AuthHandler) RegisterWithEmail(c *gin.Context) {
 	if req.OrganizationName == "" {
 		req.OrganizationName = req.OrganizationSlug
 	}
-	if req.OrganizationName == "" {
+	// With an invite the organization comes from the token, so the caller does
+	// not need to name it (and must not be able to override it).
+	if req.OrganizationName == "" && strings.TrimSpace(req.InviteToken) == "" {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
 			Error:            "invalid_request",
-			ErrorDescription: "organization_name is required",
+			ErrorDescription: "organization_name is required unless an invite_token is provided",
 		})
 		return
 	}
 
-	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), req.Email, req.FullName, req.Password, req.OrganizationName, req.OrganizationSlug)
+	tokenResponse, err := h.authService.RegisterWithEmail(c.Request.Context(), req.Email, req.FullName, req.Password, req.OrganizationName, req.OrganizationSlug, req.InviteToken)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "registration_failed",
-			ErrorDescription: err.Error(),
-		})
+		// These two are distinct so the UI can tell the user what to do: ask for
+		// an invite, versus pick a different organization name.
+		switch {
+		case errors.Is(err, services.ErrOrganizationRequiresInvite):
+			c.JSON(http.StatusForbidden, models.ErrorResponse{
+				Error:            "organization_requires_invite",
+				ErrorDescription: "an organization with this name already exists; ask an admin for an invite",
+			})
+		case errors.Is(err, services.ErrInviteRejected):
+			c.JSON(http.StatusForbidden, models.ErrorResponse{
+				Error:            "invite_rejected",
+				ErrorDescription: "invite is invalid, expired, or issued to a different email",
+			})
+		default:
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "registration_failed",
+				ErrorDescription: err.Error(),
+			})
+		}
 		return
 	}
 
@@ -245,6 +264,7 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 // @Param        provider  path      string  true  "OAuth provider (github, gitlab)"
 // @Param        organization_name  query  string  false  "Organization name for onboarding without an existing organization"
 // @Param        organization_slug  query  string  false  "Optional organization slug for onboarding"
+// @Param        invite_token       query  string  false  "Invite token when joining an existing organization"
 // @Success      307
 // @Failure      400  {object}  models.ErrorResponse
 // @Failure      500  {object}  models.ErrorResponse
@@ -253,7 +273,7 @@ func (h *AuthHandler) OAuthLogin(c *gin.Context) {
 	provider := c.Param("provider")
 	orgSlug := c.Param("slug")
 
-	stateInput := services.OAuthStateInput{}
+	stateInput := services.OAuthStateInput{InviteToken: c.Query("invite_token")}
 	if orgSlug != "" {
 		org, err := h.authService.GetOrganizationBySlug(c.Request.Context(), orgSlug)
 		if err != nil {
@@ -267,10 +287,10 @@ func (h *AuthHandler) OAuthLogin(c *gin.Context) {
 	} else {
 		stateInput.OrganizationName = c.Query("organization_name")
 		stateInput.OrganizationSlug = c.Query("organization_slug")
-		if stateInput.OrganizationName == "" {
+		if stateInput.OrganizationName == "" && stateInput.InviteToken == "" {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{
 				Error:            "invalid_request",
-				ErrorDescription: "organization_name is required",
+				ErrorDescription: "organization_name is required unless an invite_token is provided",
 			})
 			return
 		}

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ type mockRepo struct {
 	orgs    map[string]*models.Organization
 	members map[string]*models.OrganizationMember
 	configs map[string]*models.OrganizationConfig
+	invites map[string]*models.OrganizationInvite
 
 	revokedJTIs     []string
 	revokedFamilies []uuid.UUID
@@ -33,6 +35,7 @@ func newMockRepo() *mockRepo {
 		orgs:    make(map[string]*models.Organization),
 		members: make(map[string]*models.OrganizationMember),
 		configs: make(map[string]*models.OrganizationConfig),
+		invites: make(map[string]*models.OrganizationInvite),
 	}
 }
 
@@ -175,6 +178,70 @@ func (m *mockRepo) GetOrganizationConfig(_ context.Context, orgID string) (*mode
 
 func (m *mockRepo) UpsertOrganizationConfig(_ context.Context, cfg *models.OrganizationConfig) error {
 	m.configs[cfg.OrganizationID] = cfg
+	return nil
+}
+
+func (m *mockRepo) ListOrganizationMembers(_ context.Context, orgID string) ([]models.OrganizationMember, error) {
+	var out []models.OrganizationMember
+	for _, mem := range m.members {
+		if mem.OrganizationID != orgID {
+			continue
+		}
+		cp := *mem
+		if u, ok := m.users[mem.UserID]; ok {
+			cp.User = *u
+		}
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+func (m *mockRepo) CreateOrganizationInvite(_ context.Context, inv *models.OrganizationInvite) error {
+	if inv.ID == "" {
+		inv.ID = uuid.New().String()
+	}
+	inv.CreatedAt = time.Now().UTC()
+	m.invites[inv.ID] = inv
+	return nil
+}
+
+func (m *mockRepo) GetOrganizationInviteByHash(_ context.Context, hash string) (*models.OrganizationInvite, error) {
+	for _, inv := range m.invites {
+		if inv.TokenHash == hash {
+			return inv, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockRepo) GetOrganizationInvite(_ context.Context, id string) (*models.OrganizationInvite, error) {
+	inv, ok := m.invites[id]
+	if !ok {
+		return nil, nil
+	}
+	return inv, nil
+}
+
+func (m *mockRepo) RevokeOrganizationInvite(_ context.Context, id string) error {
+	inv, ok := m.invites[id]
+	if !ok || inv.AcceptedAt != nil || inv.RevokedAt != nil {
+		return errors.New("not redeemable")
+	}
+	now := time.Now().UTC()
+	inv.RevokedAt = &now
+	return nil
+}
+
+func (m *mockRepo) AcceptOrganizationInvite(_ context.Context, inviteID string, member *models.OrganizationMember) error {
+	inv, ok := m.invites[inviteID]
+	if !ok || !inv.IsRedeemable(time.Now().UTC()) {
+		return errors.New("not redeemable")
+	}
+	now := time.Now().UTC()
+	inv.AcceptedAt = &now
+	uid := member.UserID
+	inv.AcceptedByUserID = &uid
+	m.members[member.OrganizationID+":"+member.UserID] = member
 	return nil
 }
 
@@ -422,7 +489,7 @@ func TestRegisterWithEmail_CreatesOrganizationFromBody(t *testing.T) {
 	repo := newMockRepo()
 	svc := newTestService(repo)
 
-	resp, err := svc.RegisterWithEmail(context.Background(), "new@example.com", "New User", "Password123", "Acme Inc", "")
+	resp, err := svc.RegisterWithEmail(context.Background(), "new@example.com", "New User", "Password123", "Acme Inc", "", "")
 	if err != nil {
 		t.Fatalf("RegisterWithEmail failed: %v", err)
 	}
@@ -445,7 +512,7 @@ func TestLoginWithEmail_SingleOrganizationDoesNotRequireSlug(t *testing.T) {
 	repo := newMockRepo()
 	svc := newTestService(repo)
 
-	_, err := svc.RegisterWithEmail(context.Background(), "single@example.com", "Single User", "Password123", "Single Org", "")
+	_, err := svc.RegisterWithEmail(context.Background(), "single@example.com", "Single User", "Password123", "Single Org", "", "")
 	if err != nil {
 		t.Fatalf("RegisterWithEmail failed: %v", err)
 	}
@@ -466,10 +533,10 @@ func TestLoginWithEmail_MultipleOrganizationsReturnsSelectionTicket(t *testing.T
 	repo := newMockRepo()
 	svc := newTestService(repo)
 
-	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first"); err != nil {
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first", ""); err != nil {
 		t.Fatalf("register first org: %v", err)
 	}
-	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second"); err != nil {
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second", ""); err != nil {
 		t.Fatalf("register second org: %v", err)
 	}
 
@@ -506,10 +573,10 @@ func TestSelectOrganizationRejectsUnavailableOrganization(t *testing.T) {
 	repo := newMockRepo()
 	svc := newTestService(repo)
 
-	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first"); err != nil {
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "First Org", "first", ""); err != nil {
 		t.Fatalf("register first org: %v", err)
 	}
-	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second"); err != nil {
+	if _, err := svc.RegisterWithEmail(context.Background(), "multi@example.com", "Multi User", "Password123", "Second Org", "second", ""); err != nil {
 		t.Fatalf("register second org: %v", err)
 	}
 	otherOrg := newTestOrg()
@@ -528,4 +595,176 @@ func TestSelectOrganizationRejectsUnavailableOrganization(t *testing.T) {
 	if err == nil {
 		t.Fatal("SelectOrganization should reject an organization outside the login ticket")
 	}
+}
+
+// ── invite-only membership ───────────────────────────────────────────────────
+//
+// Regression suite for the hole these tests exist to keep closed: registration
+// used to accept any organization slug and, when the slug matched an existing
+// organization, silently add the caller as a developer. Guessing a slug was
+// enough to get inside.
+
+// registerInto is a small helper so the intent of each case stays visible.
+func registerInto(svc *AuthService, email, orgName, orgSlug, invite string) error {
+	_, err := svc.RegisterWithEmail(context.Background(), email, "Someone", "Password123", orgName, orgSlug, invite)
+	return err
+}
+
+func TestRegisterWithEmail_RefusesToJoinExistingOrganizationWithoutInvite(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	// The founder creates the organization and becomes its admin.
+	if err := registerInto(svc, "founder@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("founder registration failed: %v", err)
+	}
+
+	// A stranger who guessed the slug must be turned away.
+	err := registerInto(svc, "stranger@evil.com", "Acme", "acme", "")
+	if !errors.Is(err, ErrOrganizationRequiresInvite) {
+		t.Fatalf("err = %v, want ErrOrganizationRequiresInvite", err)
+	}
+
+	// And must not have been admitted as a side effect.
+	if got := len(repo.members); got != 1 {
+		t.Fatalf("organization has %d members, want 1 (the founder only)", got)
+	}
+}
+
+func TestRegisterWithEmail_FirstMemberBecomesAdmin(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if err := registerInto(svc, "founder@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("registration failed: %v", err)
+	}
+	for _, member := range repo.members {
+		if member.Role != models.RoleAdmin {
+			t.Errorf("founder role = %q, want admin", member.Role)
+		}
+	}
+}
+
+func TestRegisterWithEmail_InviteAdmitsWithItsRole(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if err := registerInto(svc, "founder@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("founder registration failed: %v", err)
+	}
+	var orgID, founderID string
+	for _, m := range repo.members {
+		orgID, founderID = m.OrganizationID, m.UserID
+	}
+
+	invite, token, err := svc.membership.CreateInvite(context.Background(), orgID, founderID,
+		models.CreateInviteRequest{Email: "invited@acme.com", Role: models.RoleMaintainer})
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+
+	// The organization name in the body is deliberately wrong: with an invite the
+	// organization comes from the token, never from user input.
+	if err := registerInto(svc, "invited@acme.com", "Some Other Name", "", token); err != nil {
+		t.Fatalf("invited registration failed: %v", err)
+	}
+
+	acceptedBy := repo.invites[invite.ID].AcceptedByUserID
+	if acceptedBy == nil {
+		t.Fatal("invite does not record who accepted it")
+	}
+	member := repo.members[orgID+":"+*acceptedBy]
+	if member == nil {
+		t.Fatal("invited user was not added to the organization")
+	}
+	if member.Role != models.RoleMaintainer {
+		t.Errorf("role = %q, want maintainer (from the invite, not the default)", member.Role)
+	}
+	if repo.invites[invite.ID].AcceptedAt == nil {
+		t.Error("invite was not marked as accepted")
+	}
+}
+
+func TestRegisterWithEmail_InviteIsSingleUse(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if err := registerInto(svc, "founder@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("founder registration failed: %v", err)
+	}
+	var orgID, founderID string
+	for _, m := range repo.members {
+		orgID, founderID = m.OrganizationID, m.UserID
+	}
+
+	_, token, _ := svc.membership.CreateInvite(context.Background(), orgID, founderID,
+		models.CreateInviteRequest{Email: "invited@acme.com"})
+
+	if err := registerInto(svc, "invited@acme.com", "", "", token); err != nil {
+		t.Fatalf("first redemption failed: %v", err)
+	}
+	// A second person cannot reuse the same link.
+	err := registerInto(svc, "invited@acme.com", "", "", token)
+	if !errors.Is(err, ErrInviteRejected) {
+		t.Fatalf("second redemption: err = %v, want ErrInviteRejected", err)
+	}
+}
+
+func TestRegisterWithEmail_InviteIsBoundToItsEmail(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if err := registerInto(svc, "founder@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("founder registration failed: %v", err)
+	}
+	var orgID, founderID string
+	for _, m := range repo.members {
+		orgID, founderID = m.OrganizationID, m.UserID
+	}
+
+	_, token, _ := svc.membership.CreateInvite(context.Background(), orgID, founderID,
+		models.CreateInviteRequest{Email: "invited@acme.com"})
+
+	// Whoever intercepts the link cannot redeem it under their own address.
+	err := registerInto(svc, "interceptor@evil.com", "", "", token)
+	if !errors.Is(err, ErrInviteRejected) {
+		t.Fatalf("err = %v, want ErrInviteRejected", err)
+	}
+	if len(repo.members) != 1 {
+		t.Errorf("organization has %d members, want 1", len(repo.members))
+	}
+}
+
+func TestRegisterWithEmail_InviteDoesNotWorkAcrossOrganizations(t *testing.T) {
+	repo := newMockRepo()
+	svc := newTestService(repo)
+
+	if err := registerInto(svc, "a@acme.com", "Acme", "acme", ""); err != nil {
+		t.Fatalf("acme founder failed: %v", err)
+	}
+	if err := registerInto(svc, "b@globex.com", "Globex", "globex", ""); err != nil {
+		t.Fatalf("globex founder failed: %v", err)
+	}
+
+	var acmeID, acmeAdmin string
+	for _, m := range repo.members {
+		if org := repo.orgs[m.OrganizationID]; org != nil && org.Slug == "acme" {
+			acmeID, acmeAdmin = m.OrganizationID, m.UserID
+		}
+	}
+
+	_, token, _ := svc.membership.CreateInvite(context.Background(), acmeID, acmeAdmin,
+		models.CreateInviteRequest{Email: "invited@acme.com"})
+
+	// Redeeming Acme's invite must land in Acme, never in Globex — the caller's
+	// organization_slug is ignored when an invite is present.
+	if err := registerInto(svc, "invited@acme.com", "Globex", "globex", token); err != nil {
+		t.Fatalf("registration failed: %v", err)
+	}
+	for key, m := range repo.members {
+		if m.UserID != acmeAdmin && strings.HasPrefix(key, acmeID+":") {
+			return // landed in Acme, as intended
+		}
+	}
+	t.Error("the invited user did not land in the organization that issued the invite")
 }

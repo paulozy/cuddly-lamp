@@ -144,12 +144,82 @@ func (m *mockEnqueuer) EnqueueIn(_ context.Context, taskType string, payload any
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+// maintainerActor is the identity most existing tests assume: a role that may
+// write anything in the organization, so ownership never enters the picture.
+func maintainerActor() Actor {
+	return Actor{UserID: "user-1", Role: models.RoleMaintainer}
+}
+
 func newRepoService(store *mockRepoStore, cache rediscache.Cache) *RepositoryService {
 	return NewRepositoryService(store, cache, &mockEnqueuer{})
 }
 
 func newRepoServiceWithEnqueuer(store *mockRepoStore, cache rediscache.Cache, eq *mockEnqueuer) *RepositoryService {
 	return NewRepositoryService(store, cache, eq)
+}
+
+func syncTaskCount(eq *mockEnqueuer) int {
+	n := 0
+	for _, t := range eq.tasks {
+		if t.taskType == tasks.TypeSyncRepo {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRepositoryService_TriggerSync(t *testing.T) {
+	const orgID = "org-1"
+
+	t.Run("enqueues a sync when the repo is stale", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !enqueued || syncTaskCount(eq) != 1 {
+			t.Fatalf("expected one sync enqueued, got enqueued=%v count=%d", enqueued, syncTaskCount(eq))
+		}
+	})
+
+	t.Run("skips when a sync ran recently", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now()}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil || enqueued || syncTaskCount(eq) != 0 {
+			t.Fatalf("expected skip, got enqueued=%v count=%d err=%v", enqueued, syncTaskCount(eq), err)
+		}
+	})
+
+	t.Run("skips when a sync is already running", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "syncing", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		enqueued, _ := svc.TriggerSync(context.Background(), "r1", orgID)
+		if enqueued || syncTaskCount(eq) != 0 {
+			t.Fatalf("expected skip while syncing, got enqueued=%v", enqueued)
+		}
+	})
+
+	t.Run("forbids a repo from another organization", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: "other-org", SyncStatus: "synced", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		if _, err := svc.TriggerSync(context.Background(), "r1", orgID); err != ErrForbidden {
+			t.Fatalf("expected ErrForbidden, got %v", err)
+		}
+	})
 }
 
 const (
@@ -204,7 +274,10 @@ func TestRepositoryService_Create_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
+// Creating a repository must enqueue a sync and nothing else. Every AI-driven
+// follow-up (initial code analysis, embedding indexing) has been removed, so a
+// second task showing up here means one of them crept back in.
+func TestRepositoryService_Create_EnqueuesOnlySync(t *testing.T) {
 	eq := &mockEnqueuer{}
 	svc := newRepoServiceWithEnqueuer(newMockRepoStore(), newMockCache(), eq)
 
@@ -213,89 +286,18 @@ func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(eq.tasks) != 2 {
-		t.Fatalf("enqueued tasks = %d, want 2 (sync + initial analysis); got %+v", len(eq.tasks), eq.tasks)
+	if len(eq.tasks) != 1 {
+		t.Fatalf("enqueued tasks = %d, want 1 (sync only); got %+v", len(eq.tasks), eq.tasks)
 	}
-
 	if eq.tasks[0].taskType != tasks.TypeSyncRepo {
-		t.Errorf("first task = %q, want %q", eq.tasks[0].taskType, tasks.TypeSyncRepo)
+		t.Errorf("task = %q, want %q", eq.tasks[0].taskType, tasks.TypeSyncRepo)
 	}
 	syncPayload, ok := eq.tasks[0].payload.(tasks.SyncRepoPayload)
 	if !ok {
-		t.Fatalf("first payload type = %T, want SyncRepoPayload", eq.tasks[0].payload)
+		t.Fatalf("payload type = %T, want SyncRepoPayload", eq.tasks[0].payload)
 	}
 	if syncPayload.RepositoryID != resp.ID {
 		t.Errorf("sync payload RepositoryID = %q, want %q", syncPayload.RepositoryID, resp.ID)
-	}
-
-	if eq.tasks[1].taskType != tasks.TypeAnalyzeRepo {
-		t.Errorf("second task = %q, want %q", eq.tasks[1].taskType, tasks.TypeAnalyzeRepo)
-	}
-	analyzePayload, ok := eq.tasks[1].payload.(tasks.AnalyzeRepoPayload)
-	if !ok {
-		t.Fatalf("second payload type = %T, want AnalyzeRepoPayload", eq.tasks[1].payload)
-	}
-	if analyzePayload.RepositoryID != resp.ID {
-		t.Errorf("analyze payload RepositoryID = %q, want %q", analyzePayload.RepositoryID, resp.ID)
-	}
-	if analyzePayload.TriggeredBy != "initial" {
-		t.Errorf("analyze payload TriggeredBy = %q, want %q", analyzePayload.TriggeredBy, "initial")
-	}
-	if analyzePayload.Type != "code_review" {
-		t.Errorf("analyze payload Type = %q, want %q", analyzePayload.Type, "code_review")
-	}
-}
-
-func TestRepositoryService_Create_AutoTriggersEmbeddingsWhenVoyageConfigured(t *testing.T) {
-	eq := &mockEnqueuer{}
-	store := newMockRepoStore()
-	store.orgConfig = &models.OrganizationConfig{
-		VoyageAPIKey:       "voy-test",
-		EmbeddingsProvider: "voyage",
-	}
-	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
-
-	resp, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(eq.tasks) != 3 {
-		t.Fatalf("enqueued tasks = %d, want 3 (sync + analyze + embeddings); got %+v", len(eq.tasks), eq.tasks)
-	}
-	if eq.tasks[2].taskType != tasks.TypeGenerateEmbeddings {
-		t.Errorf("third task = %q, want %q", eq.tasks[2].taskType, tasks.TypeGenerateEmbeddings)
-	}
-	embPayload, ok := eq.tasks[2].payload.(tasks.GenerateEmbeddingsPayload)
-	if !ok {
-		t.Fatalf("third payload type = %T, want GenerateEmbeddingsPayload", eq.tasks[2].payload)
-	}
-	if embPayload.RepositoryID != resp.ID {
-		t.Errorf("embeddings payload RepositoryID = %q, want %q", embPayload.RepositoryID, resp.ID)
-	}
-
-	// `pending` was persisted so the UI reflects the in-flight indexing
-	// without waiting for the worker to start.
-	stored := store.repos[resp.ID]
-	if stored.EmbeddingsStatus != models.EmbeddingsStatusPending {
-		t.Errorf("stored embeddings_status = %q, want %q", stored.EmbeddingsStatus, models.EmbeddingsStatusPending)
-	}
-}
-
-func TestRepositoryService_Create_SkipsEmbeddingsWhenProviderMissing(t *testing.T) {
-	eq := &mockEnqueuer{}
-	store := newMockRepoStore()
-	// No orgConfig → provider unavailable → embeddings should be skipped.
-	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
-
-	if _, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	for _, task := range eq.tasks {
-		if task.taskType == tasks.TypeGenerateEmbeddings {
-			t.Fatalf("embeddings task should not be enqueued without provider; got %+v", task)
-		}
 	}
 }
 
@@ -346,7 +348,7 @@ func TestRepositoryService_List_OnlyOwnerRepos(t *testing.T) {
 	_, _ = svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	// Seed a repo for another user directly so the URL doesn't conflict
-	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, OwnerUserID: otherID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
+	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
 
 	result, err := svc.ListRepositories(context.Background(), orgID, 10, 0)
 	if err != nil {
@@ -369,7 +371,7 @@ func TestRepositoryService_Update_Success(t *testing.T) {
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "new description"
-	updated, err := svc.UpdateRepository(context.Background(), created.ID, orgID, models.UpdateRepositoryRequest{Description: &desc})
+	updated, err := svc.UpdateRepository(context.Background(), created.ID, orgID, maintainerActor(), models.UpdateRepositoryRequest{Description: &desc})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +387,7 @@ func TestRepositoryService_Update_Forbidden(t *testing.T) {
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "desc"
-	_, err := svc.UpdateRepository(context.Background(), created.ID, otherOrgID, models.UpdateRepositoryRequest{Description: &desc})
+	_, err := svc.UpdateRepository(context.Background(), created.ID, otherOrgID, maintainerActor(), models.UpdateRepositoryRequest{Description: &desc})
 	if err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
@@ -399,7 +401,7 @@ func TestRepositoryService_Delete_Success(t *testing.T) {
 
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, orgID); err != nil {
+	if err := svc.DeleteRepository(context.Background(), created.ID, orgID, maintainerActor()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -415,7 +417,7 @@ func TestRepositoryService_Delete_Forbidden(t *testing.T) {
 
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID); err != ErrForbidden {
+	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID, maintainerActor()); err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
 }

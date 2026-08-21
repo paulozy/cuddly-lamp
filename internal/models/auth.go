@@ -51,6 +51,9 @@ type RegisterRequest struct {
 	Password         string `json:"password" binding:"required,min=8"`
 	OrganizationName string `json:"organization_name,omitempty"`
 	OrganizationSlug string `json:"organization_slug,omitempty"`
+	// InviteToken is required to join an organization that already exists.
+	// Without it, registration may only create a new organization.
+	InviteToken string `json:"invite_token,omitempty"`
 }
 
 type TokenResponse struct {

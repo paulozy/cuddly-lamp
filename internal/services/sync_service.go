@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/paulozy/idp-with-ai-backend/internal/detect"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
@@ -17,7 +18,14 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
-var ErrSyncInProgress = errors.New("repository sync already in progress")
+var (
+	ErrSyncInProgress = errors.New("repository sync already in progress")
+	// ErrUnsupportedProvider guards the GitHub-only sync path. The catalog
+	// accepts GitLab and Gitea URLs, but only GitHub can be synced today —
+	// without this check the URL's owner/repo pair would be queried against
+	// api.github.com, silently importing a same-named GitHub project's data.
+	ErrUnsupportedProvider = errors.New("repository sync is only supported for github repositories")
+)
 
 type SyncService struct {
 	repo           storage.Repository
@@ -47,10 +55,22 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 		return ErrSyncInProgress
 	}
 
-	// ParseRepositoryURL returns "owner/repo" as name
-	ownerRepo, _, err := utils.ParseRepositoryURL(repo.URL)
+	// ParseRepositoryURL returns "owner/repo" as name, plus the provider the
+	// host resolves to. The provider must be honoured: owner/repo is not unique
+	// across forges, so syncing a gitlab.com URL through the GitHub client can
+	// import an unrelated project that happens to share the path.
+	ownerRepo, provider, err := utils.ParseRepositoryURL(repo.URL)
 	if err != nil {
 		return fmt.Errorf("parse repository URL: %w", err)
+	}
+	if provider != models.RepositoryTypeGitHub {
+		errMsg := fmt.Sprintf("%s: %s", ErrUnsupportedProvider.Error(), provider)
+		repo.UpdateSyncStatus("error", &errMsg)
+		if updateErr := s.repo.UpdateRepository(ctx, repo); updateErr != nil {
+			utils.Warn("sync: failed to record unsupported provider", "repo_id", repoID, "error", updateErr)
+		}
+		utils.Warn("sync: unsupported provider", "repo_id", repoID, "provider", provider)
+		return fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)
 	}
 	parts := strings.SplitN(ownerRepo, "/", 2)
 	owner, name := parts[0], parts[1]
@@ -103,9 +123,32 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, owner
 		return fmt.Errorf("list pull requests: %w", err)
 	}
 
-	languages := make(map[string]int)
-	if info.Language != "" {
-		languages[info.Language] = 100
+	// The real language breakdown. `info.Language` is only the dominant one, and
+	// test detection gates on the full set. Soft-fail: an unavailable breakdown
+	// degrades detection to "unknown", it does not fail the sync.
+	languages, err := gh.GetLanguages(ctx, owner, name)
+	if err != nil || len(languages) == 0 {
+		if err != nil {
+			utils.Warn("sync: language breakdown unavailable", "repo_id", repo.ID, "error", err)
+		}
+		languages = make(map[string]int)
+		if info.Language != "" {
+			languages[info.Language] = 100
+		}
+	}
+
+	// Detection is best-effort by design. A repository we cannot inspect must
+	// report "unknown", never a confident "no CI, no tests" — and it must never
+	// turn a healthy sync into sync_status=error, which would fail the
+	// sync.healthy check as collateral damage.
+	repo.Metadata.HasCI, repo.Metadata.CIEvidence = nil, ""
+	repo.Metadata.HasTests, repo.Metadata.TestEvidence = nil, ""
+	if tree, treeErr := gh.GetRepositoryTree(ctx, owner, name, defaultBranch); treeErr != nil {
+		utils.Warn("sync: repository tree unavailable, CI/test signals left undetermined",
+			"repo_id", repo.ID, "error", treeErr)
+	} else if tree != nil {
+		paths := tree.BlobPaths()
+		applyDetection(repo, detect.DetectCI(paths, tree.Truncated), detect.DetectTests(paths, languages, tree.Truncated))
 	}
 
 	repo.Metadata.ProviderID = strconv.Itoa(info.ID)
@@ -190,7 +233,9 @@ func (s *SyncService) githubClientForRepository(ctx context.Context, repo *model
 			return nil, "", err
 		}
 		if cfg != nil {
-			return github.NewClient(cfg.GithubToken), cfg.WebhookBaseURL, nil
+			// Webhook base URL is a deployment-level fact (the public URL GitHub
+			// must reach), so it comes solely from the server env, not per-org config.
+			return github.NewClient(cfg.GithubToken), s.webhookBaseURL, nil
 		}
 	}
 	if s.github != nil {
@@ -200,6 +245,19 @@ func (s *SyncService) githubClientForRepository(ctx context.Context, repo *model
 }
 
 func isLocalURL(u string) bool {
+	return WebhookRegistrationUnavailable(u)
+}
+
+// WebhookRegistrationUnavailable reports whether this deployment can register
+// webhooks with the provider at all. An empty or localhost base URL is not
+// reachable from GitHub, so registration is skipped — and the scorecard reports
+// the webhook check as not applicable rather than failing every repository for
+// a platform-level configuration.
+func WebhookRegistrationUnavailable(baseURL string) bool {
+	u := strings.TrimSpace(baseURL)
+	if u == "" {
+		return true
+	}
 	return strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")
 }
 
@@ -209,4 +267,27 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// applyDetection writes the two signals onto the repository's metadata. Only a
+// definitive yes/no is recorded — `unknown` leaves the field nil, which is what
+// makes the scorecard report "not verified" instead of inventing a "no".
+func applyDetection(repo *models.Repository, ci, tests detect.Detection) {
+	if ci.Result != detect.ResultUnknown {
+		has := ci.Result == detect.ResultYes
+		repo.Metadata.HasCI = &has
+		repo.Metadata.CIEvidence = firstEvidence(ci)
+	}
+	if tests.Result != detect.ResultUnknown {
+		has := tests.Result == detect.ResultYes
+		repo.Metadata.HasTests = &has
+		repo.Metadata.TestEvidence = firstEvidence(tests)
+	}
+}
+
+func firstEvidence(d detect.Detection) string {
+	if len(d.Evidence) == 0 {
+		return ""
+	}
+	return d.Evidence[0]
 }

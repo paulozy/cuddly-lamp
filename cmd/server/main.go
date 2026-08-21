@@ -18,6 +18,7 @@ import (
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
+	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
@@ -86,7 +87,17 @@ func main() {
 	}
 	defer rdbClient.Close()
 
-	cache := redisstore.NewRedisCache(rdbClient)
+	// `redisstore.NewNoop()` yields a client whose Client() is nil, and
+	// redisCache dereferences it on every call. Handing that to the services
+	// makes any cached read or invalidation panic — which contradicts the
+	// "Redis unavailable, running without cache" we just logged. Fall back to
+	// the no-op cache so the degraded path is genuinely degraded, not broken.
+	var cache redisstore.Cache
+	if rdbClient.Client() != nil {
+		cache = redisstore.NewRedisCache(rdbClient)
+	} else {
+		cache = redisstore.NewNoopCache()
+	}
 
 	var enqueuer jobs.Enqueuer
 	if rdbClient.Client() != nil {
@@ -113,19 +124,11 @@ func main() {
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
-		embeddingWorker := workers.NewEmbeddingWorker(pgRepo)
-		analysisWorker := workers.NewAnalysisWorker(pgRepo)
-		dependencyWorker := workers.NewDependencyWorker(pgRepo, nil, ghClient)
-		templateWorker := workers.NewTemplateWorker(pgRepo)
 		docsWorker := workers.NewDocsWorker(pgRepo)
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
-		worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
-		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
-		worker.Register(tasks.TypeScanDependencies, dependencyWorker.Handle)
-		worker.Register(tasks.TypeGenerateTemplate, templateWorker.Handle)
 		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
 		worker.Register(tasks.TypeGenerateOrgDocs, docsWorker.HandleOrgDocs)
 
@@ -138,6 +141,11 @@ func main() {
 	} else {
 		enqueuer = jobs.NewNoopEnqueuer()
 	}
+
+	// The scorecard needs to know whether webhook registration is possible at
+	// all, so it can report "not applicable" instead of marking every repository
+	// as missing a webhook this installation could never create.
+	models.WebhookRegistrationUnavailable = services.WebhookRegistrationUnavailable(cfg.API.WebhookBaseURL)
 
 	router := gin.Default()
 	api.RegisterRoutes(&api.RegisterRoutesParams{

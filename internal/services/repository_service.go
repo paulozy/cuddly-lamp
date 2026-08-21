@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hibiken/asynq"
-	"github.com/paulozy/idp-with-ai-backend/internal/embeddings"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -21,7 +19,18 @@ var (
 	ErrRepositoryNotFound      = errors.New("repository not found")
 	ErrRepositoryAlreadyExists = errors.New("repository already exists")
 	ErrForbidden               = errors.New("forbidden")
+	// ErrNotRepositoryOwner separates "your role is too low, full stop" from
+	// "your role would allow this on a repository your team owns". The message
+	// the user sees is actionable only if the two stay distinct.
+	ErrNotRepositoryOwner = errors.New("only the owning team or a maintainer can change this repository")
 )
+
+// Actor carries who is making the request. Update and Delete need the role and
+// user id to evaluate ownership, which organization id alone cannot answer.
+type Actor struct {
+	UserID string
+	Role   models.UserRole
+}
 
 const repoCacheTTL = time.Hour
 
@@ -56,7 +65,6 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID
 		Type:            repoType,
 		OrganizationID:  organizationID,
 		CreatedByUserID: userID,
-		OwnerUserID:     userID,
 		IsPublic:        req.IsPublic,
 	}
 
@@ -69,60 +77,9 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID
 		if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, syncPayload); err != nil {
 			utils.Warn("repository: failed to enqueue sync job", "repo_id", repo.ID, "error", err)
 		}
-
-		analyzePayload := tasks.AnalyzeRepoPayload{
-			RepositoryID: repo.ID,
-			Type:         "code_review",
-			TriggeredBy:  "initial",
-		}
-		if err := s.enqueuer.Enqueue(ctx, tasks.TypeAnalyzeRepo, analyzePayload); err != nil {
-			utils.Warn("repository: failed to enqueue initial analysis", "repo_id", repo.ID, "error", err)
-		}
-
-		// Auto-trigger embeddings only when the org has Voyage configured.
-		// We rely on the dedicated `embeddings` queue (low concurrency) so a
-		// batch import doesn't flood Voyage.
-		s.maybeEnqueueInitialEmbeddings(ctx, repo)
 	}
 
 	return models.RepositoryToResponse(repo), nil
-}
-
-// maybeEnqueueInitialEmbeddings fires the embedding job for a freshly
-// created repository when the organisation's Voyage provider is set up.
-// The job is delayed 30s so the sync worker has a chance to populate
-// `Metadata.DefaultBranch` before the embedding worker clones the repo.
-//
-// Failure is logged but never surfaced — embeddings are an optional
-// enhancement and the user can always retrigger from the UI.
-func (s *RepositoryService) maybeEnqueueInitialEmbeddings(ctx context.Context, repo *models.Repository) {
-	cfg, err := s.repo.GetOrganizationConfig(ctx, repo.OrganizationID)
-	if err != nil || cfg == nil {
-		return
-	}
-	if cfg.VoyageAPIKey == "" || cfg.EmbeddingsProvider != embeddings.ProviderVoyage {
-		return
-	}
-
-	payload := tasks.GenerateEmbeddingsPayload{RepositoryID: repo.ID}
-	taskID := fmt.Sprintf("embeddings:generate:%s:initial", repo.ID)
-	err = s.enqueuer.Enqueue(ctx, tasks.TypeGenerateEmbeddings, payload,
-		asynq.TaskID(taskID),
-		asynq.Retention(10*time.Minute),
-		asynq.ProcessIn(30*time.Second),
-		asynq.Queue("embeddings"),
-	)
-	if err != nil {
-		utils.Warn("repository: failed to enqueue initial embeddings", "repo_id", repo.ID, "error", err)
-		return
-	}
-
-	// Flip status to `pending` immediately so the UI reflects that an index
-	// is on the way without waiting 30s for the worker to start.
-	repo.EmbeddingsStatus = models.EmbeddingsStatusPending
-	if err := s.repo.UpdateRepository(ctx, repo); err != nil {
-		utils.Warn("repository: failed to mark embeddings pending", "repo_id", repo.ID, "error", err)
-	}
 }
 
 func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationID string) (*models.RepositoryResponse, error) {
@@ -157,6 +114,40 @@ func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationI
 	return resp, nil
 }
 
+// resyncThrottle keeps "auto re-sync on open" from hammering the provider when
+// the repo view is opened/refreshed repeatedly.
+const resyncThrottle = 60 * time.Second
+
+// TriggerSync enqueues a metadata re-sync for a repository (refreshing PR/issue
+// counts, stars, branches, etc.). It is throttled: skipped when a sync is
+// already running or one ran within resyncThrottle. Returns true when a sync
+// was actually enqueued.
+func (s *RepositoryService) TriggerSync(ctx context.Context, id, organizationID string) (bool, error) {
+	repo, err := s.repo.GetRepository(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("get repository: %w", err)
+	}
+	if repo == nil {
+		return false, ErrRepositoryNotFound
+	}
+	if repo.OrganizationID != organizationID {
+		return false, ErrForbidden
+	}
+	if s.enqueuer == nil {
+		return false, nil
+	}
+	if repo.SyncStatus == "syncing" {
+		return false, nil
+	}
+	if !repo.LastSyncedAt.IsZero() && time.Since(repo.LastSyncedAt) < resyncThrottle {
+		return false, nil
+	}
+	if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, tasks.SyncRepoPayload{RepositoryID: repo.ID}); err != nil {
+		return false, fmt.Errorf("enqueue sync: %w", err)
+	}
+	return true, nil
+}
+
 func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID string, limit, offset int) (*models.RepositoryListResponse, error) {
 	if limit <= 0 {
 		limit = 20
@@ -184,7 +175,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID
 	}, nil
 }
 
-func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizationID string, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
+func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizationID string, actor Actor, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get repository: %w", err)
@@ -194,6 +185,9 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizati
 	}
 	if repo.OrganizationID != organizationID {
 		return nil, ErrForbidden
+	}
+	if !s.CanWriteRepository(ctx, actor.Role, actor.UserID, repo) {
+		return nil, ErrNotRepositoryOwner
 	}
 
 	if req.Description != nil {
@@ -214,7 +208,7 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizati
 	return models.RepositoryToResponse(repo), nil
 }
 
-func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizationID string) error {
+func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizationID string, actor Actor) error {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get repository: %w", err)
@@ -224,6 +218,9 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizati
 	}
 	if repo.OrganizationID != organizationID {
 		return ErrForbidden
+	}
+	if !s.CanWriteRepository(ctx, actor.Role, actor.UserID, repo) {
+		return ErrNotRepositoryOwner
 	}
 
 	if err := s.repo.DeleteRepository(ctx, id); err != nil {

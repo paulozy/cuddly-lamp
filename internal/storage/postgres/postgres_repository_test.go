@@ -28,45 +28,75 @@ func TestEscapeLike(t *testing.T) {
 	}
 }
 
-// Regression for the CHECK constraint violation: if the enriched SELECT does
-// not return embeddings columns, enrichedRepoToModel loads the Go zero-value
-// ("") and a subsequent db.Save() writes '' over the column, violating
-// repositories_embeddings_status_check (migration 021). This test pins the
-// mapping from scanned columns to the model so any future SELECT/struct drift
-// surfaces here instead of in production UPDATEs.
-func TestEnrichedRepoToModel_PropagatesEmbeddingsColumns(t *testing.T) {
-	indexedAt := time.Date(2026, 5, 18, 21, 0, 0, 0, time.UTC)
+// enrichedRepoToModel now sources coverage from the coverage_uploads LATERAL
+// join instead of code_analyses.metrics. The join returns NULLs for a repo
+// whose CI never uploaded, so the mapping must keep "never measured" distinct
+// from "measured 0%" — collapsing the two would make every unconfigured repo
+// look like it had 0% coverage.
+func TestEnrichedRepoToModel_MapsCoverageFromUpload(t *testing.T) {
+	uploadedAt := time.Date(2026, 5, 18, 21, 0, 0, 0, time.UTC)
 	e := enrichedRepo{
-		ID:                  "repo-1",
-		Name:                "owner/repo",
-		Type:                "github",
-		OrganizationID:      "org-1",
-		SyncStatus:          "synced",
-		AnalysisStatus:      "completed",
-		EmbeddingsStatus:    "indexed",
-		EmbeddingsCount:     42,
-		EmbeddingsIndexedAt: &indexedAt,
-		EmbeddingsError:     sql.NullString{String: "previous failure", Valid: true},
+		ID:                 "repo-1",
+		Name:               "owner/repo",
+		Type:               "github",
+		OrganizationID:     "org-1",
+		SyncStatus:         "synced",
+		TestCoverage:       sql.NullFloat64{Float64: 82.5, Valid: true},
+		TestedLines:        sql.NullInt64{Int64: 330, Valid: true},
+		UncoveredLines:     sql.NullInt64{Int64: 70, Valid: true},
+		CoverageStatus:     sql.NullString{String: "ok", Valid: true},
+		CoverageUploadedAt: sql.NullTime{Time: uploadedAt, Valid: true},
 	}
 
 	repo := enrichedRepoToModel(e)
 
-	if repo.EmbeddingsStatus != "indexed" {
-		t.Fatalf("EmbeddingsStatus = %q, want %q", repo.EmbeddingsStatus, "indexed")
-	}
-	if repo.EmbeddingsCount != 42 {
-		t.Fatalf("EmbeddingsCount = %d, want 42", repo.EmbeddingsCount)
-	}
-	if repo.EmbeddingsIndexedAt == nil || !repo.EmbeddingsIndexedAt.Equal(indexedAt) {
-		t.Fatalf("EmbeddingsIndexedAt = %v, want %v", repo.EmbeddingsIndexedAt, indexedAt)
-	}
-	if repo.EmbeddingsError != "previous failure" {
-		t.Fatalf("EmbeddingsError = %q, want %q", repo.EmbeddingsError, "previous failure")
-	}
 	if repo.SyncStatus != "synced" {
 		t.Fatalf("SyncStatus = %q, want %q", repo.SyncStatus, "synced")
 	}
-	if repo.AnalysisStatus != "completed" {
-		t.Fatalf("AnalysisStatus = %q, want %q", repo.AnalysisStatus, "completed")
+	stats := repo.EnrichedStats
+	if stats == nil {
+		t.Fatal("EnrichedStats is nil")
+	}
+	if !stats.HasCoverage {
+		t.Error("HasCoverage = false, want true when the join returned a row")
+	}
+	if stats.TestCoverage != 82.5 {
+		t.Errorf("TestCoverage = %v, want 82.5", stats.TestCoverage)
+	}
+	if stats.TestedLines != 330 || stats.UncoveredLines != 70 {
+		t.Errorf("lines = %d/%d, want 330/70", stats.TestedLines, stats.UncoveredLines)
+	}
+	if stats.CoverageStatus != "ok" {
+		t.Errorf("CoverageStatus = %q, want %q", stats.CoverageStatus, "ok")
+	}
+	if stats.CoverageUploadedAt == nil || *stats.CoverageUploadedAt != uploadedAt.Format(time.RFC3339) {
+		t.Errorf("CoverageUploadedAt = %v, want %v", stats.CoverageUploadedAt, uploadedAt.Format(time.RFC3339))
+	}
+}
+
+// A repository with no coverage upload at all must report HasCoverage=false
+// rather than a bare 0.0, so the UI can say "not configured" instead of
+// showing a red 0%.
+func TestEnrichedRepoToModel_NoCoverageUploadIsNotZeroPercent(t *testing.T) {
+	repo := enrichedRepoToModel(enrichedRepo{
+		ID:             "repo-2",
+		Name:           "owner/repo",
+		Type:           "github",
+		OrganizationID: "org-1",
+		SyncStatus:     "synced",
+	})
+
+	stats := repo.EnrichedStats
+	if stats == nil {
+		t.Fatal("EnrichedStats is nil")
+	}
+	if stats.HasCoverage {
+		t.Error("HasCoverage = true, want false when no coverage upload exists")
+	}
+	if stats.TestCoverage != 0 {
+		t.Errorf("TestCoverage = %v, want 0", stats.TestCoverage)
+	}
+	if stats.CoverageUploadedAt != nil {
+		t.Errorf("CoverageUploadedAt = %v, want nil", stats.CoverageUploadedAt)
 	}
 }

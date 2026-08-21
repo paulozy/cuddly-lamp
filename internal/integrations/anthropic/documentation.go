@@ -11,17 +11,14 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/docs"
 )
 
-// docMaxTokens caps the response length for documentation generation. Mid-size
-// because doc payloads are usually a handful of Markdown sections; the worker
-// stitches multiple calls (one per doc type) rather than asking Claude for
-// everything in a single response.
-const docMaxTokens = 8192
+// documentationMaxTokens caps the Markdown body Claude may emit per document.
+const documentationMaxTokens = 8192
 
 func (c *Client) GenerateDocumentation(ctx context.Context, req *ai.DocumentationRequest) (*ai.DocumentationResult, error) {
 	prompt := c.buildDocumentationPrompt(req)
 	params := anthropic.MessageNewParams{
 		Model:     c.model,
-		MaxTokens: int64(docMaxTokens),
+		MaxTokens: int64(documentationMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -98,7 +95,7 @@ func (c *Client) GenerateOrgDocumentation(ctx context.Context, req *ai.OrgDocume
 	}
 	params := anthropic.MessageNewParams{
 		Model:     c.model,
-		MaxTokens: int64(docMaxTokens),
+		MaxTokens: int64(documentationMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
