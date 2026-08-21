@@ -221,6 +221,19 @@ func (s *SyncService) githubClientForRepository(ctx context.Context, repo *model
 }
 
 func isLocalURL(u string) bool {
+	return WebhookRegistrationUnavailable(u)
+}
+
+// WebhookRegistrationUnavailable reports whether this deployment can register
+// webhooks with the provider at all. An empty or localhost base URL is not
+// reachable from GitHub, so registration is skipped — and the scorecard reports
+// the webhook check as not applicable rather than failing every repository for
+// a platform-level configuration.
+func WebhookRegistrationUnavailable(baseURL string) bool {
+	u := strings.TrimSpace(baseURL)
+	if u == "" {
+		return true
+	}
 	return strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")
 }
 

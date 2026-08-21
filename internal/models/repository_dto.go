@@ -1,6 +1,15 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/paulozy/idp-with-ai-backend/internal/scorecard"
+)
+
+// WebhookRegistrationUnavailable mirrors the deployment's webhook capability so
+// the scorecard can report "not applicable" instead of failing every repository
+// on an installation that has no public URL. Set once at startup.
+var WebhookRegistrationUnavailable bool
 
 type CreateRepositoryRequest struct {
 	URL         string `json:"url" binding:"required"`
@@ -34,6 +43,11 @@ type RepositoryResponse struct {
 
 	// Aggregated stats
 	Stats RepositoryStats `json:"stats"`
+
+	// Scorecard is the deterministic maturity evaluation. It is computed on read
+	// from facts the same query already loaded — there is no stored result to go
+	// stale between a coverage upload and the next page view.
+	Scorecard *scorecard.Summary `json:"scorecard,omitempty"`
 }
 
 type RepositoryListResponse struct {
@@ -92,6 +106,21 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 			CoverageStatus:     es.CoverageStatus,
 			CoverageUploadedAt: es.CoverageUploadedAt,
 		}
+
+		summary := scorecard.Evaluate(scorecard.RepoFacts{
+			HasOwnerTeam:   r.OwnerTeamID != nil && *r.OwnerTeamID != "",
+			Description:    r.Description,
+			SyncStatus:     r.SyncStatus,
+			HasEverSynced:  !r.LastSyncedAt.IsZero(),
+			HasCoverage:    es.HasCoverage,
+			CoverageStatus: es.CoverageStatus,
+			HasDocs:        es.HasDocs,
+			HasWebhook:     es.HasWebhook,
+			// Whether this deployment can register webhooks at all is platform
+			// configuration the model cannot see; the handler layer sets it.
+			WebhookRegistrationSkipped: WebhookRegistrationUnavailable,
+		})
+		resp.Scorecard = &summary
 	}
 
 	return resp

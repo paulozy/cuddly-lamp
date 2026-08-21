@@ -18,6 +18,7 @@ import (
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
+	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
@@ -140,6 +141,11 @@ func main() {
 	} else {
 		enqueuer = jobs.NewNoopEnqueuer()
 	}
+
+	// The scorecard needs to know whether webhook registration is possible at
+	// all, so it can report "not applicable" instead of marking every repository
+	// as missing a webhook this installation could never create.
+	models.WebhookRegistrationUnavailable = services.WebhookRegistrationUnavailable(cfg.API.WebhookBaseURL)
 
 	router := gin.Default()
 	api.RegisterRoutes(&api.RegisterRoutesParams{

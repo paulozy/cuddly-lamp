@@ -3408,6 +3408,14 @@ const docTemplate = `{
                 "owner_team": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRef"
                 },
+                "scorecard": {
+                    "description": "Scorecard is the deterministic maturity evaluation. It is computed on read\nfrom facts the same query already loaded — there is no stored result to go\nstale between a coverage upload and the next page view.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_scorecard.Summary"
+                        }
+                    ]
+                },
                 "stats": {
                     "description": "Aggregated stats",
                     "allOf": [
@@ -3994,6 +4002,65 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "tokens_used": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_scorecard.Status": {
+            "type": "string",
+            "enum": [
+                "pass",
+                "fail",
+                "not_applicable"
+            ],
+            "x-enum-varnames": [
+                "StatusPass",
+                "StatusFail",
+                "StatusNotApplicable"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_scorecard.Summary": {
+            "type": "object",
+            "properties": {
+                "failing": {
+                    "type": "integer"
+                },
+                "not_applicable": {
+                    "type": "integer"
+                },
+                "passing": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total counts only the checks that were actually judged, so a repository is\nnever penalised for a check that did not apply to it.",
+                    "type": "integer"
+                },
+                "verdicts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_scorecard.Verdict"
+                    }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_scorecard.Verdict": {
+            "type": "object",
+            "properties": {
+                "check_id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason says what to do about it, in the user's language. It is generated\nnext to the predicate on purpose: a message assembled elsewhere drifts\nfrom the condition that produced it.",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_scorecard.Status"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "version": {
+                    "description": "Version changes when a predicate's meaning changes (a threshold moving,\nsay) so historical results stay interpretable once they are persisted.",
                     "type": "integer"
                 }
             }

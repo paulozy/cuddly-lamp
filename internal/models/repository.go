@@ -87,7 +87,7 @@ type Repository struct {
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
 	// Relationships
-	Webhooks     []Webhook              `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
+	Webhooks []Webhook `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
 
 	// EnrichedStats is populated only during ListRepositories. It is never persisted.
 	EnrichedStats *EnrichedStats `gorm:"-" json:"-"`
@@ -108,6 +108,9 @@ type EnrichedStats struct {
 	// which the DTO uses to tell "never measured" from "measured 0%".
 	HasCoverage        bool
 	CoverageUploadedAt *string // ISO-8601 or nil
+	// Scorecard signals, loaded by the same enriched read.
+	HasDocs    bool
+	HasWebhook bool
 }
 
 func (r *Repository) IsValid() bool {
@@ -127,4 +130,3 @@ func (r *Repository) UpdateSyncStatus(status string, errMsg *string) {
 		r.SyncError = ""
 	}
 }
-

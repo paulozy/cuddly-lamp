@@ -45,6 +45,12 @@ type enrichedRepo struct {
 	UncoveredLines     sql.NullInt64
 	CoverageStatus     sql.NullString
 	CoverageUploadedAt sql.NullTime
+
+	// Scorecard signals. EXISTS rather than a LATERAL LIMIT 1 because the
+	// question is boolean — Postgres short-circuits a semi-join on the first
+	// matching row.
+	HasDocs    bool
+	HasWebhook bool
 }
 
 // PostgresRepository implements RepositoryStorage using GORM
@@ -252,7 +258,18 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             cov.lines_covered                                       AS tested_lines,
             (cov.lines_total - cov.lines_covered)                   AS uncovered_lines,
             cov.status                                              AS coverage_status,
-            cov.created_at                                          AS coverage_uploaded_at
+            cov.created_at                                          AS coverage_uploaded_at,
+            EXISTS (
+                SELECT 1 FROM doc_generations dg
+                WHERE  dg.repository_id = r.id
+                  AND  dg.status = 'completed'
+                  AND  dg.deleted_at IS NULL
+            )                                                       AS has_docs,
+            EXISTS (
+                SELECT 1 FROM webhook_configs wc
+                WHERE  wc.repository_id = r.id
+                  AND  wc.is_active
+            )                                                       AS has_webhook
         FROM repositories r
         LEFT JOIN teams t
                ON t.id = r.owner_team_id
@@ -292,6 +309,7 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 		&e.CreatedAt, &e.UpdatedAt,
 		&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
 		&e.CoverageUploadedAt,
+		&e.HasDocs, &e.HasWebhook,
 	); err != nil {
 		return nil, fmt.Errorf("scan repository row: %w", err)
 	}
@@ -417,7 +435,18 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             cov.lines_covered                                       AS tested_lines,
             (cov.lines_total - cov.lines_covered)                   AS uncovered_lines,
             cov.status                                              AS coverage_status,
-            cov.created_at                                          AS coverage_uploaded_at
+            cov.created_at                                          AS coverage_uploaded_at,
+            EXISTS (
+                SELECT 1 FROM doc_generations dg
+                WHERE  dg.repository_id = r.id
+                  AND  dg.status = 'completed'
+                  AND  dg.deleted_at IS NULL
+            )                                                       AS has_docs,
+            EXISTS (
+                SELECT 1 FROM webhook_configs wc
+                WHERE  wc.repository_id = r.id
+                  AND  wc.is_active
+            )                                                       AS has_webhook
         FROM repositories r
         LEFT JOIN teams t
                ON t.id = r.owner_team_id
@@ -465,6 +494,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
 			&e.CoverageUploadedAt,
+			&e.HasDocs, &e.HasWebhook,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan repository row: %w", err)
 		}
@@ -529,6 +559,8 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 	// when the LATERAL join found no row, which the DTO uses to distinguish
 	// "never measured" from "measured 0%".
 	repo.EnrichedStats = &models.EnrichedStats{
+		HasDocs:        e.HasDocs,
+		HasWebhook:     e.HasWebhook,
 		TestCoverage:   e.TestCoverage.Float64,
 		TestedLines:    int(e.TestedLines.Int64),
 		UncoveredLines: int(e.UncoveredLines.Int64),
