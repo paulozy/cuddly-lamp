@@ -1,6 +1,6 @@
 # IDP Backend - Internal Developer Platform
 
-Internal Developer Platform (IDP) backend with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), a repository catalog with GitHub sync, pull request browsing, spatial repository relationship mapping, CI coverage ingestion, and AI-generated project documentation. Built with Go and PostgreSQL.
+Internal Developer Platform (IDP) backend with JWT authentication, multi-provider OAuth 2.0 (GitHub, GitLab), a repository catalog with GitHub and GitLab sync, pull/merge request browsing, spatial repository relationship mapping, CI coverage ingestion, and AI-generated project documentation. Built with Go and PostgreSQL.
 
 ## ✨ Features Implemented
 
@@ -41,7 +41,7 @@ Internal Developer Platform (IDP) backend with JWT authentication, multi-provide
 ### Repository Management
 - ✅ CRUD endpoints — create, list, get, update, delete repositories
 - ✅ Enriched list response — latest CI coverage per repository via a LATERAL join, in a single query (no N+1)
-- ✅ GitHub sync — fetches metadata (branches, commits, PRs, languages, stars, forks)
+- ✅ GitHub and GitLab sync — fetches metadata (branches, commits, PRs/MRs, languages, stars, forks) through the provider a repository's URL resolves to
 - ✅ Sync status lifecycle — `idle → syncing → synced / error`
 - ✅ WebhookConfig — registers GitHub webhook on sync, stores HMAC secret
 - ✅ Webhook registration skipped automatically on localhost (use ngrok for local dev)
@@ -62,7 +62,7 @@ Internal Developer Platform (IDP) backend with JWT authentication, multi-provide
 
 ### API Routes
 - ✅ Public routes: login, organization selection, register, token refresh, OAuth (GitHub/GitLab)
-- ✅ Public webhook receiver: `POST /api/v1/webhooks/github/:repoID` (HMAC auth)
+- ✅ Public webhook receivers: `POST /api/v1/webhooks/github/:repoID` (HMAC-SHA256 signature) and `POST /api/v1/webhooks/gitlab/:repoID` (`X-Gitlab-Token` shared secret, compared in constant time)
 - ✅ Protected routes: /users/me, logout
 - ✅ Protected repository routes: CRUD on `/api/v1/repositories`
 - ✅ Health check endpoint
@@ -194,7 +194,7 @@ curl -X POST http://localhost:3000/api/v1/auth/select-organization \
   -H "Content-Type: application/json" \
   -d '{"login_ticket":"LOGIN_TICKET","organization_id":"ORG_ID"}'
 
-# Add a repository (triggers GitHub sync automatically)
+# Add a repository (triggers a sync against its provider automatically)
 curl -X POST http://localhost:3000/api/v1/repositories \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -219,7 +219,7 @@ curl -L "http://localhost:3000/api/v1/auth/github?organization_name=Acme%20Inc"
 
 ### 6. Generate repository documentation
 ```bash
-# Requires ANTHROPIC_API_KEY, GITHUB_TOKEN, and Redis/asynq enabled
+# Requires ANTHROPIC_API_KEY, the provider token for the repository's host, and Redis/asynq enabled
 curl -X POST http://localhost:3000/api/v1/repositories/$REPO_ID/docs/generate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -248,8 +248,38 @@ make run              # Executa binário compilado
 ```bash
 make test             # Roda testes
 make test-coverage    # Testes com coverage report
+make test-e2e         # Suíte end-to-end (precisa de docker)
+make test-e2e-live    # Testes opt-in contra a API real do gitlab.com
+make e2e-stack        # Deixa a stack E2E aberta (para o Playwright do frontend)
+make fake-gitlab      # Sobe só o GitLab falso, para inspecionar respostas à mão
 make lint             # Roda linter
 ```
+
+#### End-to-end
+
+Duas camadas, ambas locais e sem depender de conta em provedor nenhum.
+
+**Backend black-box** (`make test-e2e`) sobe Postgres e Redis em containers
+descartáveis — portas sorteadas, não encostam no `docker compose` de
+desenvolvimento —, compila e roda o binário real do servidor, e substitui o
+provedor por um GitLab falso (`internal/testsupport/fakegitlab`) que serve
+payloads capturados do gitlab.com. Cobre onboarding, token na organização,
+repositório de grupo aninhado, sync populando catálogo e detecção de CI/testes
+por árvore paginada, scorecard, registro de webhook, entrega disparada pelo
+provedor (com replay e token errado), navegação de merge requests, e os caminhos
+de erro: sem token, host sem client, árvore truncada, organização alheia.
+
+**Navegador** — as specs Playwright vivem no repo do frontend e rodam contra a
+mesma stack, mantida aberta por `make e2e-stack` (backend em `:3000`, GitLab
+falso em `:8081`). O token a colar em Configurações → GitLab é
+`glpat-e2e-token`; os projetos servidos são
+`gitlab.com/gitlab-org/nested-group/gitlab-runner` e
+`gitlab.com/gitlab-org/huge-monorepo` (esse com árvore infinita, para exercitar
+truncamento).
+
+**Contra o gitlab.com real** (`make test-e2e-live`) prova que os shapes gravados
+continuam sendo o que o GitLab manda. Anônimo, só leitura de projeto público,
+precisa de rede.
 
 ### Docker
 ```bash
@@ -390,6 +420,7 @@ Veja `.env.example` para todas as variáveis disponíveis:
 - **ANTHROPIC_API_KEY** - Claude API key for documentation generation (optional — doc generation returns unavailable or fails queued jobs if not set)
 - **ANTHROPIC_TOKENS_PER_HOUR** - Hourly token budget for Anthropic API (default: 20000)
 - **GITHUB_TOKEN** - GitHub personal access token (required for webhook registration, PR reads, documentation PR creation, and private repository clones during doc generation)
+- **GITLAB_TOKEN** - GitLab personal access token with the `api` scope, used for the same operations on gitlab.com projects. Both provider tokens are platform-level fallbacks: an organization's own `github_token` / `gitlab_token` takes precedence, and a repository is only ever queried with its own host's token.
 - **GITHUB_PR_REVIEW_ENABLED** - Post AI-generated PR reviews to GitHub (default: false)
 - **WEBHOOK_BASE_URL** - Public URL for webhook registration (e.g., ngrok URL; leave empty or use localhost to skip)
 - **LOG_LEVEL** - Nível de logging (debug/info/warn/error)
@@ -632,7 +663,7 @@ Storage:
 
 ## 🎯 Next Steps
 
-- [x] Repository management endpoints (CRUD + GitHub sync)
+- [x] Repository management endpoints (CRUD + GitHub/GitLab sync)
 - [x] Webhook pipeline (GitHub HMAC ingestion + background processing)
 - [x] Encryption for sensitive fields (OAuth tokens, webhook secrets)
 - [x] API documentation (Swagger/OpenAPI)
