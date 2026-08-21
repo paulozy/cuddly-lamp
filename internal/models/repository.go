@@ -82,7 +82,6 @@ type Repository struct {
 	// Relationships
 	Webhooks     []Webhook              `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
 	Members      []User                 `gorm:"many2many:user_repositories;" json:"members,omitempty"`
-	Dependencies []RepositoryDependency `gorm:"foreignKey:RepositoryID" json:"dependencies,omitempty"`
 
 	// EnrichedStats is populated only during ListRepositories. It is never persisted.
 	EnrichedStats *EnrichedStats `gorm:"-" json:"-"`
@@ -123,22 +122,3 @@ func (r *Repository) UpdateSyncStatus(status string, errMsg *string) {
 	}
 }
 
-type RepositoryDependency struct {
-	ID           string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	RepositoryID string `gorm:"type:uuid;index" json:"repository_id"`
-	DependsOnID  string `gorm:"type:uuid;index" json:"depends_on_id"`
-
-	Type       string `gorm:"type:varchar(50)" json:"type"` // import, library, service, etc
-	IsOptional bool   `gorm:"default:false" json:"is_optional"`
-	Version    string `gorm:"type:varchar(255)" json:"version,omitempty"`
-
-	Repository Repository `gorm:"foreignKey:RepositoryID" json:"repository,omitempty"`
-	DependsOn  Repository `gorm:"foreignKey:DependsOnID" json:"depends_on,omitempty"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (RepositoryDependency) TableName() string {
-	return "repository_dependencies"
-}

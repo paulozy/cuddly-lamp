@@ -70,11 +70,6 @@ type Repository interface {
 	ListOrgDocGenerations(ctx context.Context, orgID string) ([]models.DocGeneration, error)
 	GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
 
-	// Package Dependency operations
-	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
-	ListPackageDependencies(ctx context.Context, repoID string, onlyVulnerable bool) ([]*models.PackageDependency, error)
-	UpdatePackageDependencyVulnStatus(ctx context.Context, id string, isVulnerable bool, cves []string, latestVersion string) error
-	DeletePackageDependencies(ctx context.Context, repoID string) error
 
 	// Maintenance / startup recovery
 	ResetStaleSyncingRepositories(ctx context.Context) ([]string, error)

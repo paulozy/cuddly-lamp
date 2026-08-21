@@ -287,42 +287,6 @@ CREATE INDEX IF NOT EXISTS idx_code_analyses_deleted_at ON code_analyses(deleted
 -- JSONB index for issues search
 CREATE INDEX IF NOT EXISTS idx_code_analyses_issues ON code_analyses USING GIN(issues);
 
--- ============ Code Embeddings Table (for Semantic Search) ============
-CREATE TABLE IF NOT EXISTS code_embeddings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    
-    -- Content
-    file_path VARCHAR(1000) NOT NULL,
-    content TEXT NOT NULL,
-    content_hash VARCHAR(255) NOT NULL,  -- SHA256 for deduplication
-    description TEXT,
-    language VARCHAR(50),
-    start_line INT,
-    end_line INT,
-    
-    -- Vector embedding (pgvector)
-    embedding VECTOR(1536),  -- OpenAI embeddings dimension
-    
-    -- Metadata
-    tokens INT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    -- Constraints
-    CONSTRAINT unique_embedding_per_repo UNIQUE (repository_id, content_hash)
-);
-
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_repository_id ON code_embeddings(repository_id);
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_file_path ON code_embeddings(file_path);
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_language ON code_embeddings(language);
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_content_hash ON code_embeddings(content_hash);
-
--- Vector index for semantic search (IVFFlat is good for many vectors)
--- Alternative: HNSW for larger datasets, use "ivfflat" for medium (0-1M vectors)
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_vector ON code_embeddings USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
 -- ============ Functions for Audit Timestamps ============
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -363,12 +327,6 @@ CREATE TRIGGER code_analyses_updated_at_trigger
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS code_embeddings_updated_at_trigger ON code_embeddings;
-CREATE TRIGGER code_embeddings_updated_at_trigger
-    BEFORE UPDATE ON code_embeddings
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
 -- ============ Summary ============
 -- Tables created:
 -- 1. users - Platform users with roles and OAuth
@@ -378,12 +336,10 @@ CREATE TRIGGER code_embeddings_updated_at_trigger
 -- 5. webhooks - Incoming events from GitHub/GitLab/Gitea
 -- 6. webhook_configs - Webhook configuration per repository
 -- 7. code_analyses - Code review and metric analysis results
--- 8. code_embeddings - Semantic embeddings for vector search
 --
 -- Features:
 -- - Soft deletes (deleted_at column)
 -- - JSONB for flexible metadata
--- - pgvector for semantic search
 -- - Indexes for query performance
 -- - Cascading deletes for referential integrity
 -- - Audit triggers for updated_at

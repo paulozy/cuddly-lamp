@@ -2120,7 +2120,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
-                    "description": "job type (e.g., repo:analyze)",
+                    "description": "job type (e.g., docs:generate)",
                     "type": "string"
                 }
             }
@@ -2439,12 +2439,6 @@ const docTemplate = `{
                     "description": "soft delete",
                     "type": "string"
                 },
-                "dependencies": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryDependency"
-                    }
-                },
                 "description": {
                     "type": "string"
                 },
@@ -2508,42 +2502,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Webhook"
                     }
-                }
-            }
-        },
-        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryDependency": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "depends_on": {
-                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
-                },
-                "depends_on_id": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "is_optional": {
-                    "type": "boolean"
-                },
-                "repository": {
-                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
-                },
-                "repository_id": {
-                    "type": "string"
-                },
-                "type": {
-                    "description": "import, library, service, etc",
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "version": {
-                    "type": "string"
                 }
             }
         },

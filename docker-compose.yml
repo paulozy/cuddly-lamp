@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: ramsrib/pgvector:15
+    image: postgres:15-alpine
     container_name: idp-postgres
     environment:
       POSTGRES_USER: postgres
