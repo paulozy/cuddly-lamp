@@ -216,10 +216,16 @@ func (pr *PostgresRepository) UpsertOrganizationConfig(ctx context.Context, cfg 
 	if err := pr.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "organization_id"}},
+			// This list must name exactly the columns that exist on
+			// organization_configs — Postgres rejects the whole statement for a
+			// single unknown name, and it named five columns that migration 023
+			// dropped with the AI features, which made every config update fail.
+			// Adding a field to OrganizationConfig means adding it here, or the
+			// value silently fails to persist on an existing row.
 			DoUpdates: clause.AssignmentColumns([]string{
-				"anthropic_api_key", "anthropic_tokens_per_hour", "github_token",
-				"github_pr_review_enabled", "webhook_base_url", "embeddings_provider",
-				"voyage_api_key", "embeddings_model", "embeddings_dimensions",
+				"anthropic_api_key", "anthropic_tokens_per_hour",
+				"github_token", "gitlab_token", "gitlab_base_url",
+				"webhook_base_url",
 				"github_client_id", "github_client_secret", "github_callback_url",
 				"gitlab_client_id", "gitlab_client_secret", "gitlab_callback_url",
 				"output_language", "updated_at",
