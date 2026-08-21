@@ -64,8 +64,10 @@ type Repository struct {
 	Organization    *Organization `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
 	CreatedByUserID string        `gorm:"type:uuid;index" json:"created_by_user_id,omitempty"`
 	CreatedByUser   *User         `gorm:"foreignKey:CreatedByUserID" json:"created_by_user,omitempty"`
-	OwnerUserID     string        `gorm:"type:uuid;index" json:"owner_user_id,omitempty"`
-	OwnerUser       *User         `gorm:"foreignKey:OwnerUserID" json:"owner_user,omitempty"`
+	// OwnerTeamID is the accountable team. NULL means unowned, which is a real
+	// state the catalog reports rather than a gap to be filled with a default.
+	OwnerTeamID *string `gorm:"type:uuid;index" json:"owner_team_id,omitempty"`
+	OwnerTeam   *Team   `gorm:"foreignKey:OwnerTeamID" json:"owner_team,omitempty"`
 
 	IsPublic bool `gorm:"default:false" json:"is_public"`
 
@@ -81,7 +83,6 @@ type Repository struct {
 
 	// Relationships
 	Webhooks     []Webhook              `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
-	Members      []User                 `gorm:"many2many:user_repositories;" json:"members,omitempty"`
 
 	// EnrichedStats is populated only during ListRepositories. It is never persisted.
 	EnrichedStats *EnrichedStats `gorm:"-" json:"-"`

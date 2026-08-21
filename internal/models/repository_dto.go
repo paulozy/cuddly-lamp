@@ -20,7 +20,7 @@ type RepositoryResponse struct {
 	URL             string             `json:"url"`
 	Type            RepositoryType     `json:"type"`
 	OrganizationID  string             `json:"organization_id"`
-	OwnerUserID     string             `json:"owner_user_id,omitempty"`
+	OwnerTeam       *TeamRef           `json:"owner_team,omitempty"`
 	CreatedByUserID string             `json:"created_by_user_id,omitempty"`
 	IsPublic        bool               `json:"is_public"`
 	Metadata        RepositoryMetadata `json:"metadata"`
@@ -63,7 +63,6 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		URL:             r.URL,
 		Type:            r.Type,
 		OrganizationID:  r.OrganizationID,
-		OwnerUserID:     r.OwnerUserID,
 		CreatedByUserID: r.CreatedByUserID,
 		IsPublic:        r.IsPublic,
 		Metadata:        r.Metadata,
@@ -71,6 +70,9 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		UpdatedAt:       r.UpdatedAt,
 		SyncStatus:      r.SyncStatus,
 		SyncError:       r.SyncError,
+	}
+	if r.OwnerTeam != nil {
+		resp.OwnerTeam = &TeamRef{ID: r.OwnerTeam.ID, Name: r.OwnerTeam.Name, Slug: r.OwnerTeam.Slug}
 	}
 	if !r.LastSyncedAt.IsZero() {
 		t := r.LastSyncedAt

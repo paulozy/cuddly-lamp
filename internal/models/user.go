@@ -31,7 +31,6 @@ type User struct {
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
 	Tokens       []Token      `gorm:"foreignKey:UserID" json:"tokens,omitempty"`
-	Repositories []Repository `gorm:"many2many:user_repositories;" json:"repositories,omitempty"`
 }
 
 func (User) TableName() string {
@@ -60,16 +59,3 @@ func (u *User) HasPermission(requiredRole UserRole) bool {
 	return userLevel >= requiredLevel
 }
 
-func (u *User) CanAccessRepository(repo *Repository) bool {
-	if u.Role == RoleAdmin {
-		return true
-	}
-
-	for _, r := range u.Repositories {
-		if r.ID == repo.ID {
-			return true
-		}
-	}
-
-	return false
-}

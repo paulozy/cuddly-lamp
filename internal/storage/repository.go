@@ -31,6 +31,25 @@ type Repository interface {
 	GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
 	UpsertOrganizationConfig(ctx context.Context, cfg *models.OrganizationConfig) error
 
+	// Team operations — teams are the unit of repository ownership.
+	CreateTeam(ctx context.Context, team *models.Team) error
+	GetTeam(ctx context.Context, id string) (*models.Team, error)
+	GetTeamBySlug(ctx context.Context, orgID, slug string) (*models.Team, error)
+	ListTeams(ctx context.Context, orgID string) ([]models.Team, error)
+	UpdateTeam(ctx context.Context, team *models.Team) error
+	// DeleteTeam soft-deletes the team and clears owner_team_id on its
+	// repositories in the same transaction. ON DELETE SET NULL does not fire on
+	// a soft delete, so without this the repositories keep pointing at a team
+	// that no longer exists.
+	DeleteTeam(ctx context.Context, id string) error
+
+	ListTeamMembers(ctx context.Context, teamID string) ([]models.TeamMember, error)
+	ListTeamIDsForUser(ctx context.Context, orgID, userID string) ([]string, error)
+	UpsertTeamMember(ctx context.Context, member *models.TeamMember) error
+	DeleteTeamMember(ctx context.Context, teamID, userID string) error
+
+	SetRepositoryOwnerTeam(ctx context.Context, repoID string, teamID *string) error
+
 	// Organization invite operations — the gate for joining an existing org.
 	CreateOrganizationInvite(ctx context.Context, invite *models.OrganizationInvite) error
 	GetOrganizationInviteByHash(ctx context.Context, hash string) (*models.OrganizationInvite, error)
@@ -117,6 +136,12 @@ type Repository interface {
 
 type RepositoryFilter struct {
 	OrganizationID string
+	// OwnerTeamIDs restricts the list to repositories owned by any of these
+	// teams. Empty means no filtering.
+	OwnerTeamIDs []string
+	// UnownedOnly lists repositories with no owning team — the input to the
+	// first scorecard check.
+	UnownedOnly bool
 	OwnerUserID    string
 	Type           models.RepositoryType
 	IsPublic       bool

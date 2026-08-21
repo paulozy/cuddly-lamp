@@ -144,6 +144,12 @@ func (m *mockEnqueuer) EnqueueIn(_ context.Context, taskType string, payload any
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+// maintainerActor is the identity most existing tests assume: a role that may
+// write anything in the organization, so ownership never enters the picture.
+func maintainerActor() Actor {
+	return Actor{UserID: "user-1", Role: models.RoleMaintainer}
+}
+
 func newRepoService(store *mockRepoStore, cache rediscache.Cache) *RepositoryService {
 	return NewRepositoryService(store, cache, &mockEnqueuer{})
 }
@@ -342,7 +348,7 @@ func TestRepositoryService_List_OnlyOwnerRepos(t *testing.T) {
 	_, _ = svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	// Seed a repo for another user directly so the URL doesn't conflict
-	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, OwnerUserID: otherID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
+	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
 
 	result, err := svc.ListRepositories(context.Background(), orgID, 10, 0)
 	if err != nil {
@@ -365,7 +371,7 @@ func TestRepositoryService_Update_Success(t *testing.T) {
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "new description"
-	updated, err := svc.UpdateRepository(context.Background(), created.ID, orgID, models.UpdateRepositoryRequest{Description: &desc})
+	updated, err := svc.UpdateRepository(context.Background(), created.ID, orgID, maintainerActor(), models.UpdateRepositoryRequest{Description: &desc})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -381,7 +387,7 @@ func TestRepositoryService_Update_Forbidden(t *testing.T) {
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
 	desc := "desc"
-	_, err := svc.UpdateRepository(context.Background(), created.ID, otherOrgID, models.UpdateRepositoryRequest{Description: &desc})
+	_, err := svc.UpdateRepository(context.Background(), created.ID, otherOrgID, maintainerActor(), models.UpdateRepositoryRequest{Description: &desc})
 	if err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
@@ -395,7 +401,7 @@ func TestRepositoryService_Delete_Success(t *testing.T) {
 
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, orgID); err != nil {
+	if err := svc.DeleteRepository(context.Background(), created.ID, orgID, maintainerActor()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -411,7 +417,7 @@ func TestRepositoryService_Delete_Forbidden(t *testing.T) {
 
 	created, _ := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
 
-	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID); err != ErrForbidden {
+	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID, maintainerActor()); err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
 	}
 }

@@ -19,7 +19,18 @@ var (
 	ErrRepositoryNotFound      = errors.New("repository not found")
 	ErrRepositoryAlreadyExists = errors.New("repository already exists")
 	ErrForbidden               = errors.New("forbidden")
+	// ErrNotRepositoryOwner separates "your role is too low, full stop" from
+	// "your role would allow this on a repository your team owns". The message
+	// the user sees is actionable only if the two stay distinct.
+	ErrNotRepositoryOwner = errors.New("only the owning team or a maintainer can change this repository")
 )
+
+// Actor carries who is making the request. Update and Delete need the role and
+// user id to evaluate ownership, which organization id alone cannot answer.
+type Actor struct {
+	UserID string
+	Role   models.UserRole
+}
 
 const repoCacheTTL = time.Hour
 
@@ -54,7 +65,6 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, organizationID
 		Type:            repoType,
 		OrganizationID:  organizationID,
 		CreatedByUserID: userID,
-		OwnerUserID:     userID,
 		IsPublic:        req.IsPublic,
 	}
 
@@ -165,7 +175,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID
 	}, nil
 }
 
-func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizationID string, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
+func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizationID string, actor Actor, req models.UpdateRepositoryRequest) (*models.RepositoryResponse, error) {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get repository: %w", err)
@@ -175,6 +185,9 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizati
 	}
 	if repo.OrganizationID != organizationID {
 		return nil, ErrForbidden
+	}
+	if !s.CanWriteRepository(ctx, actor.Role, actor.UserID, repo) {
+		return nil, ErrNotRepositoryOwner
 	}
 
 	if req.Description != nil {
@@ -195,7 +208,7 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, id, organizati
 	return models.RepositoryToResponse(repo), nil
 }
 
-func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizationID string) error {
+func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizationID string, actor Actor) error {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get repository: %w", err)
@@ -205,6 +218,9 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, id, organizati
 	}
 	if repo.OrganizationID != organizationID {
 		return ErrForbidden
+	}
+	if !s.CanWriteRepository(ctx, actor.Role, actor.UserID, repo) {
+		return ErrNotRepositoryOwner
 	}
 
 	if err := s.repo.DeleteRepository(ctx, id); err != nil {

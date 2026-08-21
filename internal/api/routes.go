@@ -37,8 +37,9 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
+	teamHandler := factories.MakeTeamHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -60,6 +61,7 @@ func setupAPIRoutes(
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 	coverageHandler *handlers.CoverageHandler,
 	memberHandler *handlers.OrganizationMemberHandler,
+	teamHandler *handlers.TeamHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -117,11 +119,27 @@ func setupAPIRoutes(
 		protected.GET("/repositories/graph", relationshipHandler.GetGraph)
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
 		protected.POST("/repositories/:id/sync", developer, repoHandler.SyncRepository)
-		protected.PUT("/repositories/:id", maintainer, repoHandler.UpdateRepository)
-		protected.DELETE("/repositories/:id", maintainer, repoHandler.DeleteRepository)
+		// `developer` here is the floor, not the whole check: the service layer
+		// additionally requires the caller's team to own the repository, and lets
+		// maintainer+ through regardless. Gating these at maintainer in middleware
+		// would make the ownership rule unreachable.
+		protected.PUT("/repositories/:id", developer, repoHandler.UpdateRepository)
+		protected.DELETE("/repositories/:id", developer, repoHandler.DeleteRepository)
+		protected.PUT("/repositories/:id/owner", maintainer, teamHandler.SetRepositoryOwner)
 		protected.POST("/repository-relationships", developer, relationshipHandler.CreateRelationship)
 		protected.PATCH("/repository-relationships/:id", developer, relationshipHandler.UpdateRelationship)
 		protected.DELETE("/repository-relationships/:id", developer, relationshipHandler.DeleteRelationship)
+
+		// Teams. Reads are open to any member — everyone should be able to see
+		// who owns what — while mutations are a maintainer concern.
+		protected.GET("/teams", teamHandler.ListTeams)
+		protected.GET("/teams/:id", teamHandler.GetTeam)
+		protected.GET("/teams/:id/members", teamHandler.ListMembers)
+		protected.POST("/teams", maintainer, teamHandler.CreateTeam)
+		protected.PATCH("/teams/:id", maintainer, teamHandler.UpdateTeam)
+		protected.DELETE("/teams/:id", maintainer, teamHandler.DeleteTeam)
+		protected.POST("/teams/:id/members", maintainer, teamHandler.AddMember)
+		protected.DELETE("/teams/:id/members/:userID", maintainer, teamHandler.RemoveMember)
 
 		// Pull request routes (read-only GitHub pass-through)
 		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)

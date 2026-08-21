@@ -20,16 +20,18 @@ import (
 // It matches the SELECT column order exactly.
 type enrichedRepo struct {
 	// Core repository fields
-	ID                  string
-	Name                string
-	Description         string
-	URL                 string
-	Type                string
-	OrganizationID      string
-	OwnerUserID         *string
-	CreatedByUserID     *string
-	IsPublic            bool
+	ID              string
+	Name            string
+	Description     string
+	URL             string
+	Type            string
+	OrganizationID  string
+	CreatedByUserID *string
+	IsPublic        bool
 	Metadata        sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
+	OwnerTeamID     sql.NullString
+	OwnerTeamName   sql.NullString
+	OwnerTeamSlug   sql.NullString
 	LastSyncedAt    *time.Time
 	SyncStatus      string
 	SyncError       sql.NullString
@@ -235,10 +237,12 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             r.url,
             r.type,
             r.organization_id,
-            r.owner_user_id,
             r.created_by_user_id,
             r.is_public,
             r.metadata::text                                       AS metadata,
+            t.id                                                    AS owner_team_id,
+            t.name                                                  AS owner_team_name,
+            t.slug                                                  AS owner_team_slug,
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
@@ -250,6 +254,9 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             cov.status                                              AS coverage_status,
             cov.created_at                                          AS coverage_uploaded_at
         FROM repositories r
+        LEFT JOIN teams t
+               ON t.id = r.owner_team_id
+              AND t.deleted_at IS NULL
         LEFT JOIN LATERAL (
             SELECT
                 cu.percentage,
@@ -278,8 +285,9 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 	var e enrichedRepo
 	if err := rows.Scan(
 		&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
-		&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
+		&e.OrganizationID, &e.CreatedByUserID,
 		&e.IsPublic, &e.Metadata,
+		&e.OwnerTeamID, &e.OwnerTeamName, &e.OwnerTeamSlug,
 		&e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 		&e.CreatedAt, &e.UpdatedAt,
 		&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
@@ -351,15 +359,30 @@ func (pr *PostgresRepository) UpdateRepository(ctx context.Context, repo *models
 }
 
 func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *storage.RepositoryFilter) ([]models.Repository, int64, error) {
+	// Ownership predicate, shared by the count and the list so the total always
+	// matches the rows. A semi-join rather than a JOIN + DISTINCT: DISTINCT would
+	// force a sort and break the ordered pagination below. Postgres plans
+	// `IN (subquery)` as a hash semi-join.
+	ownerClause := ""
+	ownerArgs := []any{}
+	switch {
+	case filter.UnownedOnly:
+		ownerClause = " AND r.owner_team_id IS NULL"
+	case len(filter.OwnerTeamIDs) > 0:
+		ownerClause = " AND r.owner_team_id IN (?)"
+		ownerArgs = append(ownerArgs, filter.OwnerTeamIDs)
+	}
+
 	// ── 1. Count query (fast, index-only scan) ──────────────────────────────
 	countSQL := `
         SELECT COUNT(*)
         FROM   repositories r
         WHERE  r.organization_id = ?
-          AND  r.deleted_at IS NULL`
+          AND  r.deleted_at IS NULL` + ownerClause
 
 	var total int64
-	if err := pr.db.WithContext(ctx).Raw(countSQL, filter.OrganizationID).Scan(&total).Error; err != nil {
+	countArgs := append([]any{filter.OrganizationID}, ownerArgs...)
+	if err := pr.db.WithContext(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count repositories: %w", err)
 	}
 	if total == 0 {
@@ -375,10 +398,12 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             r.url,
             r.type,
             r.organization_id,
-            r.owner_user_id,
             r.created_by_user_id,
             r.is_public,
             r.metadata::text                                       AS metadata,
+            t.id                                                    AS owner_team_id,
+            t.name                                                  AS owner_team_name,
+            t.slug                                                  AS owner_team_slug,
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
@@ -390,6 +415,9 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             cov.status                                              AS coverage_status,
             cov.created_at                                          AS coverage_uploaded_at
         FROM repositories r
+        LEFT JOIN teams t
+               ON t.id = r.owner_team_id
+              AND t.deleted_at IS NULL
         LEFT JOIN LATERAL (
             SELECT
                 cu.percentage,
@@ -403,7 +431,7 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             LIMIT 1
         ) cov ON true
         WHERE r.organization_id = ?
-          AND r.deleted_at IS NULL
+          AND r.deleted_at IS NULL` + ownerClause + `
         ORDER BY r.created_at DESC
         LIMIT  ?
         OFFSET ?`
@@ -413,7 +441,9 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 		limit = 20
 	}
 
-	rows, err := pr.db.WithContext(ctx).Raw(listSQL, filter.OrganizationID, limit, filter.Offset).Rows()
+	listArgs := append([]any{filter.OrganizationID}, ownerArgs...)
+	listArgs = append(listArgs, limit, filter.Offset)
+	rows, err := pr.db.WithContext(ctx).Raw(listSQL, listArgs...).Rows()
 	if err != nil {
 		return nil, 0, fmt.Errorf("list repositories: %w", err)
 	}
@@ -424,8 +454,9 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 		var e enrichedRepo
 		if err := rows.Scan(
 			&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
-			&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
+			&e.OrganizationID, &e.CreatedByUserID,
 			&e.IsPublic, &e.Metadata,
+			&e.OwnerTeamID, &e.OwnerTeamName, &e.OwnerTeamSlug,
 			&e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 			&e.CreatedAt, &e.UpdatedAt,
 			&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
@@ -454,10 +485,7 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		}
 	}
 
-	var ownerUserID, createdByUserID string
-	if e.OwnerUserID != nil {
-		ownerUserID = *e.OwnerUserID
-	}
+	var createdByUserID string
 	if e.CreatedByUserID != nil {
 		createdByUserID = *e.CreatedByUserID
 	}
@@ -474,7 +502,6 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		URL:             e.URL,
 		Type:            models.RepositoryType(e.Type),
 		OrganizationID:  e.OrganizationID,
-		OwnerUserID:     ownerUserID,
 		CreatedByUserID: createdByUserID,
 		IsPublic:        e.IsPublic,
 		Metadata:        meta,
@@ -483,6 +510,15 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		SyncError:       e.SyncError.String,
 		CreatedAt:       e.CreatedAt,
 		UpdatedAt:       e.UpdatedAt,
+	}
+
+	if e.OwnerTeamID.Valid {
+		repo.OwnerTeamID = &e.OwnerTeamID.String
+		repo.OwnerTeam = &models.Team{
+			ID:   e.OwnerTeamID.String,
+			Name: e.OwnerTeamName.String,
+			Slug: e.OwnerTeamSlug.String,
+		}
 	}
 
 	// Coverage comes straight from the newest CI upload. HasCoverage is false

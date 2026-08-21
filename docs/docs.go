@@ -1616,6 +1616,48 @@ const docTemplate = `{
                 }
             }
         },
+        "/repositories/{id}/owner": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repositories"
+                ],
+                "summary": "Set repository owner team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Owner (null team_id clears it)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.SetRepositoryOwnerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/repositories/{id}/pull-requests": {
             "get": {
                 "security": [
@@ -1864,6 +1906,298 @@ const docTemplate = `{
                 }
             }
         },
+        "/teams": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "List teams",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Create a team",
+                "parameters": [
+                    {
+                        "description": "Team",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CreateTeamRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Get a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Delete a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Update a team",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Changes",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateTeamRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}/members": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "List team members",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamMemberListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Add a team member",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Member",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AddTeamMemberRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/teams/{id}/members/{userID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "teams"
+                ],
+                "summary": "Remove a team member",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Team ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/users/me": {
             "get": {
                 "security": [
@@ -2011,6 +2345,20 @@ const docTemplate = `{
                 "TemplateTypeGuidelines"
             ]
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AddTeamMemberRequest": {
+            "type": "object",
+            "required": [
+                "user_id"
+            ],
+            "properties": {
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRole"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.CoverageTokenResponse": {
             "type": "object",
             "properties": {
@@ -2143,6 +2491,23 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CreateTeamRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
                     "type": "string"
                 }
             }
@@ -2859,12 +3224,6 @@ const docTemplate = `{
                 "last_synced_at": {
                     "type": "string"
                 },
-                "members": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
-                    }
-                },
                 "metadata": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryMetadata"
                 },
@@ -2877,10 +3236,11 @@ const docTemplate = `{
                 "organization_id": {
                     "type": "string"
                 },
-                "owner_user": {
-                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.User"
+                "owner_team": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Team"
                 },
-                "owner_user_id": {
+                "owner_team_id": {
+                    "description": "OwnerTeamID is the accountable team. NULL means unowned, which is a real\nstate the catalog reports rather than a gap to be filled with a default.",
                     "type": "string"
                 },
                 "sync_error": {
@@ -3040,8 +3400,8 @@ const docTemplate = `{
                 "organization_id": {
                     "type": "string"
                 },
-                "owner_user_id": {
-                    "type": "string"
+                "owner_team": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRef"
                 },
                 "stats": {
                     "description": "Aggregated stats",
@@ -3121,6 +3481,171 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.SetRepositoryOwnerRequest": {
+            "type": "object",
+            "properties": {
+                "team_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.Team": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_user_id": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "external_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "member_count": {
+                    "description": "MemberCount is populated by list queries; never persisted.",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organization_id": {
+                    "type": "string"
+                },
+                "provider": {
+                    "description": "Provider/ExternalID stay empty for locally managed teams. When the GitHub\nimport lands, ExternalID holds the numeric team id — never the slug, which\nGitHub regenerates on rename.",
+                    "type": "string"
+                },
+                "repository_count": {
+                    "description": "RepositoryCount is populated by list queries; never persisted.",
+                    "type": "integer"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamMemberListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamMemberResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamMemberResponse": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRole"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "member_count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "repository_count": {
+                    "type": "integer"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamSource"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamRole": {
+            "type": "string",
+            "enum": [
+                "member",
+                "lead"
+            ],
+            "x-enum-varnames": [
+                "TeamRoleMember",
+                "TeamRoleLead"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamSource": {
+            "type": "string",
+            "enum": [
+                "local",
+                "github"
+            ],
+            "x-enum-varnames": [
+                "TeamSourceLocal",
+                "TeamSourceGitHub"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.Token": {
             "type": "object",
@@ -3268,6 +3793,17 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateTeamRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.User": {
             "type": "object",
             "properties": {
@@ -3294,12 +3830,6 @@ const docTemplate = `{
                 },
                 "last_seen": {
                     "type": "string"
-                },
-                "repositories": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Repository"
-                    }
                 },
                 "role": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
