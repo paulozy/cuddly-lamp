@@ -37,9 +37,21 @@ type RepositoryMetadata struct {
 	CommitCount  int `json:"commit_count,omitempty"`
 	Contributors int `json:"contributors,omitempty"`
 
-	// Configuration
-	HasCI        bool     `json:"has_ci,omitempty"`        // Has GitHub Actions/GitLab CI
-	HasTests     bool     `json:"has_tests,omitempty"`     // Has test suite
+	// Configuration.
+	//
+	// HasCI and HasTests are pointers so the three states stay distinct: true,
+	// false, and *not determined*. Sync populates them by inspecting the
+	// repository tree; nil means it never got a usable listing (never synced, or
+	// GitHub truncated the tree on a very large repository). A plain bool would
+	// force "we did not look" to render as "there is none", which is the kind of
+	// confident wrong answer that makes people stop trusting the catalog.
+	HasCI    *bool `json:"has_ci,omitempty"`
+	HasTests *bool `json:"has_tests,omitempty"`
+	// CIEvidence and TestEvidence name the path that proved the signal, so the
+	// UI can answer "why does it say that?" without a second lookup.
+	CIEvidence   string `json:"ci_evidence,omitempty"`
+	TestEvidence string `json:"test_evidence,omitempty"`
+
 	TestCoverage *float64 `json:"test_coverage,omitempty"` // Test coverage percentage
 }
 

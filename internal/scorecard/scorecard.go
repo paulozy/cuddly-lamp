@@ -44,6 +44,16 @@ type RepoFacts struct {
 	// webhooks at all (a localhost WEBHOOK_BASE_URL). Failing every repository
 	// for a platform-level configuration would be noise, not a finding.
 	WebhookRegistrationSkipped bool
+
+	// HasCI and HasTests are tri-state: nil means sync never determined the
+	// signal (never synced, or GitHub truncated the tree on a very large
+	// repository). Absence of evidence is reported as not_applicable, never as
+	// a failure — a confident "no tests" that is really "we did not look" is how
+	// a scorecard loses its audience.
+	HasCI        *bool
+	HasTests     *bool
+	CIEvidence   string
+	TestEvidence string
 }
 
 // Verdict is one check's outcome for one repository.
@@ -135,6 +145,34 @@ var registry = []Check{
 		},
 	},
 	{
+		ID:      "delivery.has_ci",
+		Version: 1,
+		Title:   "Tem CI configurado",
+		Eval: func(f RepoFacts) (Status, string) {
+			if f.HasCI == nil {
+				return StatusNotApplicable, "Ainda não inspecionamos os arquivos deste repositório."
+			}
+			if *f.HasCI {
+				return StatusPass, evidenceReason("Pipeline encontrado", f.CIEvidence)
+			}
+			return StatusFail, "Nenhuma configuração de CI encontrada no repositório."
+		},
+	},
+	{
+		ID:      "quality.has_tests",
+		Version: 1,
+		Title:   "Tem testes automatizados",
+		Eval: func(f RepoFacts) (Status, string) {
+			if f.HasTests == nil {
+				return StatusNotApplicable, "Ainda não inspecionamos os arquivos deste repositório."
+			}
+			if *f.HasTests {
+				return StatusPass, evidenceReason("Testes encontrados", f.TestEvidence)
+			}
+			return StatusFail, "Nenhum arquivo de teste reconhecido no repositório."
+		},
+	},
+	{
 		ID:      "quality.coverage_reported",
 		Version: 1,
 		Title:   "Cobertura reportada",
@@ -151,6 +189,15 @@ var registry = []Check{
 			return StatusPass, "O CI está reportando cobertura."
 		},
 	},
+}
+
+// evidenceReason names the file that proved a signal, so a passing check can
+// answer "why does it say that?" without the user going to look.
+func evidenceReason(prefix, evidence string) string {
+	if evidence == "" {
+		return prefix + "."
+	}
+	return prefix + ": " + evidence
 }
 
 // Summary is the rendered result for one repository. Passing is a count, not a

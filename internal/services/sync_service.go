@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/paulozy/idp-with-ai-backend/internal/detect"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
@@ -122,9 +123,32 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, owner
 		return fmt.Errorf("list pull requests: %w", err)
 	}
 
-	languages := make(map[string]int)
-	if info.Language != "" {
-		languages[info.Language] = 100
+	// The real language breakdown. `info.Language` is only the dominant one, and
+	// test detection gates on the full set. Soft-fail: an unavailable breakdown
+	// degrades detection to "unknown", it does not fail the sync.
+	languages, err := gh.GetLanguages(ctx, owner, name)
+	if err != nil || len(languages) == 0 {
+		if err != nil {
+			utils.Warn("sync: language breakdown unavailable", "repo_id", repo.ID, "error", err)
+		}
+		languages = make(map[string]int)
+		if info.Language != "" {
+			languages[info.Language] = 100
+		}
+	}
+
+	// Detection is best-effort by design. A repository we cannot inspect must
+	// report "unknown", never a confident "no CI, no tests" — and it must never
+	// turn a healthy sync into sync_status=error, which would fail the
+	// sync.healthy check as collateral damage.
+	repo.Metadata.HasCI, repo.Metadata.CIEvidence = nil, ""
+	repo.Metadata.HasTests, repo.Metadata.TestEvidence = nil, ""
+	if tree, treeErr := gh.GetRepositoryTree(ctx, owner, name, defaultBranch); treeErr != nil {
+		utils.Warn("sync: repository tree unavailable, CI/test signals left undetermined",
+			"repo_id", repo.ID, "error", treeErr)
+	} else if tree != nil {
+		paths := tree.BlobPaths()
+		applyDetection(repo, detect.DetectCI(paths, tree.Truncated), detect.DetectTests(paths, languages, tree.Truncated))
 	}
 
 	repo.Metadata.ProviderID = strconv.Itoa(info.ID)
@@ -243,4 +267,27 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// applyDetection writes the two signals onto the repository's metadata. Only a
+// definitive yes/no is recorded — `unknown` leaves the field nil, which is what
+// makes the scorecard report "not verified" instead of inventing a "no".
+func applyDetection(repo *models.Repository, ci, tests detect.Detection) {
+	if ci.Result != detect.ResultUnknown {
+		has := ci.Result == detect.ResultYes
+		repo.Metadata.HasCI = &has
+		repo.Metadata.CIEvidence = firstEvidence(ci)
+	}
+	if tests.Result != detect.ResultUnknown {
+		has := tests.Result == detect.ResultYes
+		repo.Metadata.HasTests = &has
+		repo.Metadata.TestEvidence = firstEvidence(tests)
+	}
+}
+
+func firstEvidence(d detect.Detection) string {
+	if len(d.Evidence) == 0 {
+		return ""
+	}
+	return d.Evidence[0]
 }

@@ -13,11 +13,15 @@ import (
 // ── mock GitHub client ────────────────────────────────────────────────────────
 
 type mockGitHubClient struct {
-	repoInfo *githubclient.RepoInfo
-	repoErr  error
-	branches []githubclient.Branch
-	commits  []githubclient.Commit
-	prs      []githubclient.PullRequest
+	repoInfo     *githubclient.RepoInfo
+	repoErr      error
+	branches     []githubclient.Branch
+	commits      []githubclient.Commit
+	prs          []githubclient.PullRequest
+	tree         *githubclient.RepoTree
+	treeErr      error
+	languages    map[string]int
+	languagesErr error
 }
 
 func (m *mockGitHubClient) GetRepository(_ context.Context, _, _ string) (*githubclient.RepoInfo, error) {
@@ -36,6 +40,14 @@ func (m *mockGitHubClient) ListPullRequests(_ context.Context, _, _ string) ([]g
 	return m.prs, nil
 }
 
+func (m *mockGitHubClient) GetRepositoryTree(_ context.Context, _, _, _ string) (*githubclient.RepoTree, error) {
+	return m.tree, m.treeErr
+}
+
+func (m *mockGitHubClient) GetLanguages(_ context.Context, _, _ string) (map[string]int, error) {
+	return m.languages, m.languagesErr
+}
+
 func (m *mockGitHubClient) CreateWebhook(_ context.Context, _, _, _, _ string) (int64, error) {
 	return 0, nil
 }
@@ -51,7 +63,6 @@ func (m *mockGitHubClient) GetPullRequest(_ context.Context, _, _ string, _ int6
 func (m *mockGitHubClient) GetPullRequestFiles(_ context.Context, _, _ string, _ int64) ([]githubclient.PRFile, error) {
 	return nil, nil
 }
-
 
 func (m *mockGitHubClient) CreateBranch(_ context.Context, _, _, _, _ string) error {
 	return nil
@@ -279,5 +290,89 @@ func TestSyncService_SyncRepository_RejectsNonGitHubProvider(t *testing.T) {
 				t.Errorf("metadata was populated from GitHub: %+v", updated.Metadata)
 			}
 		})
+	}
+}
+
+// ── CI / test detection during sync ──────────────────────────────────────────
+
+func syncWithTree(t *testing.T, tree *githubclient.RepoTree, treeErr error, langs map[string]int) *models.Repository {
+	t.Helper()
+	store := newMockSyncRepoStore()
+	seedRepo(store, "repo-1", "https://github.com/owner/repo")
+	gh := &mockGitHubClient{
+		repoInfo:  &githubclient.RepoInfo{ID: 1, Language: "Go", DefaultBranch: "main"},
+		tree:      tree,
+		treeErr:   treeErr,
+		languages: langs,
+	}
+	if err := newSyncService(store, gh).SyncRepository(context.Background(), "repo-1"); err != nil {
+		t.Fatalf("SyncRepository: %v", err)
+	}
+	return store.repos["repo-1"]
+}
+
+func blobTree(truncated bool, paths ...string) *githubclient.RepoTree {
+	tree := &githubclient.RepoTree{Truncated: truncated}
+	for _, p := range paths {
+		tree.Tree = append(tree.Tree, githubclient.TreeEntry{Path: p, Type: "blob"})
+	}
+	return tree
+}
+
+func TestSync_RecordsDetectedSignalsWithEvidence(t *testing.T) {
+	repo := syncWithTree(t,
+		blobTree(false, "main.go", ".github/workflows/ci.yml", "internal/svc_test.go"),
+		nil, map[string]int{"Go": 1000})
+
+	if repo.Metadata.HasCI == nil || !*repo.Metadata.HasCI {
+		t.Error("HasCI should be true")
+	}
+	if repo.Metadata.CIEvidence != ".github/workflows/ci.yml" {
+		t.Errorf("CIEvidence = %q", repo.Metadata.CIEvidence)
+	}
+	if repo.Metadata.HasTests == nil || !*repo.Metadata.HasTests {
+		t.Error("HasTests should be true")
+	}
+	if repo.Metadata.TestEvidence != "internal/svc_test.go" {
+		t.Errorf("TestEvidence = %q", repo.Metadata.TestEvidence)
+	}
+}
+
+func TestSync_RecordsADefinitiveNo(t *testing.T) {
+	repo := syncWithTree(t, blobTree(false, "main.go", "README.md"), nil, map[string]int{"Go": 1000})
+
+	if repo.Metadata.HasCI == nil || *repo.Metadata.HasCI {
+		t.Error("HasCI should be a definitive false")
+	}
+	if repo.Metadata.HasTests == nil || *repo.Metadata.HasTests {
+		t.Error("HasTests should be a definitive false")
+	}
+}
+
+// Detection is best-effort. A repository whose tree we cannot read must end up
+// with undetermined signals — and, critically, a *successful* sync: turning the
+// sync red would also fail the sync.healthy check as collateral damage.
+func TestSync_TreeFailureLeavesSignalsUndeterminedAndSyncHealthy(t *testing.T) {
+	repo := syncWithTree(t, nil, errors.New("403 from github"), map[string]int{"Go": 1000})
+
+	if repo.Metadata.HasCI != nil || repo.Metadata.HasTests != nil {
+		t.Error("signals should be nil when the tree could not be read")
+	}
+	if repo.SyncStatus != "synced" {
+		t.Errorf("SyncStatus = %q, want synced — detection must not break the sync", repo.SyncStatus)
+	}
+}
+
+// A truncated tree cannot prove absence, so the signals stay nil rather than
+// recording a confident "no".
+func TestSync_TruncatedTreeLeavesSignalsUndetermined(t *testing.T) {
+	repo := syncWithTree(t, blobTree(true, "src/a.go"), nil, map[string]int{"Go": 1000})
+
+	if repo.Metadata.HasCI != nil || repo.Metadata.HasTests != nil {
+		t.Errorf("signals should stay nil on a truncated tree, got ci=%v tests=%v",
+			repo.Metadata.HasCI, repo.Metadata.HasTests)
+	}
+	if repo.SyncStatus != "synced" {
+		t.Errorf("SyncStatus = %q, want synced", repo.SyncStatus)
 	}
 }

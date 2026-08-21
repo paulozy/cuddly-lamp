@@ -3304,6 +3304,10 @@ const docTemplate = `{
                 "branch_count": {
                     "type": "integer"
                 },
+                "ci_evidence": {
+                    "description": "CIEvidence and TestEvidence name the path that proved the signal, so the\nUI can answer \"why does it say that?\" without a second lookup.",
+                    "type": "string"
+                },
                 "commit_count": {
                     "type": "integer"
                 },
@@ -3324,11 +3328,10 @@ const docTemplate = `{
                     }
                 },
                 "has_ci": {
-                    "description": "Configuration",
+                    "description": "Configuration.\n\nHasCI and HasTests are pointers so the three states stay distinct: true,\nfalse, and *not determined*. Sync populates them by inspecting the\nrepository tree; nil means it never got a usable listing (never synced, or\nGitHub truncated the tree on a very large repository). A plain bool would\nforce \"we did not look\" to render as \"there is none\", which is the kind of\nconfident wrong answer that makes people stop trusting the catalog.",
                     "type": "boolean"
                 },
                 "has_tests": {
-                    "description": "Has test suite",
                     "type": "boolean"
                 },
                 "issue_count": {
@@ -3362,6 +3365,9 @@ const docTemplate = `{
                 "test_coverage": {
                     "description": "Test coverage percentage",
                     "type": "number"
+                },
+                "test_evidence": {
+                    "type": "string"
                 },
                 "topics": {
                     "description": "GitHub topics/GitLab tags",

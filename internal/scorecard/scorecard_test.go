@@ -1,9 +1,14 @@
 package scorecard
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // healthy is a repository that passes everything, so each test can express
 // exactly one deviation and nothing else.
+func boolPtr(v bool) *bool { return &v }
+
 func healthy() RepoFacts {
 	return RepoFacts{
 		HasOwnerTeam:   true,
@@ -14,6 +19,10 @@ func healthy() RepoFacts {
 		CoverageStatus: "ok",
 		HasDocs:        true,
 		HasWebhook:     true,
+		HasCI:          boolPtr(true),
+		HasTests:       boolPtr(true),
+		CIEvidence:     ".github/workflows/ci.yml",
+		TestEvidence:   "internal/foo_test.go",
 	}
 }
 
@@ -53,6 +62,8 @@ func TestEvaluate_EachCheckFailsOnItsOwnSignal(t *testing.T) {
 		{"docs.has_generated_docs", func(f *RepoFacts) { f.HasDocs = false }},
 		{"delivery.webhook_registered", func(f *RepoFacts) { f.HasWebhook = false }},
 		{"quality.coverage_reported", func(f *RepoFacts) { f.HasCoverage = false }},
+		{"delivery.has_ci", func(f *RepoFacts) { f.HasCI = boolPtr(false) }},
+		{"quality.has_tests", func(f *RepoFacts) { f.HasTests = boolPtr(false) }},
 	}
 
 	for _, tt := range tests {
@@ -86,6 +97,24 @@ func TestEvaluate_UnmeasuredSignalsAreNotApplicableRatherThanFailures(t *testing
 		}
 		if s.Failing != 0 {
 			t.Errorf("failing = %d, want 0", s.Failing)
+		}
+	})
+
+	// The reason has_ci/has_tests are pointers: a repository we never inspected
+	// must not be reported as having no CI and no tests.
+	t.Run("repository never inspected", func(t *testing.T) {
+		facts := healthy()
+		facts.HasCI = nil
+		facts.HasTests = nil
+		s := Evaluate(facts)
+
+		for _, id := range []string{"delivery.has_ci", "quality.has_tests"} {
+			if got := verdictFor(t, s, id).Status; got != StatusNotApplicable {
+				t.Errorf("%s = %q, want not_applicable", id, got)
+			}
+		}
+		if s.Failing != 0 {
+			t.Errorf("failing = %d, want 0 — not looking is not a failure", s.Failing)
 		}
 	})
 
@@ -146,6 +175,18 @@ func TestEvaluate_FreshRepositoryIsActionableNotEmpty(t *testing.T) {
 	}
 }
 
+// A passing check should say what proved it, so nobody has to go looking.
+func TestEvaluate_PassingSignalsNameTheirEvidence(t *testing.T) {
+	s := Evaluate(healthy())
+
+	if got := verdictFor(t, s, "delivery.has_ci").Reason; !strings.Contains(got, ".github/workflows/ci.yml") {
+		t.Errorf("reason = %q, want it to name the workflow file", got)
+	}
+	if got := verdictFor(t, s, "quality.has_tests").Reason; !strings.Contains(got, "internal/foo_test.go") {
+		t.Errorf("reason = %q, want it to name the test file", got)
+	}
+}
+
 // IDs are persisted history keys once results are stored; renaming one silently
 // orphans its history.
 func TestCheckIDs_AreStableAndUnique(t *testing.T) {
@@ -155,6 +196,8 @@ func TestCheckIDs_AreStableAndUnique(t *testing.T) {
 		"sync.healthy",
 		"docs.has_generated_docs",
 		"delivery.webhook_registered",
+		"delivery.has_ci",
+		"quality.has_tests",
 		"quality.coverage_reported",
 	}
 	got := CheckIDs()

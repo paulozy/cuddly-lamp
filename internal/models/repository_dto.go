@@ -116,6 +116,10 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 			CoverageStatus: es.CoverageStatus,
 			HasDocs:        es.HasDocs,
 			HasWebhook:     es.HasWebhook,
+			HasCI:          r.Metadata.HasCI,
+			HasTests:       r.Metadata.HasTests,
+			CIEvidence:     r.Metadata.CIEvidence,
+			TestEvidence:   r.Metadata.TestEvidence,
 			// Whether this deployment can register webhooks at all is platform
 			// configuration the model cannot see; the handler layer sets it.
 			WebhookRegistrationSkipped: WebhookRegistrationUnavailable,
