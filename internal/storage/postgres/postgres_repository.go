@@ -352,7 +352,11 @@ func (pr *PostgresRepository) UpdateRepository(ctx context.Context, repo *models
 		return errors.New("invalid repository data")
 	}
 
-	if err := pr.db.WithContext(ctx).Save(repo).Error; err != nil {
+	// Omit associations: a repository write must only ever touch the
+	// repositories row. Belongs-to associations are upserted by GORM before the
+	// main row, which is how a partially-populated owner team once got written
+	// back with an empty organization_id.
+	if err := pr.db.WithContext(ctx).Omit(clause.Associations).Save(repo).Error; err != nil {
 		return fmt.Errorf("update repository: %w", err)
 	}
 	return nil
@@ -514,7 +518,7 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 
 	if e.OwnerTeamID.Valid {
 		repo.OwnerTeamID = &e.OwnerTeamID.String
-		repo.OwnerTeam = &models.Team{
+		repo.OwnerTeam = &models.TeamRef{
 			ID:   e.OwnerTeamID.String,
 			Name: e.OwnerTeamName.String,
 			Slug: e.OwnerTeamSlug.String,

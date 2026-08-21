@@ -3237,7 +3237,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "owner_team": {
-                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Team"
+                    "description": "OwnerTeam is filled by the enriched read so callers can render the owner\nwithout a second query. It is ` + "`" + `gorm:\"-\"` + "`" + ` and a plain TeamRef rather than a\n*Team on purpose: as a belongs-to association GORM upserts the referenced\nrow on every Save, and the partial team the read produces (id/name/slug)\nwould be written back with an empty organization_id.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRef"
+                        }
+                    ]
                 },
                 "owner_team_id": {
                     "description": "OwnerTeamID is the accountable team. NULL means unowned, which is a real\nstate the catalog reports rather than a gap to be filled with a default.",
@@ -3486,53 +3491,6 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "team_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "github_com_paulozy_idp-with-ai-backend_internal_models.Team": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "created_by_user_id": {
-                    "type": "string"
-                },
-                "deleted_at": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "external_id": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "member_count": {
-                    "description": "MemberCount is populated by list queries; never persisted.",
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "organization_id": {
-                    "type": "string"
-                },
-                "provider": {
-                    "description": "Provider/ExternalID stay empty for locally managed teams. When the GitHub\nimport lands, ExternalID holds the numeric team id — never the slug, which\nGitHub regenerates on rename.",
-                    "type": "string"
-                },
-                "repository_count": {
-                    "description": "RepositoryCount is populated by list queries; never persisted.",
-                    "type": "integer"
-                },
-                "slug": {
-                    "type": "string"
-                },
-                "updated_at": {
                     "type": "string"
                 }
             }

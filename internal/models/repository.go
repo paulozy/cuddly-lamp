@@ -67,7 +67,12 @@ type Repository struct {
 	// OwnerTeamID is the accountable team. NULL means unowned, which is a real
 	// state the catalog reports rather than a gap to be filled with a default.
 	OwnerTeamID *string `gorm:"type:uuid;index" json:"owner_team_id,omitempty"`
-	OwnerTeam   *Team   `gorm:"foreignKey:OwnerTeamID" json:"owner_team,omitempty"`
+	// OwnerTeam is filled by the enriched read so callers can render the owner
+	// without a second query. It is `gorm:"-"` and a plain TeamRef rather than a
+	// *Team on purpose: as a belongs-to association GORM upserts the referenced
+	// row on every Save, and the partial team the read produces (id/name/slug)
+	// would be written back with an empty organization_id.
+	OwnerTeam *TeamRef `gorm:"-" json:"owner_team,omitempty"`
 
 	IsPublic bool `gorm:"default:false" json:"is_public"`
 

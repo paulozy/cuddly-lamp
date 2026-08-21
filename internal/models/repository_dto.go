@@ -72,7 +72,8 @@ func RepositoryToResponse(r *Repository) *RepositoryResponse {
 		SyncError:       r.SyncError,
 	}
 	if r.OwnerTeam != nil {
-		resp.OwnerTeam = &TeamRef{ID: r.OwnerTeam.ID, Name: r.OwnerTeam.Name, Slug: r.OwnerTeam.Slug}
+		owner := *r.OwnerTeam
+		resp.OwnerTeam = &owner
 	}
 	if !r.LastSyncedAt.IsZero() {
 		t := r.LastSyncedAt

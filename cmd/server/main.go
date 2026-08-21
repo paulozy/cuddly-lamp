@@ -86,7 +86,17 @@ func main() {
 	}
 	defer rdbClient.Close()
 
-	cache := redisstore.NewRedisCache(rdbClient)
+	// `redisstore.NewNoop()` yields a client whose Client() is nil, and
+	// redisCache dereferences it on every call. Handing that to the services
+	// makes any cached read or invalidation panic — which contradicts the
+	// "Redis unavailable, running without cache" we just logged. Fall back to
+	// the no-op cache so the degraded path is genuinely degraded, not broken.
+	var cache redisstore.Cache
+	if rdbClient.Client() != nil {
+		cache = redisstore.NewRedisCache(rdbClient)
+	} else {
+		cache = redisstore.NewNoopCache()
+	}
 
 	var enqueuer jobs.Enqueuer
 	if rdbClient.Client() != nil {
