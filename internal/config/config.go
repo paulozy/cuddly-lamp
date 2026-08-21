@@ -8,12 +8,12 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig
-	Database   DatabaseConfig
-	Redis      RedisConfig
-	API        APIConfig
-	OAuth      OAuthConfig
-	Log        LogConfig
+	Server   ServerConfig
+	Database DatabaseConfig
+	Redis    RedisConfig
+	API      APIConfig
+	OAuth    OAuthConfig
+	Log      LogConfig
 }
 
 type ServerConfig struct {
@@ -50,7 +50,11 @@ type APIConfig struct {
 	AnthropicAPIKey        string
 	AnthropicTokensPerHour int
 	GithubToken            string
-	WebhookBaseURL         string // public base URL for webhook endpoints, e.g. https://api.example.com
+	GitlabToken            string
+	// GitlabBaseURL overrides the gitlab.com API root deployment-wide, for a
+	// self-hosted instance. Organizations can override it individually.
+	GitlabBaseURL  string
+	WebhookBaseURL string // public base URL for webhook endpoints, e.g. https://api.example.com
 }
 
 type LogConfig struct {
@@ -90,6 +94,8 @@ func Load() *Config {
 			AnthropicAPIKey:        getEnv("ANTHROPIC_API_KEY", ""),
 			AnthropicTokensPerHour: getEnvInt("ANTHROPIC_TOKENS_PER_HOUR", 20000),
 			GithubToken:            getEnv("GITHUB_TOKEN", ""),
+			GitlabToken:            getEnv("GITLAB_TOKEN", ""),
+			GitlabBaseURL:          getEnv("GITLAB_BASE_URL", ""),
 			WebhookBaseURL:         getEnv("WEBHOOK_BASE_URL", ""),
 		},
 		OAuth: OAuthConfig{

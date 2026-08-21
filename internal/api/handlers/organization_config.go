@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -154,6 +155,12 @@ func applyOrganizationConfigUpdate(cfg *models.OrganizationConfig, req models.Up
 	}
 	if req.GithubToken != nil {
 		cfg.GithubToken = *req.GithubToken
+	}
+	if req.GitlabToken != nil {
+		cfg.GitlabToken = *req.GitlabToken
+	}
+	if req.GitlabBaseURL != nil {
+		cfg.GitlabBaseURL = strings.TrimSpace(*req.GitlabBaseURL)
 	}
 	if req.GitHubClientID != nil {
 		cfg.GitHubClientID = *req.GitHubClientID

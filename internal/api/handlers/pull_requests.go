@@ -4,42 +4,36 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
-type pullRequestGitHubContext struct {
-	repository *models.Repository
-	config     *models.OrganizationConfig
-	client     github.ClientInterface
-	owner      string
-	repoName   string
+type pullRequestContext struct {
+	client scm.ChangeRequestReader
+	ref    scm.RepoRef
 }
 
-// PullRequestHandler serves read-only GitHub pull request data: listing,
+// PullRequestHandler serves read-only pull/merge request data: listing,
 // detail, and changed files. It holds no queue or cache because nothing here
-// is asynchronous — every response is a straight pass-through of the GitHub
-// API for the repository's organization token.
+// is asynchronous — every response is a straight pass-through of the host's
+// API using the repository organization's token.
 type PullRequestHandler struct {
-	repo          storage.Repository
-	githubFactory func(token string) github.ClientInterface
+	repo storage.Repository
+	// hosts carries the deployment's provider API roots, with no tokens — see
+	// scm.HostsOnly for why the two are treated differently.
+	hosts   scm.Credentials
+	resolve scm.ResolverFunc
 }
 
-func NewPullRequestHandler(repo storage.Repository) *PullRequestHandler {
-	return &PullRequestHandler{
-		repo: repo,
-		githubFactory: func(token string) github.ClientInterface {
-			return github.NewClient(token)
-		},
-	}
+func NewPullRequestHandler(repo storage.Repository, hosts scm.Credentials) *PullRequestHandler {
+	return &PullRequestHandler{repo: repo, hosts: hosts, resolve: scm.For}
 }
 
-// ListPullRequests lists open GitHub pull requests for a repository.
+// ListPullRequests lists open pull/merge requests for a repository.
 // @Summary      List repository pull requests
 // @Tags         pull-requests
 // @Produce      json
@@ -52,14 +46,14 @@ func NewPullRequestHandler(repo storage.Repository) *PullRequestHandler {
 // @Failure      503 {object}  models.ErrorResponse
 // @Router       /repositories/{id}/pull-requests [get]
 func (h *PullRequestHandler) ListPullRequests(c *gin.Context) {
-	ghCtx, ok := h.resolveGitHubContext(c, c.Param("id"))
+	prCtx, ok := h.resolveContext(c, c.Param("id"))
 	if !ok {
 		return
 	}
 
-	prs, err := ghCtx.client.ListPullRequests(c.Request.Context(), ghCtx.owner, ghCtx.repoName)
+	prs, err := prCtx.client.ListChangeRequests(c.Request.Context(), prCtx.ref)
 	if err != nil {
-		h.githubError(c, err)
+		h.providerError(c, err)
 		return
 	}
 
@@ -91,19 +85,19 @@ func (h *PullRequestHandler) ListPullRequests(c *gin.Context) {
 // @Failure      503        {object}  models.ErrorResponse
 // @Router       /repositories/{id}/pull-requests/{pr_number} [get]
 func (h *PullRequestHandler) GetPullRequest(c *gin.Context) {
-	ghCtx, prNumber, ok := h.resolvePullRequestContext(c)
+	prCtx, prNumber, ok := h.resolvePullRequestContext(c)
 	if !ok {
 		return
 	}
 
-	pr, err := ghCtx.client.GetPullRequest(c.Request.Context(), ghCtx.owner, ghCtx.repoName, int64(prNumber))
+	pr, err := prCtx.client.GetChangeRequest(c.Request.Context(), prCtx.ref, int64(prNumber))
 	if err != nil {
-		h.githubError(c, err)
+		h.providerError(c, err)
 		return
 	}
-	files, err := ghCtx.client.GetPullRequestFiles(c.Request.Context(), ghCtx.owner, ghCtx.repoName, int64(prNumber))
+	files, err := prCtx.client.GetChangeRequestFiles(c.Request.Context(), prCtx.ref, int64(prNumber))
 	if err != nil {
-		h.githubError(c, err)
+		h.providerError(c, err)
 		return
 	}
 
@@ -128,14 +122,14 @@ func (h *PullRequestHandler) GetPullRequest(c *gin.Context) {
 // @Failure      503        {object}  models.ErrorResponse
 // @Router       /repositories/{id}/pull-requests/{pr_number}/files [get]
 func (h *PullRequestHandler) GetPullRequestFiles(c *gin.Context) {
-	ghCtx, prNumber, ok := h.resolvePullRequestContext(c)
+	prCtx, prNumber, ok := h.resolvePullRequestContext(c)
 	if !ok {
 		return
 	}
 
-	files, err := ghCtx.client.GetPullRequestFiles(c.Request.Context(), ghCtx.owner, ghCtx.repoName, int64(prNumber))
+	files, err := prCtx.client.GetChangeRequestFiles(c.Request.Context(), prCtx.ref, int64(prNumber))
 	if err != nil {
-		h.githubError(c, err)
+		h.providerError(c, err)
 		return
 	}
 	items := pullRequestFilesToResponse(files)
@@ -145,27 +139,39 @@ func (h *PullRequestHandler) GetPullRequestFiles(c *gin.Context) {
 	})
 }
 
-func (h *PullRequestHandler) resolvePullRequestContext(c *gin.Context) (*pullRequestGitHubContext, int, bool) {
+func (h *PullRequestHandler) resolvePullRequestContext(c *gin.Context) (*pullRequestContext, int, bool) {
 	prNumber, ok := parsePullRequestNumber(c)
 	if !ok {
 		return nil, 0, false
 	}
-	ghCtx, ok := h.resolveGitHubContext(c, c.Param("id"))
+	prCtx, ok := h.resolveContext(c, c.Param("id"))
 	if !ok {
 		return nil, 0, false
 	}
-	return ghCtx, prNumber, true
+	return prCtx, prNumber, true
 }
 
-func (h *PullRequestHandler) resolveGitHubContext(c *gin.Context, repoID string) (*pullRequestGitHubContext, bool) {
+func (h *PullRequestHandler) resolveContext(c *gin.Context, repoID string) (*pullRequestContext, bool) {
 	repository, ok := h.fetchAccessibleRepository(c, repoID)
 	if !ok {
 		return nil, false
 	}
-	if repository.Type != "" && repository.Type != models.RepositoryTypeGitHub {
+
+	// The host in the URL decides which provider is queried, not the stored
+	// type — the URL is what the user gave us and it is never empty.
+	projectPath, provider, err := utils.ParseRepositoryURL(repository.URL)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "unsupported_repository_type",
-			ErrorDescription: "pull requests are supported only for github repositories",
+			Error:            "invalid_repository_url",
+			ErrorDescription: err.Error(),
+		})
+		return nil, false
+	}
+	ref, err := scm.ParseRepoRef(projectPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_repository_url",
+			ErrorDescription: "repository URL must identify a namespace and a repository",
 		})
 		return nil, false
 	}
@@ -178,38 +184,18 @@ func (h *PullRequestHandler) resolveGitHubContext(c *gin.Context, repoID string)
 		})
 		return nil, false
 	}
-	if cfg == nil || cfg.GithubToken == "" {
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "github_unavailable",
-			ErrorDescription: "github token is not configured for this organization",
-		})
-		return nil, false
-	}
 
-	ownerRepo, _, err := utils.ParseRepositoryURL(repository.URL)
+	// The organization's own token, never the platform's — browsing another
+	// organization's code with the deployment's credentials is not something a
+	// read endpoint should silently do. The host does fall back, because
+	// talking to the wrong GitLab is worse than talking to none.
+	client, err := h.resolve(provider, scm.CredentialsFromConfig(cfg, h.hosts))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_repository_url",
-			ErrorDescription: err.Error(),
-		})
-		return nil, false
-	}
-	parts := strings.Split(ownerRepo, "/")
-	if len(parts) != 2 {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_repository_url",
-			ErrorDescription: "repository URL must identify owner and repository",
-		})
+		h.providerError(c, err)
 		return nil, false
 	}
 
-	return &pullRequestGitHubContext{
-		repository: repository,
-		config:     cfg,
-		client:     h.githubFactory(cfg.GithubToken),
-		owner:      parts[0],
-		repoName:   parts[1],
-	}, true
+	return &pullRequestContext{client: client, ref: ref}, true
 }
 
 func (h *PullRequestHandler) fetchAccessibleRepository(c *gin.Context, repoID string) (*models.Repository, bool) {
@@ -256,26 +242,36 @@ func (h *PullRequestHandler) fetchAccessibleRepository(c *gin.Context, repoID st
 	return repository, true
 }
 
-func (h *PullRequestHandler) githubError(c *gin.Context, err error) {
+func (h *PullRequestHandler) providerError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, github.ErrNotFound):
+	case errors.Is(err, scm.ErrUnsupportedProvider):
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "unsupported_repository_type",
+			ErrorDescription: err.Error(),
+		})
+	case errors.Is(err, scm.ErrMissingCredentials):
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:            "provider_unavailable",
+			ErrorDescription: "no access token is configured for this repository's provider",
+		})
+	case errors.Is(err, scm.ErrNotFound):
 		c.JSON(http.StatusNotFound, models.ErrorResponse{
 			Error:            "not_found",
-			ErrorDescription: "github resource not found",
+			ErrorDescription: "provider resource not found",
 		})
-	case errors.Is(err, github.ErrUnauthorized):
+	case errors.Is(err, scm.ErrUnauthorized):
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "github_unavailable",
-			ErrorDescription: "github token is invalid or unauthorized",
+			Error:            "provider_unavailable",
+			ErrorDescription: "the configured provider token is invalid or unauthorized",
 		})
-	case errors.Is(err, github.ErrRateLimited):
+	case errors.Is(err, scm.ErrRateLimited):
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "github_rate_limited",
-			ErrorDescription: "github API rate limit exceeded",
+			Error:            "provider_rate_limited",
+			ErrorDescription: "provider API rate limit exceeded",
 		})
 	default:
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "github_unavailable",
+			Error:            "provider_unavailable",
 			ErrorDescription: err.Error(),
 		})
 	}
@@ -293,36 +289,36 @@ func parsePullRequestNumber(c *gin.Context) (int, bool) {
 	return prNumber, true
 }
 
-func pullRequestToResponse(pr github.PullRequest) models.PullRequestResponse {
+func pullRequestToResponse(pr scm.ChangeRequest) models.PullRequestResponse {
 	return models.PullRequestResponse{
 		ID:             pr.ID,
 		Number:         pr.Number,
 		Title:          pr.Title,
 		Body:           pr.Body,
 		State:          pr.State,
-		AuthorLogin:    pr.User.Login,
-		HeadBranch:     pr.Head.DisplayName(),
-		HeadSHA:        pr.Head.SHA,
-		BaseBranch:     pr.Base.DisplayName(),
-		BaseSHA:        pr.Base.SHA,
+		AuthorLogin:    pr.AuthorLogin,
+		HeadBranch:     pr.HeadRef,
+		HeadSHA:        pr.HeadSHA,
+		BaseBranch:     pr.BaseRef,
+		BaseSHA:        pr.BaseSHA,
 		Draft:          pr.Draft,
 		CommitsCount:   pr.CommitsCount,
 		ChangedFiles:   pr.ChangedFiles,
-		AdditionsCount: pr.AdditionsCount,
-		DeletionsCount: pr.DeletionsCount,
-		HTMLURL:        pr.HTMLURL,
+		AdditionsCount: pr.Additions,
+		DeletionsCount: pr.Deletions,
+		HTMLURL:        pr.WebURL,
 		CreatedAt:      pr.CreatedAt,
 		UpdatedAt:      pr.UpdatedAt,
 		MergedAt:       pr.MergedAt,
 	}
 }
 
-func pullRequestFilesToResponse(files []github.PRFile) []models.PullRequestFileResponse {
+func pullRequestFilesToResponse(files []scm.ChangeRequestFile) []models.PullRequestFileResponse {
 	out := make([]models.PullRequestFileResponse, 0, len(files))
 	for _, file := range files {
 		out = append(out, models.PullRequestFileResponse{
 			SHA:       file.SHA,
-			Filename:  file.Filename,
+			Filename:  file.Path,
 			Status:    file.Status,
 			Additions: file.Additions,
 			Deletions: file.Deletions,

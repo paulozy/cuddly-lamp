@@ -2294,6 +2294,72 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/webhooks/gitlab/{repoID}": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Receive GitLab webhook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Repository ID",
+                        "name": "repoID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Webhook secret token",
+                        "name": "X-Gitlab-Token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Event name (Push Hook, Merge Request Hook, ...)",
+                        "name": "X-Gitlab-Event",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Delivery ID (idempotency); derived from the payload when absent",
+                        "name": "X-Gitlab-Event-UUID",
+                        "in": "header"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Duplicate delivery (already processed)"
+                    },
+                    "202": {
+                        "description": "Webhook accepted for processing"
+                    },
+                    "400": {
+                        "description": "Missing repository ID",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid token or no webhook configured",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -2975,6 +3041,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "gitlab_client_secret_configured": {
+                    "type": "boolean"
+                },
+                "gitlab_token_configured": {
                     "type": "boolean"
                 },
                 "output_language": {
@@ -3746,6 +3815,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "gitlab_client_secret": {
+                    "type": "string"
+                },
+                "gitlab_token": {
                     "type": "string"
                 },
                 "output_language": {

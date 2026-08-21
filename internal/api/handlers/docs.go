@@ -12,6 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/docs"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -23,10 +24,12 @@ import (
 type DocsHandler struct {
 	repo     storage.Repository
 	enqueuer jobs.Enqueuer
+	// hosts carries the deployment's provider API roots, with no tokens.
+	hosts scm.Credentials
 }
 
-func NewDocsHandler(repo storage.Repository, enqueuer jobs.Enqueuer) *DocsHandler {
-	return &DocsHandler{repo: repo, enqueuer: enqueuer}
+func NewDocsHandler(repo storage.Repository, enqueuer jobs.Enqueuer, hosts scm.Credentials) *DocsHandler {
+	return &DocsHandler{repo: repo, enqueuer: enqueuer, hosts: hosts}
 }
 
 // GenerateRepositoryDocs queues AI documentation generation for a repository.
@@ -75,10 +78,19 @@ func (h *DocsHandler) GenerateRepositoryDocs(c *gin.Context) {
 		})
 		return
 	}
-	if cfg.GithubToken == "" {
+	// Documentation is delivered as a change request on the repository's own
+	// host, so the credential that must exist is that host's — not GitHub's.
+	// Resolving here turns a worker-time failure into an immediate 503.
+	if _, provider, urlErr := utils.ParseRepositoryURL(repository.URL); urlErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_repository_url",
+			ErrorDescription: urlErr.Error(),
+		})
+		return
+	} else if _, resolveErr := scm.For(provider, scm.CredentialsFromConfig(cfg, h.hosts)); resolveErr != nil {
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
 			Error:            "docs_generation_unavailable",
-			ErrorDescription: "github token is not configured for this organization",
+			ErrorDescription: resolveErr.Error(),
 		})
 		return
 	}

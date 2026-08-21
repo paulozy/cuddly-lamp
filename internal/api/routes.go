@@ -6,6 +6,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/api/handlers"
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
@@ -32,8 +33,11 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	pullRequestHandler := factories.MakePullRequestHandler(repository)
-	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
+	// Provider API roots are a deployment fact and are shared with every
+	// handler; tokens are not, and stay per organization.
+	providerHosts := scm.HostsOnly(params.Config.API.GitlabBaseURL)
+	pullRequestHandler := factories.MakePullRequestHandler(repository, providerHosts)
+	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer, providerHosts)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
@@ -82,6 +86,9 @@ func setupAPIRoutes(
 
 		// GitHub webhook receiver — public, authenticated via HMAC signature
 		public.POST("/webhooks/github/:repoID", webhookHandler.HandleGitHubWebhook)
+		// GitLab webhook receiver — public, authenticated via the shared
+		// X-Gitlab-Token secret, which is all GitLab sends.
+		public.POST("/webhooks/gitlab/:repoID", webhookHandler.HandleGitLabWebhook)
 
 		// Coverage upload — public, authenticated via Bearer cov_* token
 		// (validated inside the handler, not by the JWT middleware).
