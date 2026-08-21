@@ -267,6 +267,12 @@ const docTemplate = `{
                         "description": "Optional organization slug for onboarding",
                         "name": "organization_slug",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Invite token when joining an existing organization",
+                        "name": "invite_token",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -674,6 +680,280 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/invites": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "List organization invites",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.InviteListResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "Invite someone to the organization",
+                "parameters": [
+                    {
+                        "description": "Invite",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CreateInviteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CreateInviteResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/invites/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "Revoke an organization invite",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invite ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/members": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "List organization members",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.MemberListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/organizations/members/{userID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "Remove organization member",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organization"
+                ],
+                "summary": "Update member role",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "userID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Role",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateMemberRoleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
                         }
@@ -1821,6 +2101,35 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CreateInviteRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                },
+                "ttl_hours": {
+                    "description": "TTLHours overrides the default invite lifetime. Optional.",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CreateInviteResponse": {
+            "type": "object",
+            "properties": {
+                "invite": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.InviteResponse"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.CreateRepositoryRequest": {
             "type": "object",
             "required": [
@@ -2108,6 +2417,64 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.InviteListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.InviteResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.InviteResponse": {
+            "type": "object",
+            "properties": {
+                "accepted_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.InviteStatus"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.InviteStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "accepted",
+                "revoked",
+                "expired"
+            ],
+            "x-enum-varnames": [
+                "InviteStatusPending",
+                "InviteStatusAccepted",
+                "InviteStatusRevoked",
+                "InviteStatusExpired"
+            ]
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.JobResponse": {
             "type": "object",
             "properties": {
@@ -2145,6 +2512,43 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "refresh_token": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.MemberListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.MemberResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.MemberResponse": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "joined_at": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                },
+                "user_id": {
                     "type": "string"
                 }
             }
@@ -2409,6 +2813,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "full_name": {
+                    "type": "string"
+                },
+                "invite_token": {
+                    "description": "InviteToken is required to join an organization that already exists.\nWithout it, registration may only create a new organization.",
                     "type": "string"
                 },
                 "organization_name": {
@@ -2799,6 +3207,17 @@ const docTemplate = `{
                     "additionalProperties": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateMemberRoleRequest": {
+            "type": "object",
+            "required": [
+                "role"
+            ],
+            "properties": {
+                "role": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
                 }
             }
         },

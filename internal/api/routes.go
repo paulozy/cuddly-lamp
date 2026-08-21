@@ -36,8 +36,9 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
+	memberHandler := factories.MakeOrganizationMemberHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -58,6 +59,7 @@ func setupAPIRoutes(
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 	coverageHandler *handlers.CoverageHandler,
+	memberHandler *handlers.OrganizationMemberHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -99,6 +101,16 @@ func setupAPIRoutes(
 		// complementary, not redundant.
 		developer := middleware.RequireRole(models.RoleDeveloper)
 		maintainer := middleware.RequireRole(models.RoleMaintainer)
+		admin := middleware.RequireRole(models.RoleAdmin)
+
+		// Membership is an admin concern: who is in the organization, and who
+		// gets invited in.
+		protected.GET("/organizations/members", admin, memberHandler.ListMembers)
+		protected.PATCH("/organizations/members/:userID", admin, memberHandler.UpdateMemberRole)
+		protected.DELETE("/organizations/members/:userID", admin, memberHandler.RemoveMember)
+		protected.POST("/organizations/invites", admin, memberHandler.CreateInvite)
+		protected.GET("/organizations/invites", admin, memberHandler.ListInvites)
+		protected.DELETE("/organizations/invites/:id", admin, memberHandler.RevokeInvite)
 
 		protected.POST("/repositories", developer, repoHandler.CreateRepository)
 		protected.GET("/repositories", repoHandler.ListRepositories)

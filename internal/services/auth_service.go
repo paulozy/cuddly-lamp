@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,8 +22,22 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
+var (
+	// ErrOrganizationRequiresInvite is returned when someone tries to register
+	// into an organization that already exists without presenting an invite.
+	// Before this existed, guessing an organization's slug was enough to join it
+	// as a developer.
+	ErrOrganizationRequiresInvite = errors.New("joining this organization requires an invite")
+	// ErrInviteRejected covers every invite failure — unknown, expired, revoked,
+	// already used, or issued to a different address. They are deliberately
+	// indistinguishable so the endpoint cannot be used to enumerate invites or
+	// organizations.
+	ErrInviteRejected = errors.New("invite is invalid, expired, or issued to a different email")
+)
+
 type AuthService struct {
 	repo        storage.Repository
+	membership  *MembershipService
 	jwtSecret   string
 	jwtIssuer   string
 	jwtAudience string
@@ -34,6 +49,7 @@ type AuthService struct {
 func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience string, accessTTL, refreshTTL time.Duration) *AuthService {
 	return &AuthService{
 		repo:        repo,
+		membership:  NewMembershipService(repo),
 		jwtSecret:   jwtSecret,
 		jwtIssuer:   jwtIssuer,
 		jwtAudience: jwtAudience,
@@ -113,19 +129,20 @@ func (s *AuthService) SelectOrganization(ctx context.Context, loginTicket, organ
 	return s.generateTokenPair(ctx, user, org, member.Role)
 }
 
-func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, password, organizationName, organizationSlug string) (*models.TokenResponse, error) {
+func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, password, organizationName, organizationSlug, inviteToken string) (*models.TokenResponse, error) {
 	if err := validatePasswordStrength(password); err != nil {
 		return nil, fmt.Errorf("password validation failed: %w", err)
 	}
 
-	org, err := s.getOrCreateOrganization(ctx, organizationName, organizationSlug)
+	admission, err := s.resolveOrganizationForRegistration(ctx, organizationName, organizationSlug, email, inviteToken)
 	if err != nil {
 		return nil, err
 	}
+	org := admission.org
 
 	existingUser, err := s.repo.GetUserByEmail(ctx, email)
 	if existingUser != nil {
-		member, err := s.ensureOrganizationMember(ctx, org.ID, existingUser.ID)
+		member, err := s.admit(ctx, admission, existingUser.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +169,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, fullName, pa
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	member, err := s.ensureOrganizationMember(ctx, org.ID, user.ID)
+	member, err := s.admit(ctx, admission, user.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -521,6 +538,102 @@ func (s *AuthService) verifyLoginSelectionTicket(ticket string) (*loginSelection
 	return claims, nil
 }
 
+// organizationAdmission is the outcome of deciding which organization a
+// registration lands in, and on what terms.
+type organizationAdmission struct {
+	org    *models.Organization
+	role   models.UserRole
+	invite *models.OrganizationInvite // nil when a brand-new org was created
+}
+
+// resolveOrganizationForRegistration is the gate that used to be missing.
+//
+// Three cases:
+//   - an invite token is presented: the organization and role come from the
+//     invite, never from user-supplied name/slug. This is what stops someone from
+//     redeeming a valid invite for org A to get into org B.
+//   - no invite and the slug is free: a new organization is created and the
+//     registrant becomes its admin. Unchanged behaviour.
+//   - no invite and the slug is taken: refused. Previously this silently added
+//     the caller to the existing organization as a developer.
+func (s *AuthService) resolveOrganizationForRegistration(
+	ctx context.Context,
+	name, slug, email, inviteToken string,
+) (*organizationAdmission, error) {
+	if strings.TrimSpace(inviteToken) != "" {
+		invite, err := s.membership.ResolveInvite(ctx, inviteToken, email)
+		if err != nil {
+			if errors.Is(err, ErrInviteNotFound) {
+				return nil, ErrInviteRejected
+			}
+			return nil, err
+		}
+		org, err := s.repo.GetOrganization(ctx, invite.OrganizationID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve organization: %w", err)
+		}
+		if org == nil {
+			return nil, ErrInviteRejected
+		}
+		return &organizationAdmission{org: org, role: invite.Role, invite: invite}, nil
+	}
+
+	normalized, err := normalizeOrDeriveSlug(name, slug)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == "" {
+		return nil, fmt.Errorf("organization slug is required")
+	}
+
+	existing, err := s.repo.GetOrganizationBySlug(ctx, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve organization: %w", err)
+	}
+	if existing != nil {
+		return nil, ErrOrganizationRequiresInvite
+	}
+
+	org, err := s.getOrCreateOrganization(ctx, name, slug)
+	if err != nil {
+		return nil, err
+	}
+	return &organizationAdmission{org: org, role: models.RoleAdmin}, nil
+}
+
+// admit creates the membership implied by an admission. When an invite is
+// involved the invite is spent and the member created in one transaction, so the
+// link cannot be redeemed twice even under concurrent requests.
+func (s *AuthService) admit(ctx context.Context, adm *organizationAdmission, userID string) (*models.OrganizationMember, error) {
+	if adm.invite == nil {
+		return s.ensureOrganizationMember(ctx, adm.org.ID, userID)
+	}
+
+	existing, err := s.repo.GetOrganizationMember(ctx, adm.org.ID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		// Already a member; the invite is redundant but shouldn't be left dangling.
+		_ = s.repo.RevokeOrganizationInvite(ctx, adm.invite.ID)
+		return existing, nil
+	}
+
+	now := time.Now().UTC()
+	member := &models.OrganizationMember{
+		OrganizationID: adm.org.ID,
+		UserID:         userID,
+		Role:           adm.role,
+		IsActive:       true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.repo.AcceptOrganizationInvite(ctx, adm.invite.ID, member); err != nil {
+		return nil, ErrInviteRejected
+	}
+	return member, nil
+}
+
 func (s *AuthService) getOrCreateOrganization(ctx context.Context, name, slug string) (*models.Organization, error) {
 	normalized, err := normalizeOrDeriveSlug(name, slug)
 	if err != nil {
@@ -578,10 +691,18 @@ func (s *AuthService) ensureOrganizationMember(ctx context.Context, orgID, userI
 	if err != nil {
 		return nil, err
 	}
-	role := models.RoleDeveloper
-	if count == 0 {
-		role = models.RoleAdmin
+	// Only the very first member of an organization is admitted without an
+	// invite — that's the person creating it, and they become its admin. Anyone
+	// arriving at an organization that already has members must present an
+	// invite; the caller is responsible for redeeming one (see admit).
+	//
+	// This is the single choke point for every path that grants membership,
+	// including the OAuth callback, which is why the check lives here rather
+	// than in each caller.
+	if count > 0 {
+		return nil, ErrOrganizationRequiresInvite
 	}
+	role := models.RoleAdmin
 
 	member := &models.OrganizationMember{
 		OrganizationID: orgID,
@@ -740,6 +861,10 @@ type OAuthStateInput struct {
 	OrganizationID   string
 	OrganizationName string
 	OrganizationSlug string
+	// InviteToken rides along in the signed state so the callback can admit the
+	// user into an existing organization. It is signed, so the token cannot be
+	// swapped between the redirect and the callback.
+	InviteToken string
 }
 
 type oauthStatePayload struct {
@@ -747,6 +872,7 @@ type oauthStatePayload struct {
 	OrganizationID   string `json:"organization_id,omitempty"`
 	OrganizationName string `json:"organization_name,omitempty"`
 	OrganizationSlug string `json:"organization_slug,omitempty"`
+	InviteToken      string `json:"invite_token,omitempty"`
 	Exp              int64  `json:"exp"`
 }
 
@@ -761,6 +887,7 @@ func (s *AuthService) GenerateOAuthState(input OAuthStateInput) (string, error) 
 		OrganizationID:   input.OrganizationID,
 		OrganizationName: input.OrganizationName,
 		OrganizationSlug: input.OrganizationSlug,
+		InviteToken:      input.InviteToken,
 		Exp:              time.Now().Add(10 * time.Minute).Unix(),
 	}
 
@@ -902,12 +1029,41 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, cod
 		return nil, fmt.Errorf("account is inactive")
 	}
 
-	member, err := s.ensureOrganizationMember(ctx, org.ID, user.ID)
+	member, err := s.admitOAuth(ctx, org, user, statePayload.InviteToken)
 	if err != nil {
 		return nil, err
 	}
 
 	return s.generateTokenPair(ctx, user, org, member.Role)
+}
+
+// admitOAuth mirrors admit() for the OAuth callback. Existing members pass
+// straight through — this is the ordinary "log in with GitHub" case. Everyone
+// else needs either a brand-new organization or a valid invite.
+func (s *AuthService) admitOAuth(ctx context.Context, org *models.Organization, user *models.User, inviteToken string) (*models.OrganizationMember, error) {
+	existing, err := s.repo.GetOrganizationMember(ctx, org.ID, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	if strings.TrimSpace(inviteToken) != "" {
+		invite, err := s.membership.ResolveInvite(ctx, inviteToken, user.Email)
+		if err != nil {
+			return nil, ErrInviteRejected
+		}
+		// An invite is only good for the organization that issued it.
+		if invite.OrganizationID != org.ID {
+			return nil, ErrInviteRejected
+		}
+		return s.admit(ctx, &organizationAdmission{org: org, role: invite.Role, invite: invite}, user.ID)
+	}
+
+	// No invite: ensureOrganizationMember admits them only if the organization
+	// has no members yet, and refuses otherwise.
+	return s.ensureOrganizationMember(ctx, org.ID, user.ID)
 }
 
 func (s *AuthService) resolveOAuthOrganizationAndProvider(ctx context.Context, orgSlug, provider string, statePayload *oauthStatePayload) (*models.Organization, oauth.OAuthProvider, error) {

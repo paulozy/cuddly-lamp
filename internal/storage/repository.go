@@ -24,8 +24,23 @@ type Repository interface {
 	ListOrganizationMembersForUser(ctx context.Context, userID string) ([]models.OrganizationMember, error)
 	CreateOrganizationMember(ctx context.Context, member *models.OrganizationMember) error
 	CountOrganizationMembers(ctx context.Context, orgID string) (int64, error)
+	ListOrganizationMembers(ctx context.Context, orgID string) ([]models.OrganizationMember, error)
+	CountOrganizationAdmins(ctx context.Context, orgID string) (int64, error)
+	UpdateOrganizationMemberRole(ctx context.Context, orgID, userID string, role models.UserRole) error
+	DeleteOrganizationMember(ctx context.Context, orgID, userID string) error
 	GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error)
 	UpsertOrganizationConfig(ctx context.Context, cfg *models.OrganizationConfig) error
+
+	// Organization invite operations — the gate for joining an existing org.
+	CreateOrganizationInvite(ctx context.Context, invite *models.OrganizationInvite) error
+	GetOrganizationInviteByHash(ctx context.Context, hash string) (*models.OrganizationInvite, error)
+	GetOrganizationInvite(ctx context.Context, id string) (*models.OrganizationInvite, error)
+	ListOrganizationInvites(ctx context.Context, orgID string) ([]models.OrganizationInvite, error)
+	RevokeOrganizationInvite(ctx context.Context, id string) error
+	// AcceptOrganizationInvite marks the invite spent and creates the membership in
+	// one transaction, so a crash between the two cannot leave a redeemed invite
+	// without a member, or a member admitted by an invite still marked pending.
+	AcceptOrganizationInvite(ctx context.Context, inviteID string, member *models.OrganizationMember) error
 
 	// Repository operations
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
