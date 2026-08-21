@@ -52,9 +52,6 @@ func (m *mockGitHubClient) GetPullRequestFiles(_ context.Context, _, _ string, _
 	return nil, nil
 }
 
-func (m *mockGitHubClient) CreatePullRequestReview(_ context.Context, _, _ string, _ int64, _, _ string, _ []githubclient.ReviewCommentInput) (int64, error) {
-	return 0, nil
-}
 
 func (m *mockGitHubClient) CreateBranch(_ context.Context, _, _, _, _ string) error {
 	return nil

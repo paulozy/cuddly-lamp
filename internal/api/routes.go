@@ -31,13 +31,12 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	repoHandler := factories.MakeRepositoryHandler(repository, params.Cache, params.Enqueuer)
 	relationshipHandler := factories.MakeRepositoryRelationshipHandler(repository)
 	webhookHandler := factories.MakeWebhookHandler(repository, params.Enqueuer)
-	analysisHandler := factories.MakeAnalysisHandler(repository, params.Enqueuer, params.Cache)
-	templateHandler := factories.MakeTemplateHandler(repository, params.Enqueuer)
+	pullRequestHandler := factories.MakePullRequestHandler(repository)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, analysisHandler, templateHandler, docsHandler, orgConfigHandler, coverageHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -54,8 +53,7 @@ func setupAPIRoutes(
 	repoHandler *handlers.RepositoryHandler,
 	relationshipHandler *handlers.RepositoryRelationshipHandler,
 	webhookHandler *handlers.WebhookHandler,
-	analysisHandler *handlers.AnalysisHandler,
-	templateHandler *handlers.TemplateHandler,
+	pullRequestHandler *handlers.PullRequestHandler,
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 	coverageHandler *handlers.CoverageHandler,
@@ -105,15 +103,11 @@ func setupAPIRoutes(
 		protected.PATCH("/repository-relationships/:id", relationshipHandler.UpdateRelationship)
 		protected.DELETE("/repository-relationships/:id", relationshipHandler.DeleteRelationship)
 
-		// Analysis routes
-		protected.GET("/repositories/:id/analyses", analysisHandler.ListAnalyses)
-		protected.GET("/repositories/:id/pull-requests", analysisHandler.ListPullRequests)
-		protected.GET("/repositories/:id/pull-requests/:pr_number", analysisHandler.GetPullRequest)
-		protected.GET("/repositories/:id/pull-requests/:pr_number/files", analysisHandler.GetPullRequestFiles)
-		protected.POST("/repositories/:id/pull-requests/:pr_number/analyze", analysisHandler.AnalyzePullRequest)
-		protected.POST("/repositories/:id/pull-requests/:pr_number/reviews", analysisHandler.CreatePullRequestReview)
-		protected.POST("/repositories/:id/embeddings", analysisHandler.GenerateEmbeddings)
-		protected.GET("/repositories/:id/search", analysisHandler.SemanticSearch)
+		// Pull request routes (read-only GitHub pass-through)
+		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)
+		protected.GET("/repositories/:id/pull-requests/:pr_number", pullRequestHandler.GetPullRequest)
+		protected.GET("/repositories/:id/pull-requests/:pr_number/files", pullRequestHandler.GetPullRequestFiles)
+
 		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
@@ -121,12 +115,6 @@ func setupAPIRoutes(
 		protected.GET("/docs/templates", docsHandler.ListDocTemplates)
 		protected.POST("/organizations/docs/generate", docsHandler.GenerateOrgDocs)
 		protected.GET("/organizations/docs", docsHandler.ListOrgDocs)
-		protected.POST("/repositories/:id/templates", templateHandler.GenerateForRepository)
-
-		protected.POST("/templates", templateHandler.GenerateForOrganization)
-		protected.GET("/templates", templateHandler.ListTemplates)
-		protected.GET("/templates/:id", templateHandler.GetTemplate)
-		protected.PATCH("/templates/:id/pin", templateHandler.PinTemplate)
 
 		// Coverage upload tokens — managed by repository owners
 		protected.POST("/repositories/:id/coverage/tokens", coverageHandler.CreateCoverageToken)

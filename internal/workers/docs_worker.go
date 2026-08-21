@@ -245,12 +245,6 @@ func (w *DocsWorker) buildDocContext(ctx context.Context, ghClient github.Client
 		}
 	}
 
-	if analysis, err := w.repo.GetLatestAnalysis(ctx, repository.ID, models.AnalysisTypeCodeReview); err == nil && analysis != nil && analysis.SummaryText != "" {
-		sb.WriteString("\n## Latest AI Analysis Summary\n")
-		sb.WriteString(analysis.SummaryText)
-		sb.WriteString("\n")
-	}
-
 	return truncateString(sb.String(), 60000)
 }
 

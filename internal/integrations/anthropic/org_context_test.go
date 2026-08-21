@@ -19,8 +19,6 @@ type orgCtxFakeRepo struct {
 	repos []models.Repository
 	rels  []models.RepositoryRelationship
 	docs  map[string][]models.DocGeneration // repoID → docs
-	// latestSummary keyed by repoID → summary text; missing = no analysis.
-	latestSummary map[string]string
 }
 
 func (r *orgCtxFakeRepo) GetOrganization(_ context.Context, id string) (*models.Organization, error) {
@@ -38,13 +36,6 @@ func (r *orgCtxFakeRepo) ListRepositories(_ context.Context, _ *storage.Reposito
 
 func (r *orgCtxFakeRepo) ListRepositoryRelationships(_ context.Context, _ storage.RepositoryRelationshipFilter) ([]models.RepositoryRelationship, error) {
 	return r.rels, nil
-}
-
-func (r *orgCtxFakeRepo) GetLatestAnalysis(_ context.Context, repoID string, _ models.AnalysisType) (*models.CodeAnalysis, error) {
-	if s, ok := r.latestSummary[repoID]; ok {
-		return &models.CodeAnalysis{SummaryText: s}, nil
-	}
-	return nil, nil
 }
 
 func (r *orgCtxFakeRepo) ListDocGenerationsForRepo(_ context.Context, repoID string) ([]models.DocGeneration, error) {
@@ -99,9 +90,6 @@ func TestOrgContextBuilder_AggregatesReposGraphAndDocs(t *testing.T) {
 				Kind:               models.RepositoryRelationshipKindHTTP,
 			},
 		},
-		latestSummary: map[string]string{
-			"repo-api": "Mature Go service, 78% test coverage, no critical issues.",
-		},
 		docs: map[string][]models.DocGeneration{
 			"repo-api": {
 				{
@@ -129,7 +117,6 @@ func TestOrgContextBuilder_AggregatesReposGraphAndDocs(t *testing.T) {
 		"## Repositories",
 		"| web |",
 		"| api |",
-		"Mature Go service",
 		"## Relationships",
 		"web → api (`http`)",
 		"## Existing Per-Repo Documentation",

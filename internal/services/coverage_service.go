@@ -124,13 +124,6 @@ func (s *CoverageService) IngestCoverage(ctx context.Context, req IngestRequest)
 		return nil, fmt.Errorf("persist coverage upload: %w", err)
 	}
 
-	// Best-effort: patch the latest completed code_analyses row for this SHA.
-	if affected, err := s.repo.PatchCodeAnalysisCoverage(ctx, req.RepositoryID, req.CommitSHA, report.LinesCovered, report.LinesTotal, percentage, string(status)); err != nil {
-		utils.Warn("coverage service: patch analysis failed", "repository_id", req.RepositoryID, "sha", req.CommitSHA, "error", err)
-	} else if affected == 0 {
-		utils.Info("coverage service: no analysis to patch yet (will reconcile on next analysis)", "repository_id", req.RepositoryID, "sha", req.CommitSHA)
-	}
-
 	if err := s.repo.TouchCoverageUploadTokenUsage(ctx, tokenModel.ID); err != nil {
 		utils.Warn("coverage service: token touch failed", "token_id", tokenModel.ID, "error", err)
 	}

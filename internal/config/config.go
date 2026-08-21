@@ -12,7 +12,6 @@ type Config struct {
 	Database   DatabaseConfig
 	Redis      RedisConfig
 	API        APIConfig
-	Embeddings EmbeddingsConfig
 	OAuth      OAuthConfig
 	Log        LogConfig
 }
@@ -46,18 +45,12 @@ type RedisConfig struct {
 }
 
 type APIConfig struct {
+	// Anthropic remains configured: documentation generation is the one
+	// LLM-backed feature the platform still ships.
 	AnthropicAPIKey        string
 	AnthropicTokensPerHour int
 	GithubToken            string
 	WebhookBaseURL         string // public base URL for webhook endpoints, e.g. https://api.example.com
-	GitHubPRReviewEnabled  bool   // whether to post PR reviews
-}
-
-type EmbeddingsConfig struct {
-	Provider     string
-	VoyageAPIKey string
-	Model        string
-	Dimensions   int
 }
 
 type LogConfig struct {
@@ -98,13 +91,6 @@ func Load() *Config {
 			AnthropicTokensPerHour: getEnvInt("ANTHROPIC_TOKENS_PER_HOUR", 20000),
 			GithubToken:            getEnv("GITHUB_TOKEN", ""),
 			WebhookBaseURL:         getEnv("WEBHOOK_BASE_URL", ""),
-			GitHubPRReviewEnabled:  getEnvBool("GITHUB_PR_REVIEW_ENABLED", false),
-		},
-		Embeddings: EmbeddingsConfig{
-			Provider:     getEnv("EMBEDDINGS_PROVIDER", "voyage"),
-			VoyageAPIKey: getEnv("VOYAGE_API_KEY", ""),
-			Model:        getEnv("EMBEDDINGS_MODEL", "voyage-code-3"),
-			Dimensions:   getEnvInt("EMBEDDINGS_DIMENSIONS", 1024),
 		},
 		OAuth: OAuthConfig{
 			Providers: map[string]OAuthProviderConfig{

@@ -56,16 +56,8 @@ type Repository interface {
 	CreateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
 	UpdateWebhookConfig(ctx context.Context, cfg *models.WebhookConfig) error
 
-	// Code Analysis operations
-	GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error)
-	CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error
-	GetAnalysesByRepository(ctx context.Context, repoID string, analysisType, status string, limit, offset int) ([]models.CodeAnalysis, int64, error)
-	ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error)
-	GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
-	GetLatestAnalysisForPullRequest(ctx context.Context, repoID string, pullRequestID int, analysisType models.AnalysisType) (*models.CodeAnalysis, error)
-	ListLatestAnalysesForPullRequests(ctx context.Context, repoID string, pullRequestIDs []int, analysisType models.AnalysisType) (map[int]models.CodeAnalysis, error)
-	GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error)
+	// AI token accounting — budgets documentation generation, the only
+	// remaining LLM-backed feature.
 	SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error)
 
 	// Documentation generation operations
@@ -77,12 +69,6 @@ type Repository interface {
 	// Org-scope helpers (scope = 'org')
 	ListOrgDocGenerations(ctx context.Context, orgID string) ([]models.DocGeneration, error)
 	GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
-
-	// Code Template operations
-	CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
-	GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error)
-	UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error
-	ListCodeTemplates(ctx context.Context, filter CodeTemplateFilter) ([]models.CodeTemplate, int64, error)
 
 	// Package Dependency operations
 	UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error
@@ -97,7 +83,6 @@ type Repository interface {
 	CreateCoverageUpload(ctx context.Context, upload *models.CoverageUpload) error
 	GetLatestCoverageUpload(ctx context.Context, repoID, sha string) (*models.CoverageUpload, error)
 	ListCoverageUploadsForCommit(ctx context.Context, repoID, sha string) ([]*models.CoverageUpload, error)
-	PatchCodeAnalysisCoverage(ctx context.Context, repoID, sha string, covered, total int, percentage float64, status string) (int64, error)
 
 	// Coverage upload tokens
 	CreateCoverageUploadToken(ctx context.Context, token *models.CoverageUploadToken) error
@@ -106,12 +91,6 @@ type Repository interface {
 	ListCoverageUploadTokens(ctx context.Context, repoID string) ([]*models.CoverageUploadToken, error)
 	RevokeCoverageUploadToken(ctx context.Context, id string) error
 	TouchCoverageUploadTokenUsage(ctx context.Context, id string) error
-
-	// Code Embedding operations
-	CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error
-	CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error
-	SearchEmbeddings(ctx context.Context, filter EmbeddingSearchFilter) ([]models.CodeEmbedding, error)
-	DeleteEmbeddings(ctx context.Context, filter EmbeddingDeleteFilter) error
 
 	// Token operations
 	CreateToken(ctx context.Context, token *models.Token) error
@@ -142,33 +121,4 @@ type RepositoryRelationshipFilter struct {
 	RepositoryID   string
 	Kind           models.RepositoryRelationshipKind
 	Source         models.RepositoryRelationshipSource
-}
-
-type CodeTemplateFilter struct {
-	OrganizationID string
-	RepositoryID   string
-	IsPinned       *bool
-	Status         string
-	Limit          int
-	Offset         int
-}
-
-type EmbeddingSearchFilter struct {
-	RepositoryID string
-	Query        string
-	Vector       []float32
-	Provider     string
-	Model        string
-	Dimension    int
-	Branch       string
-	Limit        int
-	MinScore     float64
-}
-
-type EmbeddingDeleteFilter struct {
-	RepositoryID string
-	Provider     string
-	Model        string
-	Dimension    int
-	Branch       string
 }

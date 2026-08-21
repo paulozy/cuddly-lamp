@@ -113,17 +113,11 @@ func main() {
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
-		embeddingWorker := workers.NewEmbeddingWorker(pgRepo)
-		analysisWorker := workers.NewAnalysisWorker(pgRepo)
-		templateWorker := workers.NewTemplateWorker(pgRepo)
 		docsWorker := workers.NewDocsWorker(pgRepo)
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
-		worker.Register(tasks.TypeGenerateEmbeddings, embeddingWorker.Handle)
-		worker.Register(tasks.TypeAnalyzeRepo, analysisWorker.Handle)
-		worker.Register(tasks.TypeGenerateTemplate, templateWorker.Handle)
 		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
 		worker.Register(tasks.TypeGenerateOrgDocs, docsWorker.HandleOrgDocs)
 

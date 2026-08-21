@@ -43,13 +43,7 @@ type OrganizationConfig struct {
 	AnthropicAPIKey        string `gorm:"type:bytea;serializer:enc" json:"-"`
 	AnthropicTokensPerHour int    `gorm:"default:20000" json:"anthropic_tokens_per_hour"`
 	GithubToken            string `gorm:"type:bytea;serializer:enc" json:"-"`
-	GitHubPRReviewEnabled  bool   `gorm:"column:github_pr_review_enabled;default:false" json:"github_pr_review_enabled"`
 	WebhookBaseURL         string `gorm:"type:text" json:"webhook_base_url,omitempty"`
-
-	EmbeddingsProvider   string `gorm:"type:varchar(50);default:'voyage'" json:"embeddings_provider"`
-	VoyageAPIKey         string `gorm:"type:bytea;serializer:enc" json:"-"`
-	EmbeddingsModel      string `gorm:"type:varchar(100);default:'voyage-code-3'" json:"embeddings_model"`
-	EmbeddingsDimensions int    `gorm:"default:1024" json:"embeddings_dimensions"`
 
 	GitHubClientID     string `gorm:"column:github_client_id;type:varchar(255)" json:"github_client_id,omitempty"`
 	GitHubClientSecret string `gorm:"column:github_client_secret;type:bytea;serializer:enc" json:"-"`
@@ -72,15 +66,6 @@ func (OrganizationConfig) TableName() string {
 func (c *OrganizationConfig) ApplyDefaults() {
 	if c.AnthropicTokensPerHour == 0 {
 		c.AnthropicTokensPerHour = 20000
-	}
-	if c.EmbeddingsProvider == "" {
-		c.EmbeddingsProvider = "voyage"
-	}
-	if c.EmbeddingsModel == "" {
-		c.EmbeddingsModel = "voyage-code-3"
-	}
-	if c.EmbeddingsDimensions == 0 {
-		c.EmbeddingsDimensions = 1024
 	}
 	if c.OutputLanguage == "" {
 		c.OutputLanguage = "en"

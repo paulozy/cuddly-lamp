@@ -17,17 +17,8 @@ type mockCoverageRepo struct {
 	tokens     map[string]*models.CoverageUploadToken // by hash
 	tokensByID map[string]*models.CoverageUploadToken
 	uploads    []*models.CoverageUpload
-	patches    []patchCall
-	patchAffected int64
-	patchErr   error
 	createTokErr error
 	createUpErr  error
-}
-
-type patchCall struct {
-	repoID, sha, status string
-	covered, total      int
-	pct                 float64
 }
 
 func newMockCoverageRepo() *mockCoverageRepo {
@@ -61,14 +52,6 @@ func (m *mockCoverageRepo) GetLatestCoverageUpload(ctx context.Context, repoID, 
 		}
 	}
 	return latest, nil
-}
-
-func (m *mockCoverageRepo) PatchCodeAnalysisCoverage(ctx context.Context, repoID, sha string, covered, total int, pct float64, status string) (int64, error) {
-	if m.patchErr != nil {
-		return 0, m.patchErr
-	}
-	m.patches = append(m.patches, patchCall{repoID, sha, status, covered, total, pct})
-	return m.patchAffected, nil
 }
 
 func (m *mockCoverageRepo) CreateCoverageUploadToken(ctx context.Context, t *models.CoverageUploadToken) error {
@@ -164,12 +147,8 @@ func TestCoverageService_IngestCoverage_HappyPath(t *testing.T) {
 	if upload.Status != coverage.StatusOK {
 		t.Fatalf("status = %q, want ok", upload.Status)
 	}
-	if len(repo.patches) != 1 {
-		t.Fatalf("expected 1 patch attempt, got %d", len(repo.patches))
-	}
-	p := repo.patches[0]
-	if p.repoID != "repo-1" || p.sha != "abcdef1234567890" || p.covered != 1 || p.total != 2 {
-		t.Fatalf("patch wrong: %+v", p)
+	if upload.RepositoryID != "repo-1" || upload.CommitSHA != "abcdef1234567890" {
+		t.Fatalf("upload keyed wrong: repo=%q sha=%q", upload.RepositoryID, upload.CommitSHA)
 	}
 }
 
@@ -294,12 +273,10 @@ github.com/x/a.go:1.1,2.10 4 1
 		t.Fatalf("latest = %+v, want covered=4 total=4", latest)
 	}
 
-	// Two patches were attempted (one per upload), most recent reflects last upload.
-	if len(repo.patches) != 2 {
-		t.Fatalf("patches = %d, want 2", len(repo.patches))
-	}
-	if last := repo.patches[1]; last.covered != 4 || last.total != 4 {
-		t.Fatalf("last patch wrong: %+v", last)
+	// Both uploads are retained; LookupForAnalysis above already asserted that
+	// the most recent one wins.
+	if len(repo.uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(repo.uploads))
 	}
 }
 

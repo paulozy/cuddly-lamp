@@ -71,31 +71,15 @@ type Repository struct {
 
 	Metadata RepositoryMetadata `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 
-	LastAnalyzedAt time.Time `json:"last_analyzed_at,omitempty"`
-	AnalysisStatus string    `gorm:"type:varchar(50);default:'pending'" json:"analysis_status"` // pending, in_progress, completed, failed
-	AnalysisError  string    `gorm:"type:text" json:"analysis_error,omitempty"`
-
-	LastReviewedAt time.Time `json:"last_reviewed_at,omitempty"`
-	ReviewsCount   int       `gorm:"default:0" json:"reviews_count"`
-
 	LastSyncedAt time.Time `json:"last_synced_at,omitempty"`
 	SyncStatus   string    `gorm:"type:varchar(50);default:'idle'" json:"sync_status"` // idle, syncing, synced, error
 	SyncError    string    `gorm:"type:text" json:"sync_error,omitempty"`
-
-	// Embeddings pipeline state — see migration 021. Lifecycle:
-	// idle → pending → indexing → indexed → stale (after push) → re-indexing.
-	// `EmbeddingsCount` is updated incrementally by the worker.
-	EmbeddingsStatus    string     `gorm:"type:varchar(20);default:'idle'" json:"embeddings_status"`
-	EmbeddingsCount     int        `gorm:"default:0" json:"embeddings_count"`
-	EmbeddingsIndexedAt *time.Time `json:"embeddings_indexed_at,omitempty"`
-	EmbeddingsError     string     `gorm:"type:text" json:"embeddings_error,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"` // soft delete
 
 	// Relationships
-	Analyses     []CodeAnalysis         `gorm:"foreignKey:RepositoryID" json:"analyses,omitempty"`
 	Webhooks     []Webhook              `gorm:"foreignKey:RepositoryID" json:"webhooks,omitempty"`
 	Members      []User                 `gorm:"many2many:user_repositories;" json:"members,omitempty"`
 	Dependencies []RepositoryDependency `gorm:"foreignKey:RepositoryID" json:"dependencies,omitempty"`
@@ -108,50 +92,21 @@ func (Repository) TableName() string {
 	return "repositories"
 }
 
-// Embeddings status constants — kept as exported string consts (not a typed
-// alias) for forward compatibility with the GORM struct tag and the SQL
-// CHECK constraint added in migration 021.
-const (
-	EmbeddingsStatusIdle     = "idle"
-	EmbeddingsStatusPending  = "pending"
-	EmbeddingsStatusIndexing = "indexing"
-	EmbeddingsStatusIndexed  = "indexed"
-	EmbeddingsStatusStale    = "stale"
-	EmbeddingsStatusFailed   = "failed"
-)
-
-// CanIndex reports whether the repository is in a state that allows the
-// embedding worker to start. We block only on an explicit sync error — a
-// repo that has never been synced (`idle`) is allowed because the worker
-// itself clones the upstream URL, it doesn't need a local cache.
-func (r *Repository) CanIndex() bool {
-	return r.SyncStatus != "error"
-}
-
 // EnrichedStats carries lateral-join results from the enriched list query.
 // It is a transient field — never stored in the DB.
 type EnrichedStats struct {
-	TotalAnalyses      int
-	IssueCount         int
-	CriticalCount      int
-	ErrorCount         int
-	WarningCount       int
-	TestCoverage       float64
-	TestedLines        int
-	UncoveredLines     int
-	CoverageStatus     string // ok|partial|failed|not_configured (empty when no analysis)
-	AvgComplexity      float64
-	HasMetricsAnalysis bool
-	LatestAnalyzedAt   *string // ISO-8601 or nil
+	TestCoverage   float64
+	TestedLines    int
+	UncoveredLines int
+	CoverageStatus string // ok|partial|failed|not_configured (empty when never uploaded)
+	// HasCoverage is false when the repository has no coverage upload at all,
+	// which the DTO uses to tell "never measured" from "measured 0%".
+	HasCoverage        bool
+	CoverageUploadedAt *string // ISO-8601 or nil
 }
 
 func (r *Repository) IsValid() bool {
 	return r.Name != "" && r.URL != "" && r.Type != "" && r.OrganizationID != ""
-}
-
-func (r *Repository) NeedsAnalysis() bool {
-	return r.LastAnalyzedAt.IsZero() ||
-		time.Since(r.LastAnalyzedAt) > 24*time.Hour
 }
 
 func (r *Repository) CanSync() bool {

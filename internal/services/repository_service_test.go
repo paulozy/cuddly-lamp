@@ -268,7 +268,10 @@ func TestRepositoryService_Create_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
+// Creating a repository must enqueue a sync and nothing else. Every AI-driven
+// follow-up (initial code analysis, embedding indexing) has been removed, so a
+// second task showing up here means one of them crept back in.
+func TestRepositoryService_Create_EnqueuesOnlySync(t *testing.T) {
 	eq := &mockEnqueuer{}
 	svc := newRepoServiceWithEnqueuer(newMockRepoStore(), newMockCache(), eq)
 
@@ -277,89 +280,18 @@ func TestRepositoryService_Create_EnqueuesSyncAndInitialAnalysis(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(eq.tasks) != 2 {
-		t.Fatalf("enqueued tasks = %d, want 2 (sync + initial analysis); got %+v", len(eq.tasks), eq.tasks)
+	if len(eq.tasks) != 1 {
+		t.Fatalf("enqueued tasks = %d, want 1 (sync only); got %+v", len(eq.tasks), eq.tasks)
 	}
-
 	if eq.tasks[0].taskType != tasks.TypeSyncRepo {
-		t.Errorf("first task = %q, want %q", eq.tasks[0].taskType, tasks.TypeSyncRepo)
+		t.Errorf("task = %q, want %q", eq.tasks[0].taskType, tasks.TypeSyncRepo)
 	}
 	syncPayload, ok := eq.tasks[0].payload.(tasks.SyncRepoPayload)
 	if !ok {
-		t.Fatalf("first payload type = %T, want SyncRepoPayload", eq.tasks[0].payload)
+		t.Fatalf("payload type = %T, want SyncRepoPayload", eq.tasks[0].payload)
 	}
 	if syncPayload.RepositoryID != resp.ID {
 		t.Errorf("sync payload RepositoryID = %q, want %q", syncPayload.RepositoryID, resp.ID)
-	}
-
-	if eq.tasks[1].taskType != tasks.TypeAnalyzeRepo {
-		t.Errorf("second task = %q, want %q", eq.tasks[1].taskType, tasks.TypeAnalyzeRepo)
-	}
-	analyzePayload, ok := eq.tasks[1].payload.(tasks.AnalyzeRepoPayload)
-	if !ok {
-		t.Fatalf("second payload type = %T, want AnalyzeRepoPayload", eq.tasks[1].payload)
-	}
-	if analyzePayload.RepositoryID != resp.ID {
-		t.Errorf("analyze payload RepositoryID = %q, want %q", analyzePayload.RepositoryID, resp.ID)
-	}
-	if analyzePayload.TriggeredBy != "initial" {
-		t.Errorf("analyze payload TriggeredBy = %q, want %q", analyzePayload.TriggeredBy, "initial")
-	}
-	if analyzePayload.Type != "code_review" {
-		t.Errorf("analyze payload Type = %q, want %q", analyzePayload.Type, "code_review")
-	}
-}
-
-func TestRepositoryService_Create_AutoTriggersEmbeddingsWhenVoyageConfigured(t *testing.T) {
-	eq := &mockEnqueuer{}
-	store := newMockRepoStore()
-	store.orgConfig = &models.OrganizationConfig{
-		VoyageAPIKey:       "voy-test",
-		EmbeddingsProvider: "voyage",
-	}
-	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
-
-	resp, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(eq.tasks) != 3 {
-		t.Fatalf("enqueued tasks = %d, want 3 (sync + analyze + embeddings); got %+v", len(eq.tasks), eq.tasks)
-	}
-	if eq.tasks[2].taskType != tasks.TypeGenerateEmbeddings {
-		t.Errorf("third task = %q, want %q", eq.tasks[2].taskType, tasks.TypeGenerateEmbeddings)
-	}
-	embPayload, ok := eq.tasks[2].payload.(tasks.GenerateEmbeddingsPayload)
-	if !ok {
-		t.Fatalf("third payload type = %T, want GenerateEmbeddingsPayload", eq.tasks[2].payload)
-	}
-	if embPayload.RepositoryID != resp.ID {
-		t.Errorf("embeddings payload RepositoryID = %q, want %q", embPayload.RepositoryID, resp.ID)
-	}
-
-	// `pending` was persisted so the UI reflects the in-flight indexing
-	// without waiting for the worker to start.
-	stored := store.repos[resp.ID]
-	if stored.EmbeddingsStatus != models.EmbeddingsStatusPending {
-		t.Errorf("stored embeddings_status = %q, want %q", stored.EmbeddingsStatus, models.EmbeddingsStatusPending)
-	}
-}
-
-func TestRepositoryService_Create_SkipsEmbeddingsWhenProviderMissing(t *testing.T) {
-	eq := &mockEnqueuer{}
-	store := newMockRepoStore()
-	// No orgConfig → provider unavailable → embeddings should be skipped.
-	svc := newRepoServiceWithEnqueuer(store, newMockCache(), eq)
-
-	if _, err := svc.CreateRepository(context.Background(), orgID, ownerID, models.CreateRepositoryRequest{URL: ghURL}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	for _, task := range eq.tasks {
-		if task.taskType == tasks.TypeGenerateEmbeddings {
-			t.Fatalf("embeddings task should not be enqueued without provider; got %+v", task)
-		}
 	}
 }
 

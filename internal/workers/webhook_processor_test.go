@@ -35,15 +35,13 @@ func (e *recordingEnqueuer) has(taskType string) bool {
 	return false
 }
 
-// A push event must only trigger a repository sync. Automatic AI code analysis
-// and dependency scanning on push were removed for the MVP; this test locks
-// that behavior in so they cannot silently come back.
+// A push event must only trigger a repository sync. Every AI-driven trigger
+// (code analysis, dependency scanning, embedding indexing) has been removed;
+// this test locks that behavior in so none of them can silently come back.
 func TestProcessEvent_PushEnqueuesOnlySync(t *testing.T) {
 	enq := &recordingEnqueuer{}
 	repo := &mockRepository{
 		getRepoFunc: func(ctx context.Context, id string) (*models.Repository, error) {
-			// Zero-value EmbeddingsStatus (not "indexed") keeps the stale-index
-			// branch dormant, isolating the enqueue behavior under test.
 			return &models.Repository{}, nil
 		},
 	}
@@ -62,14 +60,13 @@ func TestProcessEvent_PushEnqueuesOnlySync(t *testing.T) {
 	if !enq.has(tasks.TypeSyncRepo) {
 		t.Errorf("expected a sync job to be enqueued on push, got %v", enq.enqueued)
 	}
-	if enq.has(tasks.TypeAnalyzeRepo) {
-		t.Errorf("push must NOT enqueue code analysis anymore, got %v", enq.enqueued)
+	if len(enq.enqueued) != 1 {
+		t.Errorf("push must enqueue the sync job and nothing else, got %v", enq.enqueued)
 	}
 }
 
-// PR events used to auto-trigger analysis. That auto-trigger was disabled for
-// the MVP (the PR-review pipeline is kept dormant behind manual endpoints), so
-// a pull_request webhook must not enqueue any job.
+// PR events used to auto-trigger AI analysis. The PR-review pipeline is gone
+// entirely, so a pull_request webhook must not enqueue any job.
 func TestProcessEvent_PullRequestEnqueuesNothing(t *testing.T) {
 	enq := &recordingEnqueuer{}
 	repo := &mockRepository{

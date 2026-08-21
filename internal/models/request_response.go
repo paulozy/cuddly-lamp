@@ -9,14 +9,6 @@ type JobResponse struct {
 	Target string `json:"target"` // resource being processed
 }
 
-// AnalysisListResponse represents a list of analyses
-type AnalysisListResponse struct {
-	Total    int64          `json:"total"`
-	Analyses []CodeAnalysis `json:"analyses"`
-	Limit    int            `json:"limit"`
-	Offset   int            `json:"offset"`
-}
-
 type PackageDependencyResponse struct {
 	ID                 string    `json:"id"`
 	RepositoryID       string    `json:"repository_id"`

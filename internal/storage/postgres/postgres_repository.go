@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
-	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -30,36 +29,20 @@ type enrichedRepo struct {
 	OwnerUserID         *string
 	CreatedByUserID     *string
 	IsPublic            bool
-	Metadata            sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
-	AnalysisStatus      string
-	AnalysisError       sql.NullString
-	ReviewsCount        int
-	LastAnalyzedAt      *time.Time
-	LastSyncedAt        *time.Time
-	SyncStatus          string
-	SyncError           sql.NullString
-	// Embeddings columns must be scanned — otherwise the model loads with the
-	// Go zero-value ("") and a subsequent `db.Save(repo)` writes '' back over
-	// the DB default, violating the CHECK constraint added in migration 021.
-	EmbeddingsStatus    string
-	EmbeddingsCount     int
-	EmbeddingsIndexedAt *time.Time
-	EmbeddingsError     sql.NullString
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	Metadata        sql.NullString // JSONB → text (cast in SQL); NullString tolerates absent rows
+	LastSyncedAt    *time.Time
+	SyncStatus      string
+	SyncError       sql.NullString
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 
-	// Aggregated stats from LATERAL joins
-	TotalAnalyses    int64
-	IssueCount       sql.NullInt64
-	CriticalCount    sql.NullInt64
-	ErrorCount       sql.NullInt64
-	WarningCount     sql.NullInt64
-	TestCoverage     sql.NullFloat64
-	TestedLines      sql.NullInt64
-	UncoveredLines   sql.NullInt64
-	CoverageStatus   sql.NullString
-	AvgComplexity    sql.NullFloat64
-	LatestAnalyzedAt sql.NullTime
+	// Coverage from the newest coverage_uploads row (LATERAL join). All
+	// nullable — a repository whose CI never uploaded has no row at all.
+	TestCoverage       sql.NullFloat64
+	TestedLines        sql.NullInt64
+	UncoveredLines     sql.NullInt64
+	CoverageStatus     sql.NullString
+	CoverageUploadedAt sql.NullTime
 }
 
 // PostgresRepository implements RepositoryStorage using GORM
@@ -256,53 +239,29 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
             r.created_by_user_id,
             r.is_public,
             r.metadata::text                                       AS metadata,
-            r.analysis_status,
-            r.analysis_error,
-            r.reviews_count,
-            r.last_analyzed_at,
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
-            r.embeddings_status,
-            r.embeddings_count,
-            r.embeddings_indexed_at,
-            r.embeddings_error,
             r.created_at,
             r.updated_at,
-            COALESCE(agg.total_analyses, 0)                        AS total_analyses,
-            latest.issue_count                                      AS issue_count,
-            latest.critical_count                                   AS critical_count,
-            latest.error_count                                      AS error_count,
-            latest.warning_count                                    AS warning_count,
-            (latest.metrics->>'test_coverage')::float               AS test_coverage,
-            (latest.metrics->>'tested_lines')::int                  AS tested_lines,
-            (latest.metrics->>'uncovered_lines')::int               AS uncovered_lines,
-            (latest.metrics->>'coverage_status')                    AS coverage_status,
-            (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
-            latest.created_at                                       AS latest_analyzed_at
+            cov.percentage                                          AS test_coverage,
+            cov.lines_covered                                       AS tested_lines,
+            (cov.lines_total - cov.lines_covered)                   AS uncovered_lines,
+            cov.status                                              AS coverage_status,
+            cov.created_at                                          AS coverage_uploaded_at
         FROM repositories r
         LEFT JOIN LATERAL (
-            SELECT COUNT(*) AS total_analyses
-            FROM   code_analyses ca
-            WHERE  ca.repository_id = r.id
-              AND  ca.deleted_at IS NULL
-        ) agg ON true
-        LEFT JOIN LATERAL (
             SELECT
-                ca.issue_count,
-                ca.critical_count,
-                ca.error_count,
-                ca.warning_count,
-                ca.metrics,
-                ca.created_at
-            FROM   code_analyses ca
-            WHERE  ca.repository_id = r.id
-              AND  ca.type          = 'code_review'
-              AND  ca.status        = 'completed'
-              AND  ca.deleted_at    IS NULL
-            ORDER BY ca.created_at DESC
+                cu.percentage,
+                cu.lines_covered,
+                cu.lines_total,
+                cu.status,
+                cu.created_at
+            FROM   coverage_uploads cu
+            WHERE  cu.repository_id = r.id
+            ORDER BY cu.created_at DESC
             LIMIT 1
-        ) latest ON true
+        ) cov ON true
         WHERE r.id = ?
           AND r.deleted_at IS NULL`
 
@@ -321,14 +280,10 @@ func (pr *PostgresRepository) GetRepository(ctx context.Context, id string) (*mo
 		&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
 		&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
 		&e.IsPublic, &e.Metadata,
-		&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
-		&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
-		&e.EmbeddingsStatus, &e.EmbeddingsCount, &e.EmbeddingsIndexedAt, &e.EmbeddingsError,
+		&e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 		&e.CreatedAt, &e.UpdatedAt,
-		&e.TotalAnalyses,
-		&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
-		&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus, &e.AvgComplexity,
-		&e.LatestAnalyzedAt,
+		&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
+		&e.CoverageUploadedAt,
 	); err != nil {
 		return nil, fmt.Errorf("scan repository row: %w", err)
 	}
@@ -424,53 +379,29 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
             r.created_by_user_id,
             r.is_public,
             r.metadata::text                                       AS metadata,
-            r.analysis_status,
-            r.analysis_error,
-            r.reviews_count,
-            r.last_analyzed_at,
             r.last_synced_at,
             r.sync_status,
             r.sync_error,
-            r.embeddings_status,
-            r.embeddings_count,
-            r.embeddings_indexed_at,
-            r.embeddings_error,
             r.created_at,
             r.updated_at,
-            COALESCE(agg.total_analyses, 0)                        AS total_analyses,
-            latest.issue_count                                      AS issue_count,
-            latest.critical_count                                   AS critical_count,
-            latest.error_count                                      AS error_count,
-            latest.warning_count                                    AS warning_count,
-            (latest.metrics->>'test_coverage')::float               AS test_coverage,
-            (latest.metrics->>'tested_lines')::int                  AS tested_lines,
-            (latest.metrics->>'uncovered_lines')::int               AS uncovered_lines,
-            (latest.metrics->>'coverage_status')                    AS coverage_status,
-            (latest.metrics->>'avg_cyclomatic_complexity')::float   AS avg_cyclomatic_complexity,
-            latest.created_at                                       AS latest_analyzed_at
+            cov.percentage                                          AS test_coverage,
+            cov.lines_covered                                       AS tested_lines,
+            (cov.lines_total - cov.lines_covered)                   AS uncovered_lines,
+            cov.status                                              AS coverage_status,
+            cov.created_at                                          AS coverage_uploaded_at
         FROM repositories r
         LEFT JOIN LATERAL (
-            SELECT COUNT(*) AS total_analyses
-            FROM   code_analyses ca
-            WHERE  ca.repository_id = r.id
-              AND  ca.deleted_at IS NULL
-        ) agg ON true
-        LEFT JOIN LATERAL (
             SELECT
-                ca.issue_count,
-                ca.critical_count,
-                ca.error_count,
-                ca.warning_count,
-                ca.metrics,
-                ca.created_at
-            FROM   code_analyses ca
-            WHERE  ca.repository_id = r.id
-              AND  ca.type          = 'code_review'
-              AND  ca.status        = 'completed'
-              AND  ca.deleted_at    IS NULL
-            ORDER BY ca.created_at DESC
+                cu.percentage,
+                cu.lines_covered,
+                cu.lines_total,
+                cu.status,
+                cu.created_at
+            FROM   coverage_uploads cu
+            WHERE  cu.repository_id = r.id
+            ORDER BY cu.created_at DESC
             LIMIT 1
-        ) latest ON true
+        ) cov ON true
         WHERE r.organization_id = ?
           AND r.deleted_at IS NULL
         ORDER BY r.created_at DESC
@@ -495,14 +426,10 @@ func (pr *PostgresRepository) ListRepositories(ctx context.Context, filter *stor
 			&e.ID, &e.Name, &e.Description, &e.URL, &e.Type,
 			&e.OrganizationID, &e.OwnerUserID, &e.CreatedByUserID,
 			&e.IsPublic, &e.Metadata,
-			&e.AnalysisStatus, &e.AnalysisError, &e.ReviewsCount,
-			&e.LastAnalyzedAt, &e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
-			&e.EmbeddingsStatus, &e.EmbeddingsCount, &e.EmbeddingsIndexedAt, &e.EmbeddingsError,
+			&e.LastSyncedAt, &e.SyncStatus, &e.SyncError,
 			&e.CreatedAt, &e.UpdatedAt,
-			&e.TotalAnalyses,
-			&e.IssueCount, &e.CriticalCount, &e.ErrorCount, &e.WarningCount,
-			&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus, &e.AvgComplexity,
-			&e.LatestAnalyzedAt,
+			&e.TestCoverage, &e.TestedLines, &e.UncoveredLines, &e.CoverageStatus,
+			&e.CoverageUploadedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan repository row: %w", err)
 		}
@@ -535,10 +462,6 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		createdByUserID = *e.CreatedByUserID
 	}
 
-	var lastAnalyzedAt time.Time
-	if e.LastAnalyzedAt != nil {
-		lastAnalyzedAt = *e.LastAnalyzedAt
-	}
 	var lastSyncedAt time.Time
 	if e.LastSyncedAt != nil {
 		lastSyncedAt = *e.LastSyncedAt
@@ -555,38 +478,26 @@ func enrichedRepoToModel(e enrichedRepo) models.Repository {
 		CreatedByUserID: createdByUserID,
 		IsPublic:        e.IsPublic,
 		Metadata:        meta,
-		AnalysisStatus:      e.AnalysisStatus,
-		AnalysisError:       e.AnalysisError.String,
-		ReviewsCount:        e.ReviewsCount,
-		LastAnalyzedAt:      lastAnalyzedAt,
-		LastSyncedAt:        lastSyncedAt,
-		SyncStatus:          e.SyncStatus,
-		SyncError:           e.SyncError.String,
-		EmbeddingsStatus:    e.EmbeddingsStatus,
-		EmbeddingsCount:     e.EmbeddingsCount,
-		EmbeddingsIndexedAt: e.EmbeddingsIndexedAt,
-		EmbeddingsError:     e.EmbeddingsError.String,
-		CreatedAt:           e.CreatedAt,
-		UpdatedAt:           e.UpdatedAt,
+		LastSyncedAt:    lastSyncedAt,
+		SyncStatus:      e.SyncStatus,
+		SyncError:       e.SyncError.String,
+		CreatedAt:       e.CreatedAt,
+		UpdatedAt:       e.UpdatedAt,
 	}
 
-	// Attach enriched stats so the service layer can compute quality score
+	// Coverage comes straight from the newest CI upload. HasCoverage is false
+	// when the LATERAL join found no row, which the DTO uses to distinguish
+	// "never measured" from "measured 0%".
 	repo.EnrichedStats = &models.EnrichedStats{
-		TotalAnalyses:      int(e.TotalAnalyses),
-		IssueCount:         int(e.IssueCount.Int64),
-		CriticalCount:      int(e.CriticalCount.Int64),
-		ErrorCount:         int(e.ErrorCount.Int64),
-		WarningCount:       int(e.WarningCount.Int64),
-		TestCoverage:       e.TestCoverage.Float64,
-		TestedLines:        int(e.TestedLines.Int64),
-		UncoveredLines:     int(e.UncoveredLines.Int64),
-		CoverageStatus:     e.CoverageStatus.String,
-		AvgComplexity:      e.AvgComplexity.Float64,
-		HasMetricsAnalysis: e.IssueCount.Valid, // Valid=true only when LATERAL returned a row
+		TestCoverage:   e.TestCoverage.Float64,
+		TestedLines:    int(e.TestedLines.Int64),
+		UncoveredLines: int(e.UncoveredLines.Int64),
+		CoverageStatus: e.CoverageStatus.String,
+		HasCoverage:    e.TestCoverage.Valid,
 	}
-	if e.LatestAnalyzedAt.Valid {
-		t := e.LatestAnalyzedAt.Time.UTC().Format(time.RFC3339)
-		repo.EnrichedStats.LatestAnalyzedAt = &t
+	if e.CoverageUploadedAt.Valid {
+		t := e.CoverageUploadedAt.Time.UTC().Format(time.RFC3339)
+		repo.EnrichedStats.CoverageUploadedAt = &t
 	}
 
 	return repo
@@ -786,210 +697,6 @@ func (pr *PostgresRepository) UpdateWebhookConfig(ctx context.Context, cfg *mode
 	return nil
 }
 
-// ============ Code Analysis Operations ============
-
-func (pr *PostgresRepository) GetCodeAnalysis(ctx context.Context, id string) (*models.CodeAnalysis, error) {
-	var analysis models.CodeAnalysis
-	if err := pr.db.WithContext(ctx).First(&analysis, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get code analysis: %w", err)
-	}
-	return &analysis, nil
-}
-
-func (pr *PostgresRepository) CreateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error {
-	if !analysis.IsValid() {
-		return errors.New("invalid analysis data")
-	}
-
-	if err := pr.db.WithContext(ctx).Create(analysis).Error; err != nil {
-		return fmt.Errorf("create code analysis: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) UpdateCodeAnalysis(ctx context.Context, analysis *models.CodeAnalysis) error {
-	if !analysis.IsValid() {
-		return errors.New("invalid analysis data")
-	}
-
-	if err := pr.db.WithContext(ctx).Save(analysis).Error; err != nil {
-		return fmt.Errorf("update code analysis: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) GetAnalysesByRepository(ctx context.Context, repoID string, analysisType, status string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
-	var analyses []models.CodeAnalysis
-	var total int64
-
-	query := pr.db.WithContext(ctx).Where("repository_id = ?", repoID)
-	if analysisType != "" {
-		query = query.Where("type = ?", analysisType)
-	}
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
-
-	if err := query.Model(&models.CodeAnalysis{}).Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("count analyses: %w", err)
-	}
-
-	if err := query.
-		Limit(limit).
-		Offset(offset).
-		Order("created_at DESC").
-		Find(&analyses).Error; err != nil {
-		return nil, 0, fmt.Errorf("list analyses: %w", err)
-	}
-
-	return analyses, total, nil
-}
-
-func (pr *PostgresRepository) ListAnalyses(ctx context.Context, repoID string, limit, offset int) ([]models.CodeAnalysis, int64, error) {
-	return pr.GetAnalysesByRepository(ctx, repoID, "", "", limit, offset)
-}
-
-func (pr *PostgresRepository) GetLatestAnalysis(ctx context.Context, repoID string, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {
-	var analysis models.CodeAnalysis
-	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ? AND type = ?", repoID, analysisType).
-		Order("created_at DESC").
-		First(&analysis).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get latest analysis: %w", err)
-	}
-	return &analysis, nil
-}
-
-func (pr *PostgresRepository) GetLatestAnalysisForPullRequest(ctx context.Context, repoID string, pullRequestID int, analysisType models.AnalysisType) (*models.CodeAnalysis, error) {
-	var analysis models.CodeAnalysis
-	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ? AND pull_request_id = ? AND type = ?", repoID, pullRequestID, analysisType).
-		Order("created_at DESC").
-		First(&analysis).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get latest pull request analysis: %w", err)
-	}
-	return &analysis, nil
-}
-
-func (pr *PostgresRepository) ListLatestAnalysesForPullRequests(ctx context.Context, repoID string, pullRequestIDs []int, analysisType models.AnalysisType) (map[int]models.CodeAnalysis, error) {
-	out := make(map[int]models.CodeAnalysis)
-	if len(pullRequestIDs) == 0 {
-		return out, nil
-	}
-
-	var analyses []models.CodeAnalysis
-	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ? AND pull_request_id IN ? AND type = ?", repoID, pullRequestIDs, analysisType).
-		Order("pull_request_id ASC, created_at DESC").
-		Find(&analyses).Error; err != nil {
-		return nil, fmt.Errorf("list latest pull request analyses: %w", err)
-	}
-
-	for _, analysis := range analyses {
-		if analysis.PullRequestID == nil {
-			continue
-		}
-		if _, exists := out[*analysis.PullRequestID]; exists {
-			continue
-		}
-		out[*analysis.PullRequestID] = analysis
-	}
-
-	return out, nil
-}
-
-func (pr *PostgresRepository) GetRepositoriesNeedingAnalysis(ctx context.Context, limit int) ([]models.Repository, error) {
-	var repos []models.Repository
-
-	// Repositories that haven't been analyzed or were analyzed more than 24 hours ago
-	cutoffTime := time.Now().Add(-24 * time.Hour)
-
-	if err := pr.db.WithContext(ctx).
-		Where("analysis_status != ? AND (last_analyzed_at IS NULL OR last_analyzed_at < ?)", "in_progress", cutoffTime).
-		Limit(limit).
-		Order("last_analyzed_at ASC").
-		Find(&repos).Error; err != nil {
-		return nil, fmt.Errorf("get repositories needing analysis: %w", err)
-	}
-
-	return repos, nil
-}
-
-// ============ Code Template Operations ============
-
-func (pr *PostgresRepository) CreateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error {
-	if !template.IsValid() {
-		return errors.New("invalid code template data")
-	}
-	if err := pr.db.WithContext(ctx).Create(template).Error; err != nil {
-		return fmt.Errorf("create code template: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) GetCodeTemplate(ctx context.Context, id string) (*models.CodeTemplate, error) {
-	var template models.CodeTemplate
-	if err := pr.db.WithContext(ctx).First(&template, "id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get code template: %w", err)
-	}
-	return &template, nil
-}
-
-func (pr *PostgresRepository) UpdateCodeTemplate(ctx context.Context, template *models.CodeTemplate) error {
-	if !template.IsValid() {
-		return errors.New("invalid code template data")
-	}
-	if err := pr.db.WithContext(ctx).Save(template).Error; err != nil {
-		return fmt.Errorf("update code template: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) ListCodeTemplates(ctx context.Context, filter storage.CodeTemplateFilter) ([]models.CodeTemplate, int64, error) {
-	var templates []models.CodeTemplate
-	var total int64
-
-	query := pr.db.WithContext(ctx).Model(&models.CodeTemplate{})
-	if filter.OrganizationID != "" {
-		query = query.Where("organization_id = ?", filter.OrganizationID)
-	}
-	if filter.RepositoryID != "" {
-		query = query.Where("repository_id = ?", filter.RepositoryID)
-	}
-	if filter.IsPinned != nil {
-		query = query.Where("is_pinned = ?", *filter.IsPinned)
-	}
-	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
-	}
-
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("count code templates: %w", err)
-	}
-	if err := query.
-		Limit(filter.Limit).
-		Offset(filter.Offset).
-		Order("created_at DESC").
-		Find(&templates).Error; err != nil {
-		return nil, 0, fmt.Errorf("list code templates: %w", err)
-	}
-	return templates, total, nil
-}
-
-// ============ Package Dependency Operations ============
-
 func (pr *PostgresRepository) UpsertPackageDependency(ctx context.Context, dep *models.PackageDependency) error {
 	if dep.RepositoryID == "" || dep.Name == "" || dep.Ecosystem == "" {
 		return errors.New("invalid package dependency data")
@@ -1044,127 +751,12 @@ func (pr *PostgresRepository) DeletePackageDependencies(ctx context.Context, rep
 	return nil
 }
 
-// ============ Code Embedding Operations ============
-
-func (pr *PostgresRepository) CreateCodeEmbedding(ctx context.Context, embedding *models.CodeEmbedding) error {
-	if err := pr.db.WithContext(ctx).Create(embedding).Error; err != nil {
-		return fmt.Errorf("create code embedding: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) CreateCodeEmbeddings(ctx context.Context, embeddings []models.CodeEmbedding) error {
-	if len(embeddings) == 0 {
-		return nil
-	}
-	if err := pr.db.WithContext(ctx).CreateInBatches(embeddings, 100).Error; err != nil {
-		return fmt.Errorf("create code embeddings: %w", err)
-	}
-	return nil
-}
-
-func (pr *PostgresRepository) SearchEmbeddings(ctx context.Context, filter storage.EmbeddingSearchFilter) ([]models.CodeEmbedding, error) {
-	var embeddings []models.CodeEmbedding
-	if filter.Limit <= 0 || filter.Limit > 50 {
-		filter.Limit = 10
-	}
-	if filter.MinScore < 0 || filter.MinScore > 1 {
-		filter.MinScore = 0.55
-	}
-
-	queryVector := pgvector.NewVector(filter.Vector)
-	where := []string{"repository_id = ?"}
-	args := []interface{}{filter.RepositoryID}
-	if filter.Provider != "" {
-		where = append(where, "provider = ?")
-		args = append(args, filter.Provider)
-	}
-	if filter.Model != "" {
-		where = append(where, "model = ?")
-		args = append(args, filter.Model)
-	}
-	if filter.Dimension > 0 {
-		where = append(where, "dimension = ?")
-		args = append(args, filter.Dimension)
-	}
-	if filter.Branch != "" {
-		where = append(where, "branch = ?")
-		args = append(args, filter.Branch)
-	}
-
-	searchText := strings.TrimSpace(filter.Query)
-	searchPattern := "%" + escapeLike(searchText) + "%"
-	candidateLimit := filter.Limit * 5
-	if candidateLimit < 50 {
-		candidateLimit = 50
-	}
-
-	sql := fmt.Sprintf(`
-		SELECT *
-		FROM (
-			SELECT
-				code_embeddings.*,
-				LEAST(
-					1.0,
-					(1 - (embedding <=> ?)) +
-					CASE WHEN ? <> '' AND content ILIKE ? ESCAPE '\' THEN 0.15 ELSE 0 END +
-					CASE WHEN ? <> '' AND file_path ILIKE ? ESCAPE '\' THEN 0.10 ELSE 0 END +
-					CASE WHEN ? <> '' AND language ILIKE ? ESCAPE '\' THEN 0.05 ELSE 0 END
-				) AS score
-			FROM code_embeddings
-			WHERE %s
-			ORDER BY embedding <=> ?
-			LIMIT ?
-		) ranked
-		WHERE score >= ?
-		ORDER BY score DESC, file_path ASC, start_line ASC
-		LIMIT ?
-	`, strings.Join(where, " AND "))
-
-	queryArgs := []interface{}{
-		queryVector,
-		searchText, searchPattern,
-		searchText, searchPattern,
-		searchText, searchPattern,
-	}
-	queryArgs = append(queryArgs, args...)
-	queryArgs = append(queryArgs, queryVector, candidateLimit, filter.MinScore, filter.Limit)
-
-	if err := pr.db.WithContext(ctx).Raw(sql, queryArgs...).Scan(&embeddings).Error; err != nil {
-		return nil, fmt.Errorf("search embeddings: %w", err)
-	}
-
-	return embeddings, nil
-}
-
 func escapeLike(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, `%`, `\%`)
 	value = strings.ReplaceAll(value, `_`, `\_`)
 	return value
 }
-
-func (pr *PostgresRepository) DeleteEmbeddings(ctx context.Context, filter storage.EmbeddingDeleteFilter) error {
-	query := pr.db.WithContext(ctx).Where("repository_id = ?", filter.RepositoryID)
-	if filter.Provider != "" {
-		query = query.Where("provider = ?", filter.Provider)
-	}
-	if filter.Model != "" {
-		query = query.Where("model = ?", filter.Model)
-	}
-	if filter.Dimension > 0 {
-		query = query.Where("dimension = ?", filter.Dimension)
-	}
-	if filter.Branch != "" {
-		query = query.Where("branch = ?", filter.Branch)
-	}
-	if err := query.Delete(&models.CodeEmbedding{}).Error; err != nil {
-		return fmt.Errorf("delete embeddings by repository: %w", err)
-	}
-	return nil
-}
-
-// ============ Token Operations ============
 
 func (pr *PostgresRepository) CreateToken(ctx context.Context, token *models.Token) error {
 	if err := pr.db.WithContext(ctx).Create(token).Error; err != nil {
@@ -1260,41 +852,19 @@ func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *m
 	return nil
 }
 
-// SumTokensUsedSince returns the total tokens used for completed AI work since the given time.
+// SumTokensUsedSince returns the total tokens used for completed AI work since
+// the given time. Documentation generation is the only LLM-backed feature left,
+// so `doc_generations` is the whole budget.
 func (pr *PostgresRepository) SumTokensUsedSince(ctx context.Context, organizationID string, since time.Time) (int64, error) {
 	var total int64
-	query := `
-		SELECT COALESCE(SUM(tokens_used), 0)
-		FROM (
-			SELECT ca.tokens_used
-			FROM code_analyses ca
-			JOIN repositories r ON r.id = ca.repository_id
-			WHERE ca.created_at >= ? AND ca.status = 'completed'
-	`
+	query := pr.db.WithContext(ctx).
+		Model(&models.DocGeneration{}).
+		Select("COALESCE(SUM(tokens_used), 0)").
+		Where("created_at >= ? AND status = ?", since, models.DocGenerationStatusCompleted)
 	if organizationID != "" {
-		query += " AND r.organization_id = ?"
+		query = query.Where("organization_id = ?", organizationID)
 	}
-	query += `
-			UNION ALL
-			SELECT ct.tokens_used
-			FROM code_templates ct
-			WHERE ct.created_at >= ? AND ct.status = 'completed'
-	`
-	if organizationID != "" {
-		query += " AND ct.organization_id = ?"
-	}
-	query += ") AS combined"
-
-	args := []any{since}
-	if organizationID != "" {
-		args = append(args, organizationID)
-	}
-	args = append(args, since)
-	if organizationID != "" {
-		args = append(args, organizationID)
-	}
-
-	if err := pr.db.WithContext(ctx).Raw(query, args...).Scan(&total).Error; err != nil {
+	if err := query.Scan(&total).Error; err != nil {
 		return 0, fmt.Errorf("sum tokens used since: %w", err)
 	}
 	return total, nil

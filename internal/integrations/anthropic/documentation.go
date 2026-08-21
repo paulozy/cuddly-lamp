@@ -11,11 +11,14 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/docs"
 )
 
+// documentationMaxTokens caps the Markdown body Claude may emit per document.
+const documentationMaxTokens = 8192
+
 func (c *Client) GenerateDocumentation(ctx context.Context, req *ai.DocumentationRequest) (*ai.DocumentationResult, error) {
 	prompt := c.buildDocumentationPrompt(req)
 	params := anthropic.MessageNewParams{
 		Model:     c.model,
-		MaxTokens: int64(templateMaxTokens),
+		MaxTokens: int64(documentationMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -92,7 +95,7 @@ func (c *Client) GenerateOrgDocumentation(ctx context.Context, req *ai.OrgDocume
 	}
 	params := anthropic.MessageNewParams{
 		Model:     c.model,
-		MaxTokens: int64(templateMaxTokens),
+		MaxTokens: int64(documentationMaxTokens),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},

@@ -155,18 +155,6 @@ func applyOrganizationConfigUpdate(cfg *models.OrganizationConfig, req models.Up
 	if req.GithubToken != nil {
 		cfg.GithubToken = *req.GithubToken
 	}
-	if req.GitHubPRReviewEnabled != nil {
-		cfg.GitHubPRReviewEnabled = *req.GitHubPRReviewEnabled
-	}
-	if req.EmbeddingsProvider != nil {
-		cfg.EmbeddingsProvider = *req.EmbeddingsProvider
-	}
-	if req.VoyageAPIKey != nil {
-		cfg.VoyageAPIKey = *req.VoyageAPIKey
-	}
-	if req.EmbeddingsModel != nil {
-		cfg.EmbeddingsModel = *req.EmbeddingsModel
-	}
 	if req.GitHubClientID != nil {
 		cfg.GitHubClientID = *req.GitHubClientID
 	}

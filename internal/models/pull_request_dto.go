@@ -1,7 +1,5 @@
 package models
 
-import "time"
-
 type PullRequestResponse struct {
 	ID             int64  `json:"id"`
 	Number         int64  `json:"number"`
@@ -26,7 +24,6 @@ type PullRequestResponse struct {
 
 type PullRequestListItemResponse struct {
 	PullRequest    PullRequestResponse                `json:"pull_request"`
-	LatestAnalysis *PullRequestReviewAnalysisResponse `json:"latest_analysis,omitempty"`
 }
 
 type PullRequestListResponse struct {
@@ -37,7 +34,6 @@ type PullRequestListResponse struct {
 type PullRequestDetailResponse struct {
 	PullRequest    PullRequestResponse                `json:"pull_request"`
 	Files          []PullRequestFileResponse          `json:"files"`
-	LatestAnalysis *PullRequestReviewAnalysisResponse `json:"latest_analysis,omitempty"`
 }
 
 type PullRequestFilesResponse struct {
@@ -53,44 +49,4 @@ type PullRequestFileResponse struct {
 	Deletions int    `json:"deletions"`
 	Changes   int    `json:"changes"`
 	Patch     string `json:"patch,omitempty"`
-}
-
-type PullRequestReviewAnalysisResponse struct {
-	ID            string         `json:"id"`
-	RepositoryID  string         `json:"repository_id"`
-	PullRequestID int            `json:"pull_request_id"`
-	Type          AnalysisType   `json:"type"`
-	Status        AnalysisStatus `json:"status"`
-	SummaryText   string         `json:"summary_text,omitempty"`
-	Issues        []CodeIssue    `json:"issues"`
-	IssueCount    int            `json:"issue_count"`
-	CriticalCount int            `json:"critical_count"`
-	ErrorCount    int            `json:"error_count"`
-	WarningCount  int            `json:"warning_count"`
-	InfoCount     int            `json:"info_count"`
-	AIModel       string         `json:"ai_model,omitempty"`
-	TokensUsed    int            `json:"tokens_used,omitempty"`
-	ProcessingMs  int64          `json:"processing_ms,omitempty"`
-	ErrorMessage  string         `json:"error_message,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-}
-
-type CreatePullRequestReviewRequest struct {
-	Event    string                     `json:"event" binding:"required"`
-	Body     string                     `json:"body,omitempty"`
-	Comments []PullRequestReviewComment `json:"comments,omitempty"`
-}
-
-type PullRequestReviewComment struct {
-	Path string `json:"path" binding:"required"`
-	Line int    `json:"line" binding:"required"`
-	Side string `json:"side,omitempty"`
-	Body string `json:"body" binding:"required"`
-}
-
-type CreatePullRequestReviewResponse struct {
-	ReviewID int64  `json:"review_id"`
-	Event    string `json:"event"`
-	Status   string `json:"status"`
 }

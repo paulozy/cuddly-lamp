@@ -105,17 +105,13 @@ func (b *OrgContextBuilder) Build(ctx context.Context, orgID string) (*OrgContex
 		fmt.Fprintf(&b2, "**Top frameworks**: %s\n", strings.Join(fws, ", "))
 	}
 	b2.WriteString("\n## Repositories\n\n")
-	b2.WriteString("| Name | Provider | Languages | Frameworks | Analysis |\n")
-	b2.WriteString("| --- | --- | --- | --- | --- |\n")
+	b2.WriteString("| Name | Provider | Languages | Frameworks |\n")
+	b2.WriteString("| --- | --- | --- | --- |\n")
 	for i := range repos {
 		r := &repos[i]
 		langs := joinTrimmed(mapKeys(r.Metadata.Languages), ", ", 60)
 		fws := joinTrimmed(r.Metadata.Frameworks, ", ", 60)
-		analysisLine := "—"
-		if a, _ := b.repo.GetLatestAnalysis(ctx, r.ID, models.AnalysisTypeCodeReview); a != nil && a.SummaryText != "" {
-			analysisLine = truncate(strings.ReplaceAll(a.SummaryText, "\n", " "), 120)
-		}
-		fmt.Fprintf(&b2, "| %s | %s | %s | %s | %s |\n", r.Name, r.Type, dashIfEmpty(langs), dashIfEmpty(fws), analysisLine)
+		fmt.Fprintf(&b2, "| %s | %s | %s | %s |\n", r.Name, r.Type, dashIfEmpty(langs), dashIfEmpty(fws))
 	}
 
 	if len(rels) > 0 {
