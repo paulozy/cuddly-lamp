@@ -7,6 +7,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/api/middleware"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
+	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage/postgres"
 	redisstore "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 	swaggerFiles "github.com/swaggo/files"
@@ -92,33 +93,45 @@ func setupAPIRoutes(
 		protected.GET("/organizations/configs", orgConfigHandler.GetConfig)
 		protected.PATCH("/organizations/configs", orgConfigHandler.UpdateConfig)
 
-		protected.POST("/repositories", repoHandler.CreateRepository)
+		// Role gates. Reads are open to any member; writes escalate with the
+		// blast radius of the action. The service layer still enforces that the
+		// resource belongs to the caller's organization — these two checks are
+		// complementary, not redundant.
+		developer := middleware.RequireRole(models.RoleDeveloper)
+		maintainer := middleware.RequireRole(models.RoleMaintainer)
+
+		protected.POST("/repositories", developer, repoHandler.CreateRepository)
 		protected.GET("/repositories", repoHandler.ListRepositories)
 		protected.GET("/repositories/graph", relationshipHandler.GetGraph)
 		protected.GET("/repositories/:id", repoHandler.GetRepository)
-		protected.POST("/repositories/:id/sync", repoHandler.SyncRepository)
-		protected.PUT("/repositories/:id", repoHandler.UpdateRepository)
-		protected.DELETE("/repositories/:id", repoHandler.DeleteRepository)
-		protected.POST("/repository-relationships", relationshipHandler.CreateRelationship)
-		protected.PATCH("/repository-relationships/:id", relationshipHandler.UpdateRelationship)
-		protected.DELETE("/repository-relationships/:id", relationshipHandler.DeleteRelationship)
+		protected.POST("/repositories/:id/sync", developer, repoHandler.SyncRepository)
+		protected.PUT("/repositories/:id", maintainer, repoHandler.UpdateRepository)
+		protected.DELETE("/repositories/:id", maintainer, repoHandler.DeleteRepository)
+		protected.POST("/repository-relationships", developer, relationshipHandler.CreateRelationship)
+		protected.PATCH("/repository-relationships/:id", developer, relationshipHandler.UpdateRelationship)
+		protected.DELETE("/repository-relationships/:id", developer, relationshipHandler.DeleteRelationship)
 
 		// Pull request routes (read-only GitHub pass-through)
 		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)
 		protected.GET("/repositories/:id/pull-requests/:pr_number", pullRequestHandler.GetPullRequest)
 		protected.GET("/repositories/:id/pull-requests/:pr_number/files", pullRequestHandler.GetPullRequestFiles)
 
-		protected.POST("/repositories/:id/docs/generate", docsHandler.GenerateRepositoryDocs)
+		// Doc generation spends the organization's Anthropic budget, so it is
+		// gated even though the result is harmless.
+		protected.POST("/repositories/:id/docs/generate", developer, docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
-		protected.PATCH("/docs/:id", docsHandler.UpdateDocContent)
+		protected.PATCH("/docs/:id", developer, docsHandler.UpdateDocContent)
 		protected.GET("/docs/templates", docsHandler.ListDocTemplates)
+		// GenerateOrgDocs/ListOrgDocs additionally require admin inside the
+		// handler (requireOrgAdmin) — org-wide documents are an admin concern.
 		protected.POST("/organizations/docs/generate", docsHandler.GenerateOrgDocs)
 		protected.GET("/organizations/docs", docsHandler.ListOrgDocs)
 
-		// Coverage upload tokens — managed by repository owners
-		protected.POST("/repositories/:id/coverage/tokens", coverageHandler.CreateCoverageToken)
-		protected.GET("/repositories/:id/coverage/tokens", coverageHandler.ListCoverageTokens)
-		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", coverageHandler.RevokeCoverageToken)
+		// Coverage upload tokens are credentials — minting and revoking them is
+		// a maintainer action.
+		protected.POST("/repositories/:id/coverage/tokens", maintainer, coverageHandler.CreateCoverageToken)
+		protected.GET("/repositories/:id/coverage/tokens", maintainer, coverageHandler.ListCoverageTokens)
+		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", maintainer, coverageHandler.RevokeCoverageToken)
 	}
 }

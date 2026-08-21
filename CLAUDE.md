@@ -99,6 +99,7 @@ internal/
 - **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
 - **StringArray**: `models.StringArray` is a custom type for PostgreSQL `text[]` — use it instead of `[]string` on any GORM model field mapped to a `text[]` column
 - **Repository relationships**: `repository_relationships` is the canonical graph model for spatial navigation. Do not add new map behavior to legacy `repository_dependencies` except compatibility/backfill. Relationships are directed, same-organization only, allow multiple edges between the same repositories, and use `kind` values `http`, `async`, `library`, `data`, `infra`, `manual`, `other`.
+- **Sync is GitHub-only**: `SyncService` refuses any repository whose URL does not resolve to `github.com`, returning `ErrUnsupportedProvider` and recording it on `sync_status`/`sync_error`. This guard is load-bearing: `owner/repo` is not unique across forges, so a `gitlab.com` URL run through the GitHub client silently imports an unrelated project's data. Do not remove it before `plans/integration-gitlab.md` ships a real GitLab sync path.
 - **Webhook registration on localhost**: skipped automatically when `WEBHOOK_BASE_URL` contains `localhost`/`127.0.0.1` — use ngrok for local webhook testing
 - **Field-level encryption**: Encrypted fields require `ENCRYPTION_KEY` at startup; existing unencrypted data must be migrated using `cmd/migrate-encrypt/` tool; decryption happens transparently via GORM `AfterFind` hooks
 - **Documentation generation**: Doc generation is asynchronous and requires Redis/asynq, an organization `ANTHROPIC_API_KEY`, and an organization `GITHUB_TOKEN` with repository contents/PR permissions. Generated Markdown is committed to the target repository via PR and also stored in `doc_generations.content`.
@@ -106,6 +107,10 @@ internal/
 - **Swagger CLI**: `swag` is not required globally; `make swagger` invokes the pinned CLI through `go run`. In restricted sandboxes this can fail until network/module cache access is available.
 
 ## Authentication & Organization Notes
+
+- **Authorization has two layers, both required**: `middleware.RequireRole(minRole)` gates the route on the caller's organization role (`viewer < developer < maintainer < admin`), and the service layer independently checks that the resource belongs to the caller's organization. Neither substitutes for the other — a maintainer of org A must still be refused org B's repositories.
+- **Role map** (`internal/api/routes.go`): reads are open to any member; `developer` covers creating repositories, triggering syncs, relationship CRUD and doc generation; `maintainer` covers updating/deleting repositories and minting or revoking coverage tokens; `admin` is enforced inside the handlers for organization config and org-wide docs.
+- **Adding a write route?** Mount a role gate on it. The middleware existed unmounted for a long time, which meant a `viewer` could delete any repository in the organization.
 
 - **Initial registration**: Public `POST /api/v1/auth/register` accepts user fields plus `organization_name` and optional `organization_slug`; if slug is omitted it is derived from the organization name.
 - **First member role**: The first user in an organization becomes `admin`; later members default to `developer`.

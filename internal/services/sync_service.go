@@ -17,7 +17,14 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
-var ErrSyncInProgress = errors.New("repository sync already in progress")
+var (
+	ErrSyncInProgress = errors.New("repository sync already in progress")
+	// ErrUnsupportedProvider guards the GitHub-only sync path. The catalog
+	// accepts GitLab and Gitea URLs, but only GitHub can be synced today —
+	// without this check the URL's owner/repo pair would be queried against
+	// api.github.com, silently importing a same-named GitHub project's data.
+	ErrUnsupportedProvider = errors.New("repository sync is only supported for github repositories")
+)
 
 type SyncService struct {
 	repo           storage.Repository
@@ -47,10 +54,22 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 		return ErrSyncInProgress
 	}
 
-	// ParseRepositoryURL returns "owner/repo" as name
-	ownerRepo, _, err := utils.ParseRepositoryURL(repo.URL)
+	// ParseRepositoryURL returns "owner/repo" as name, plus the provider the
+	// host resolves to. The provider must be honoured: owner/repo is not unique
+	// across forges, so syncing a gitlab.com URL through the GitHub client can
+	// import an unrelated project that happens to share the path.
+	ownerRepo, provider, err := utils.ParseRepositoryURL(repo.URL)
 	if err != nil {
 		return fmt.Errorf("parse repository URL: %w", err)
+	}
+	if provider != models.RepositoryTypeGitHub {
+		errMsg := fmt.Sprintf("%s: %s", ErrUnsupportedProvider.Error(), provider)
+		repo.UpdateSyncStatus("error", &errMsg)
+		if updateErr := s.repo.UpdateRepository(ctx, repo); updateErr != nil {
+			utils.Warn("sync: failed to record unsupported provider", "repo_id", repoID, "error", updateErr)
+		}
+		utils.Warn("sync: unsupported provider", "repo_id", repoID, "provider", provider)
+		return fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)
 	}
 	parts := strings.SplitN(ownerRepo, "/", 2)
 	owner, name := parts[0], parts[1]

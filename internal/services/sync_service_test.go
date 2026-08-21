@@ -105,6 +105,18 @@ func (m *mockSyncRepoStore) UpdateWebhookConfig(_ context.Context, _ *models.Web
 	return nil
 }
 
+// spyGitHubClient records whether the GitHub API was reached at all. Used to
+// prove a non-GitHub repository never gets queried against api.github.com.
+type spyGitHubClient struct {
+	mockGitHubClient
+	called bool
+}
+
+func (m *spyGitHubClient) GetRepository(ctx context.Context, owner, name string) (*githubclient.RepoInfo, error) {
+	m.called = true
+	return m.mockGitHubClient.GetRepository(ctx, owner, name)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newSyncService(store *mockSyncRepoStore, gh githubclient.ClientInterface) *SyncService {
@@ -217,5 +229,55 @@ func TestSyncService_SyncRepository_DBUpdateError(t *testing.T) {
 	// doSync's UpdateRepository also fails — that's the returned error.
 	if err == nil {
 		t.Fatal("expected error due to DB update failure, got nil")
+	}
+}
+
+// Regression: SyncRepository used to discard the provider returned by
+// ParseRepositoryURL and always build a GitHub client. Because "owner/repo" is
+// not unique across forges, a gitlab.com URL would be queried against
+// api.github.com — silently importing an unrelated GitHub project's languages,
+// branches and commits into the catalog, and trying to register a webhook on
+// someone else's repository.
+func TestSyncService_SyncRepository_RejectsNonGitHubProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "gitlab", url: "https://gitlab.com/owner/repo"},
+		{name: "gitea", url: "https://gitea.example.com/owner/repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockSyncRepoStore()
+			seedRepo(store, "repo-1", tt.url)
+
+			gh := &spyGitHubClient{mockGitHubClient: mockGitHubClient{
+				repoInfo: &githubclient.RepoInfo{ID: 42, Language: "Go", DefaultBranch: "main"},
+			}}
+
+			svc := newSyncService(store, gh)
+			err := svc.SyncRepository(context.Background(), "repo-1")
+
+			if !errors.Is(err, ErrUnsupportedProvider) {
+				t.Fatalf("error = %v, want ErrUnsupportedProvider", err)
+			}
+			if gh.called {
+				t.Error("the GitHub API was queried for a non-GitHub repository")
+			}
+
+			updated := store.repos["repo-1"]
+			if updated.SyncStatus != "error" {
+				t.Errorf("SyncStatus = %q, want %q", updated.SyncStatus, "error")
+			}
+			if updated.SyncError == "" {
+				t.Error("SyncError should explain why the sync was refused")
+			}
+			// The catalog row must keep its original metadata — importing a
+			// same-named GitHub project is exactly the failure being prevented.
+			if updated.Metadata.DefaultBranch != "" {
+				t.Errorf("metadata was populated from GitHub: %+v", updated.Metadata)
+			}
+		})
 	}
 }
