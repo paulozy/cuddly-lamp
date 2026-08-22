@@ -41,7 +41,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
-	onboardingHandler := factories.MakeOnboardingHandler(repository)
+	onboardingHandler := factories.MakeOnboardingHandler(repository, providerHosts)
 	teamHandler := factories.MakeTeamHandler(repository)
 
 	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler, onboardingHandler)
@@ -166,6 +166,13 @@ func setupAPIRoutes(
 		// team — while the progress dashboard is admin, like the member list.
 		protected.POST("/onboarding/assignments", maintainer, onboardingHandler.AssignFlow)
 		protected.GET("/onboarding/assignments", admin, onboardingHandler.ListAssignments)
+
+		// The runner acts on the caller's own onboarding, so these need no role
+		// beyond membership — and take no user id from the payload.
+		protected.GET("/onboarding/me", onboardingHandler.MyOnboarding)
+		protected.POST("/onboarding/me/steps/:stepID", onboardingHandler.MarkStep)
+		protected.POST("/onboarding/me/steps/:stepID/verify", onboardingHandler.VerifyStep)
+		protected.POST("/onboarding/me/assignments/:assignmentID/feedback", onboardingHandler.SubmitFeedback)
 
 		// The glossary is organization vocabulary: everyone reads it, and
 		// maintainers curate it — the same bar as teams.

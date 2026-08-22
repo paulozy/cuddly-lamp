@@ -180,6 +180,10 @@ type Repository interface {
 
 	// OAuth operations
 	GetOAuthConnection(ctx context.Context, provider, providerUserID string) (*models.OAuthConnection, error)
+	// GetOAuthConnectionByUser resolves a member's identity on a provider, which
+	// is the reverse of the lookup above: verified onboarding steps start from
+	// our user and need their provider login.
+	GetOAuthConnectionByUser(ctx context.Context, userID, provider string) (*models.OAuthConnection, error)
 	UpsertOAuthConnection(ctx context.Context, conn *models.OAuthConnection) error
 }
 

@@ -25,14 +25,14 @@ const (
 )
 
 var (
-	ErrCoverageInvalidFormat   = errors.New("unsupported coverage format")
-	ErrCoverageInvalidSHA      = errors.New("invalid commit sha")
-	ErrCoverageBodyTooLarge    = errors.New("coverage body exceeds size limit")
-	ErrCoverageParseFailed     = errors.New("failed to parse coverage payload")
-	ErrCoverageTokenInvalid    = errors.New("coverage upload token is invalid")
+	ErrCoverageInvalidFormat    = errors.New("unsupported coverage format")
+	ErrCoverageInvalidSHA       = errors.New("invalid commit sha")
+	ErrCoverageBodyTooLarge     = errors.New("coverage body exceeds size limit")
+	ErrCoverageParseFailed      = errors.New("failed to parse coverage payload")
+	ErrCoverageTokenInvalid     = errors.New("coverage upload token is invalid")
 	ErrCoverageTokenForeignRepo = errors.New("coverage upload token does not match repository")
-	ErrCoverageTokenExpired    = errors.New("coverage upload token expired or revoked")
-	ErrCoverageTokenNotFound   = errors.New("coverage upload token not found")
+	ErrCoverageTokenExpired     = errors.New("coverage upload token expired or revoked")
+	ErrCoverageTokenNotFound    = errors.New("coverage upload token not found")
 )
 
 // CoverageService handles ingest of CI-uploaded reports plus the lifecycle

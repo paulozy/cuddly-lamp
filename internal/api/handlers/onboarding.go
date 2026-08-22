@@ -15,10 +15,11 @@ import (
 // admin composes, and the organization vocabulary its steps can reference.
 type OnboardingHandler struct {
 	onboarding *services.OnboardingService
+	run        *services.OnboardingRunService
 }
 
-func NewOnboardingHandler(onboardingService *services.OnboardingService) *OnboardingHandler {
-	return &OnboardingHandler{onboarding: onboardingService}
+func NewOnboardingHandler(onboardingService *services.OnboardingService, runService *services.OnboardingRunService) *OnboardingHandler {
+	return &OnboardingHandler{onboarding: onboardingService, run: runService}
 }
 
 // onboardingError maps the service's sentinels onto status codes. A reference
@@ -30,6 +31,21 @@ func (h *OnboardingHandler) onboardingError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, models.ErrorResponse{
 			Error:            "not_found",
 			ErrorDescription: "onboarding flow not found",
+		})
+	case errors.Is(err, services.ErrOnboardingAssignmentNotFound):
+		c.JSON(http.StatusNotFound, models.ErrorResponse{
+			Error:            "not_found",
+			ErrorDescription: "you have no onboarding assigned for this step",
+		})
+	case errors.Is(err, services.ErrOnboardingStepNotFound):
+		c.JSON(http.StatusNotFound, models.ErrorResponse{
+			Error:            "not_found",
+			ErrorDescription: "onboarding step not found",
+		})
+	case errors.Is(err, services.ErrOnboardingStepStatusInvalid):
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
 		})
 	case errors.Is(err, services.ErrGlossaryTermNotFound):
 		c.JSON(http.StatusNotFound, models.ErrorResponse{
@@ -356,6 +372,153 @@ func (h *OnboardingHandler) ListAssignments(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.OnboardingAssignmentListResponse{Items: items, Total: len(items)})
+}
+
+// ── the runner ───────────────────────────────────────────────────────────────
+
+// MyOnboarding returns the caller's own onboarding, with every step already
+// resolved against live data.
+// @Summary      Get my onboarding
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {object} models.OnboardingRunListResponse
+// @Failure      401 {object} models.ErrorResponse
+// @Router       /onboarding/me [get]
+func (h *OnboardingHandler) MyOnboarding(c *gin.Context) {
+	orgID, ok := requireOrganization(c)
+	if !ok {
+		return
+	}
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid authentication",
+		})
+		return
+	}
+
+	runs, err := h.run.ListForUser(c.Request.Context(), orgID, userID)
+	if err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, models.OnboardingRunListResponse{Items: runs, Total: len(runs)})
+}
+
+// MarkStep records an outcome for one step of the caller's onboarding.
+// @Summary      Mark an onboarding step
+// @Tags         onboarding
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        stepID path string true "Step ID"
+// @Param        body body models.MarkOnboardingStepRequest true "Outcome"
+// @Success      200 {object} models.OnboardingRunResponse
+// @Failure      400 {object} models.ErrorResponse
+// @Failure      404 {object} models.ErrorResponse
+// @Router       /onboarding/me/steps/{stepID} [post]
+func (h *OnboardingHandler) MarkStep(c *gin.Context) {
+	orgID, userID, ok := h.requireCaller(c)
+	if !ok {
+		return
+	}
+
+	var req models.MarkOnboardingStepRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	run, err := h.run.MarkStep(c.Request.Context(), orgID, userID, c.Param("stepID"), req)
+	if err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, run)
+}
+
+// VerifyStep runs the check behind a verified step.
+//
+// On demand rather than on load: the check talks to the provider, and running
+// it on every render would spend latency and rate limit to learn nothing new.
+//
+// @Summary      Run a verified onboarding step's check
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Param        stepID path string true "Step ID"
+// @Success      200 {object} models.OnboardingVerificationResult
+// @Failure      404 {object} models.ErrorResponse
+// @Router       /onboarding/me/steps/{stepID}/verify [post]
+func (h *OnboardingHandler) VerifyStep(c *gin.Context) {
+	orgID, userID, ok := h.requireCaller(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.run.Verify(c.Request.Context(), orgID, userID, c.Param("stepID"))
+	if err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// SubmitFeedback stores what the newcomer says was missing.
+// @Summary      Leave onboarding feedback
+// @Tags         onboarding
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        assignmentID path string true "Assignment ID"
+// @Param        body body models.OnboardingFeedbackRequest true "Feedback"
+// @Success      204
+// @Failure      404 {object} models.ErrorResponse
+// @Router       /onboarding/me/assignments/{assignmentID}/feedback [post]
+func (h *OnboardingHandler) SubmitFeedback(c *gin.Context) {
+	orgID, userID, ok := h.requireCaller(c)
+	if !ok {
+		return
+	}
+
+	var req models.OnboardingFeedbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	if err := h.run.SubmitFeedback(c.Request.Context(), orgID, userID, c.Param("assignmentID"), req); err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// requireCaller resolves the organization and the user behind the request. The
+// runner endpoints act on the caller's own onboarding and nobody else's, which
+// is why they never take a user id from the payload.
+func (h *OnboardingHandler) requireCaller(c *gin.Context) (string, string, bool) {
+	orgID, ok := requireOrganization(c)
+	if !ok {
+		return "", "", false
+	}
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid authentication",
+		})
+		return "", "", false
+	}
+	return orgID, userID, true
 }
 
 // ── glossary ─────────────────────────────────────────────────────────────────

@@ -14,9 +14,9 @@ import (
 
 type mockCoverageRepo struct {
 	storage.Repository
-	tokens     map[string]*models.CoverageUploadToken // by hash
-	tokensByID map[string]*models.CoverageUploadToken
-	uploads    []*models.CoverageUpload
+	tokens       map[string]*models.CoverageUploadToken // by hash
+	tokensByID   map[string]*models.CoverageUploadToken
+	uploads      []*models.CoverageUpload
 	createTokErr error
 	createUpErr  error
 }

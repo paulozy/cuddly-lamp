@@ -30,6 +30,15 @@ type mockOnboardingStore struct {
 
 	assignments  []*models.OnboardingAssignment
 	progressDone map[string]int
+	progress     map[string][]models.OnboardingStepProgress
+
+	// Rows the runner resolves against, richer than the id→org maps above.
+	repoRows    map[string]*models.Repository
+	docRows     map[string]*models.DocGeneration
+	teamMembers map[string][]models.TeamMember
+	userTeams   map[string][]string
+	connections map[string]*models.OAuthConnection
+	orgConfig   *models.OrganizationConfig
 
 	nextID int
 }
@@ -44,6 +53,12 @@ func newMockOnboardingStore() *mockOnboardingStore {
 		docs:         map[string]string{},
 		members:      map[string]string{},
 		progressDone: map[string]int{},
+		progress:     map[string][]models.OnboardingStepProgress{},
+		repoRows:     map[string]*models.Repository{},
+		docRows:      map[string]*models.DocGeneration{},
+		teamMembers:  map[string][]models.TeamMember{},
+		userTeams:    map[string][]string{},
+		connections:  map[string]*models.OAuthConnection{},
 	}
 }
 
@@ -154,6 +169,10 @@ func (m *mockOnboardingStore) ReplaceOnboardingSteps(_ context.Context, flowID s
 }
 
 func (m *mockOnboardingStore) GetRepository(_ context.Context, id string) (*models.Repository, error) {
+	if row, ok := m.repoRows[id]; ok {
+		copyRepo := *row
+		return &copyRepo, nil
+	}
 	orgID, ok := m.repos[id]
 	if !ok {
 		return nil, nil
@@ -170,6 +189,13 @@ func (m *mockOnboardingStore) GetTeam(_ context.Context, id string) (*models.Tea
 }
 
 func (m *mockOnboardingStore) GetDocGeneration(_ context.Context, id string) (*models.DocGeneration, error) {
+	if row, ok := m.docRows[id]; ok {
+		if _, live := m.docs[id]; !live {
+			return nil, nil
+		}
+		copyDoc := *row
+		return &copyDoc, nil
+	}
 	orgID, ok := m.docs[id]
 	if !ok {
 		return nil, nil
