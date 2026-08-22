@@ -84,7 +84,7 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 	if err != nil {
 		errMsg := err.Error()
 		repo.UpdateSyncStatus("error", &errMsg)
-		if updateErr := s.repo.UpdateRepository(ctx, repo); updateErr != nil {
+		if updateErr := s.persist(ctx, repo); updateErr != nil {
 			utils.Warn("sync: failed to record provider resolution failure", "repo_id", repoID, "error", updateErr)
 		}
 		utils.Warn("sync: provider unavailable", "repo_id", repoID, "provider", provider, "error", err)
@@ -92,7 +92,7 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 	}
 
 	repo.SyncStatus = "syncing"
-	if updateErr := s.repo.UpdateRepository(ctx, repo); updateErr != nil {
+	if updateErr := s.persist(ctx, repo); updateErr != nil {
 		utils.Warn("sync: failed to set syncing status", "repo_id", repoID, "error", updateErr)
 	}
 
@@ -100,7 +100,7 @@ func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
 		utils.Error("sync: failed", "repo_id", repoID, "error", syncErr)
 		errMsg := syncErr.Error()
 		repo.UpdateSyncStatus("error", &errMsg)
-		_ = s.repo.UpdateRepository(ctx, repo)
+		_ = s.persist(ctx, repo)
 		return syncErr
 	}
 
@@ -178,12 +178,8 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, clien
 	repo.SyncError = ""
 	repo.LastSyncedAt = time.Now().UTC()
 
-	if err := s.repo.UpdateRepository(ctx, repo); err != nil {
+	if err := s.persist(ctx, repo); err != nil {
 		return fmt.Errorf("update repository: %w", err)
-	}
-
-	if s.cache != nil {
-		_ = s.cache.Del(ctx, rediscache.RepoKey(repo.ID))
 	}
 
 	if s.webhookBaseURL != "" && !isLocalURL(s.webhookBaseURL) {
@@ -194,6 +190,26 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, clien
 		utils.Info("sync: skipping webhook registration (local URL not reachable by the provider)", "repo_id", repo.ID)
 	}
 
+	return nil
+}
+
+// persist writes the repository and drops its cached detail response.
+//
+// Every status the sync writes has to invalidate that cache, not just the
+// successful one. The read path caches the response for an hour, so a
+// repository fetched while it was still `idle` would keep reporting `idle`
+// long after the sync failed — the UI would say "never synced" for what is
+// really "sync failed", and the scorecard's sync.healthy check would read
+// "not applicable" instead of failing. Only the successful path used to
+// invalidate, which is exactly the path where staleness is harmless.
+func (s *SyncService) persist(ctx context.Context, repo *models.Repository) error {
+	if err := s.repo.UpdateRepository(ctx, repo); err != nil {
+		// The write failed, so the cached copy still matches the database.
+		return err
+	}
+	if s.cache != nil {
+		_ = s.cache.Del(ctx, rediscache.RepoKey(repo.ID))
+	}
 	return nil
 }
 
