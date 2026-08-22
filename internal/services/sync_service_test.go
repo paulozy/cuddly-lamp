@@ -9,6 +9,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	rediscache "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
 )
 
 // ── mock GitHub client ────────────────────────────────────────────────────────
@@ -503,5 +504,73 @@ func TestSync_TruncatedTreeLeavesSignalsUndetermined(t *testing.T) {
 	}
 	if repo.SyncStatus != "synced" {
 		t.Errorf("SyncStatus = %q, want synced", repo.SyncStatus)
+	}
+}
+
+// Regression: only the successful sync invalidated the cached repository
+// response, which is the one outcome where staleness is harmless. A repository
+// read while it was still `idle` kept reporting `idle` for the cache TTL — an
+// hour — after its sync failed, so the UI showed "never synced" for what was
+// really "sync failed", and the scorecard reported sync.healthy as not
+// applicable instead of failing.
+func TestSyncService_SyncRepository_DropsTheCachedResponseOnEveryOutcome(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		gh      *mockGitHubClient
+		wantErr bool
+	}{
+		{
+			name:    "host with no client",
+			url:     "https://gitea.example.com/owner/repo",
+			gh:      &mockGitHubClient{},
+			wantErr: true,
+		},
+		{
+			name:    "provider call fails",
+			url:     "https://github.com/owner/repo",
+			gh:      &mockGitHubClient{repoErr: errors.New("github is down")},
+			wantErr: true,
+		},
+		{
+			name: "sync succeeds",
+			url:  "https://github.com/owner/repo",
+			gh: &mockGitHubClient{
+				repoInfo: &githubclient.RepoInfo{ID: 42, DefaultBranch: "main"},
+				branches: []githubclient.Branch{{Name: "main"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockSyncRepoStore()
+			seedRepo(store, "repo-1", tt.url)
+
+			cache := newMockCache()
+			key := rediscache.RepoKey("repo-1")
+			cache.store[key] = `{"id":"repo-1","sync_status":"idle"}`
+
+			svc := NewSyncService(store, scm.Credentials{GitHubToken: "test-token"}, cache, "")
+			svc.resolve = func(kind models.RepositoryType, creds scm.Credentials) (scm.Provider, error) {
+				if kind != models.RepositoryTypeGitHub {
+					return scm.For(kind, creds)
+				}
+				return scm.NewGitHubProviderWithClient(tt.gh, creds.GitHubToken), nil
+			}
+
+			err := svc.SyncRepository(context.Background(), "repo-1")
+			if tt.wantErr && err == nil {
+				t.Fatal("expected an error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if _, stillCached := cache.store[key]; stillCached {
+				t.Errorf("the stale cached response survived a sync that ended in %q",
+					store.repos["repo-1"].SyncStatus)
+			}
+		})
 	}
 }

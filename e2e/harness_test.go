@@ -411,9 +411,10 @@ func (s *stack) getRepository(t *testing.T, token, id string) repositoryResponse
 // Sync runs in the worker, so the API returns before it finishes.
 //
 // It polls the list endpoint rather than the detail endpoint on purpose: the
-// detail read is cached in Redis for an hour, and a failed sync does not
-// invalidate that cache, so a repository read once while still `idle` would
-// appear `idle` for the rest of the run. The list query reads through.
+// list query reads through, while the detail read is served from a Redis cache
+// that the sync invalidates. Polling the authoritative read keeps this helper
+// from depending on that invalidation — which the provider-error test asserts
+// on directly instead.
 func (s *stack) waitForSync(t *testing.T, token, id string) repositoryResponse {
 	t.Helper()
 	var repo repositoryResponse

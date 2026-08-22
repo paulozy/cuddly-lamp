@@ -383,6 +383,15 @@ func TestProviderErrorsAreReportedClearly(t *testing.T) {
 		// This organization never configured a token, and the deployment's
 		// GITLAB_TOKEN is empty in this run.
 		repo := sut.createRepository(t, token, runnerURL)
+
+		// Read the detail endpoint before the sync settles, which is what puts
+		// the pre-sync state in the cache. Regression: only a successful sync
+		// invalidated it, so this read used to pin `idle` for an hour and the
+		// failure below stayed invisible on the repository page.
+		if before := sut.getRepository(t, token, repo.ID); before.SyncStatus == "synced" {
+			t.Fatalf("sync_status = %q before any provider call", before.SyncStatus)
+		}
+
 		synced := sut.waitForSync(t, token, repo.ID)
 
 		if synced.SyncStatus != "error" {
@@ -394,6 +403,17 @@ func TestProviderErrorsAreReportedClearly(t *testing.T) {
 		// The catalog row must not be populated from anywhere else.
 		if synced.Metadata.DefaultBranch != "" {
 			t.Errorf("metadata was populated despite the failure: %+v", synced.Metadata)
+		}
+
+		// The cached detail endpoint has to agree with the list. Disagreeing
+		// means the repository page shows "never synced" for a repository whose
+		// sync failed — a different problem with a different fix.
+		detail := sut.getRepository(t, token, repo.ID)
+		if detail.SyncStatus != "error" {
+			t.Errorf("detail sync_status = %q, want error (list said %q)", detail.SyncStatus, synced.SyncStatus)
+		}
+		if detail.SyncError == "" {
+			t.Error("detail response carries no sync_error")
 		}
 	})
 
