@@ -768,3 +768,17 @@ func TestRegisterWithEmail_InviteDoesNotWorkAcrossOrganizations(t *testing.T) {
 	}
 	t.Error("the invited user did not land in the organization that issued the invite")
 }
+
+// ── onboarding ──────────────────────────────────────────────────────────────
+//
+// admit() assigns the invite's onboarding after creating the membership. These
+// two reads answer "there is no flow to assign", which is the ordinary state
+// for an organization that has not written one — and what these tests exercise.
+
+func (m *mockRepo) GetOnboardingFlow(_ context.Context, _ string) (*models.OnboardingFlow, error) {
+	return nil, nil
+}
+
+func (m *mockRepo) GetDefaultOnboardingFlow(_ context.Context, _ string) (*models.OnboardingFlow, error) {
+	return nil, nil
+}

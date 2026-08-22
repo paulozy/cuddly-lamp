@@ -331,6 +331,33 @@ func (pr *PostgresRepository) ListOnboardingStepProgress(ctx context.Context, as
 	return progress, nil
 }
 
+// progressCount is the projection of the grouped progress query.
+type progressCount struct {
+	AssignmentID string
+	Count        int
+}
+
+func (pr *PostgresRepository) CountOnboardingProgressByAssignment(ctx context.Context, assignmentIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(assignmentIDs))
+	if len(assignmentIDs) == 0 {
+		return counts, nil
+	}
+
+	var rows []progressCount
+	if err := pr.db.WithContext(ctx).
+		Table("onboarding_step_progress").
+		Select("assignment_id, COUNT(*) AS count").
+		Where("assignment_id IN ? AND status = ?", assignmentIDs, models.OnboardingStepDone).
+		Group("assignment_id").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("count onboarding progress: %w", err)
+	}
+	for i := range rows {
+		counts[rows[i].AssignmentID] = rows[i].Count
+	}
+	return counts, nil
+}
+
 // UpsertOnboardingStepProgress records an outcome, overwriting any previous one
 // for the same step — marking a skipped step done later is an ordinary thing to
 // do, not a conflict.

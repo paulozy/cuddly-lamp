@@ -162,6 +162,11 @@ func setupAPIRoutes(
 		protected.POST("/onboarding/flows/:id/duplicate", admin, onboardingHandler.DuplicateFlow)
 		protected.PUT("/onboarding/flows/:id/steps", admin, onboardingHandler.ReplaceSteps)
 
+		// Assigning is a maintainer call — the same bar as putting someone on a
+		// team — while the progress dashboard is admin, like the member list.
+		protected.POST("/onboarding/assignments", maintainer, onboardingHandler.AssignFlow)
+		protected.GET("/onboarding/assignments", admin, onboardingHandler.ListAssignments)
+
 		// The glossary is organization vocabulary: everyone reads it, and
 		// maintainers curate it — the same bar as teams.
 		protected.GET("/glossary", onboardingHandler.ListGlossaryTerms)

@@ -97,6 +97,10 @@ type Repository interface {
 	UpdateOnboardingAssignment(ctx context.Context, assignment *models.OnboardingAssignment) error
 
 	ListOnboardingStepProgress(ctx context.Context, assignmentID string) ([]models.OnboardingStepProgress, error)
+	// CountOnboardingProgressByAssignment counts recorded outcomes for several
+	// assignments at once, so the progress dashboard costs one query instead of
+	// one per person.
+	CountOnboardingProgressByAssignment(ctx context.Context, assignmentIDs []string) (map[string]int, error)
 	UpsertOnboardingStepProgress(ctx context.Context, progress *models.OnboardingStepProgress) error
 
 	// Glossary operations — organization vocabulary, referenced by onboarding

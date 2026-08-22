@@ -28,18 +28,22 @@ type mockOnboardingStore struct {
 	docs    map[string]string
 	members map[string]string // "orgID/userID"
 
+	assignments  []*models.OnboardingAssignment
+	progressDone map[string]int
+
 	nextID int
 }
 
 func newMockOnboardingStore() *mockOnboardingStore {
 	return &mockOnboardingStore{
-		flows:   map[string]*models.OnboardingFlow{},
-		steps:   map[string][]models.OnboardingStep{},
-		terms:   map[string]*models.GlossaryTerm{},
-		repos:   map[string]string{},
-		teams:   map[string]string{},
-		docs:    map[string]string{},
-		members: map[string]string{},
+		flows:        map[string]*models.OnboardingFlow{},
+		steps:        map[string][]models.OnboardingStep{},
+		terms:        map[string]*models.GlossaryTerm{},
+		repos:        map[string]string{},
+		teams:        map[string]string{},
+		docs:         map[string]string{},
+		members:      map[string]string{},
+		progressDone: map[string]int{},
 	}
 }
 
@@ -726,5 +730,303 @@ func TestOnboardingService_GlossaryRejectsIncompleteTerms(t *testing.T) {
 		if _, err := svc.CreateGlossaryTerm(ctx, onbOrg, "u", req); !errors.Is(err, ErrGlossaryTermInvalid) {
 			t.Errorf("req %+v: err = %v, want ErrGlossaryTermInvalid", req, err)
 		}
+	}
+}
+
+// ── assignments ──────────────────────────────────────────────────────────────
+
+func (m *mockOnboardingStore) CreateOnboardingAssignment(_ context.Context, a *models.OnboardingAssignment) error {
+	if a.ID == "" {
+		a.ID = m.id("assignment")
+	}
+	copyAssignment := *a
+	m.assignments = append(m.assignments, &copyAssignment)
+	return nil
+}
+
+func (m *mockOnboardingStore) ListOnboardingAssignmentsForUser(_ context.Context, orgID, userID string) ([]models.OnboardingAssignment, error) {
+	var out []models.OnboardingAssignment
+	for _, a := range m.assignments {
+		if a.OrganizationID == orgID && a.UserID == userID && a.Status != models.OnboardingAssignmentAbandoned {
+			out = append(out, *a)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockOnboardingStore) ListOnboardingAssignments(_ context.Context, orgID string) ([]models.OnboardingAssignment, error) {
+	var out []models.OnboardingAssignment
+	for _, a := range m.assignments {
+		if a.OrganizationID == orgID {
+			out = append(out, *a)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockOnboardingStore) CountOnboardingProgressByAssignment(_ context.Context, ids []string) (map[string]int, error) {
+	counts := map[string]int{}
+	for _, id := range ids {
+		counts[id] = m.progressDone[id]
+	}
+	return counts, nil
+}
+
+func (m *mockOnboardingStore) ListOrganizationMembers(_ context.Context, orgID string) ([]models.OrganizationMember, error) {
+	var out []models.OrganizationMember
+	for key := range m.members {
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 || parts[0] != orgID {
+			continue
+		}
+		out = append(out, models.OrganizationMember{
+			OrganizationID: orgID,
+			UserID:         parts[1],
+			User:           models.User{ID: parts[1], FullName: "Pessoa " + parts[1], Email: parts[1] + "@e.test"},
+		})
+	}
+	return out, nil
+}
+
+func inviteWithFlow(flowID string, createdBy string) *models.OrganizationInvite {
+	invite := &models.OrganizationInvite{ID: "invite-1", OrganizationID: onbOrg, Email: "novo@e.test"}
+	if flowID != "" {
+		invite.OnboardingFlowID = &flowID
+	}
+	if createdBy != "" {
+		invite.CreatedByUserID = &createdBy
+	}
+	return invite
+}
+
+func TestOnboardingService_AssignFromInvite_UsesTheInvitesFlow(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	chosen, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Backend"})
+	_, _ = svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Geral", IsDefault: true})
+
+	assignment, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow(chosen.ID, "admin"))
+	if err != nil {
+		t.Fatalf("AssignFromInvite: %v", err)
+	}
+	if assignment == nil {
+		t.Fatal("no assignment created")
+	}
+	// The invite's choice wins over the organization default.
+	if assignment.FlowID != chosen.ID {
+		t.Errorf("FlowID = %q, want the invite's flow %q", assignment.FlowID, chosen.ID)
+	}
+	if assignment.Status != models.OnboardingAssignmentPending {
+		t.Errorf("status = %q, want pending", assignment.Status)
+	}
+	// The audit trail: who invited them, and with which invite.
+	if assignment.InviteID == nil || *assignment.InviteID != "invite-1" {
+		t.Errorf("InviteID = %v, want invite-1", assignment.InviteID)
+	}
+	if assignment.AssignedByUserID == nil || *assignment.AssignedByUserID != "admin" {
+		t.Errorf("AssignedByUserID = %v, want the inviter", assignment.AssignedByUserID)
+	}
+}
+
+func TestOnboardingService_AssignFromInvite_FallsBackToTheDefault(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	fallback, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Geral", IsDefault: true})
+
+	assignment, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow("", "admin"))
+	if err != nil {
+		t.Fatalf("AssignFromInvite: %v", err)
+	}
+	if assignment == nil || assignment.FlowID != fallback.ID {
+		t.Fatalf("assignment = %+v, want the default flow %q", assignment, fallback.ID)
+	}
+}
+
+func TestOnboardingService_AssignFromInvite_NoFlowAndNoDefaultIsNotAnError(t *testing.T) {
+	svc := NewOnboardingService(newMockOnboardingStore())
+
+	// An organization that has not written an onboarding yet. Returning an
+	// error here would make joining fail for a company doing nothing wrong.
+	assignment, err := svc.AssignFromInvite(context.Background(), onbOrg, "user-new", inviteWithFlow("", "admin"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if assignment != nil {
+		t.Fatalf("assignment = %+v, want none", assignment)
+	}
+}
+
+func TestOnboardingService_AssignFromInvite_IgnoresAFlowThatWentAway(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	deleted, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Antigo"})
+	fallback, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Geral", IsDefault: true})
+	if err := svc.DeleteFlow(ctx, onbOrg, deleted.ID); err != nil {
+		t.Fatalf("DeleteFlow: %v", err)
+	}
+
+	// The invite was written weeks ago and its flow has since been deleted. The
+	// default takes over rather than the invite failing.
+	assignment, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow(deleted.ID, "admin"))
+	if err != nil {
+		t.Fatalf("AssignFromInvite: %v", err)
+	}
+	if assignment == nil || assignment.FlowID != fallback.ID {
+		t.Fatalf("assignment = %+v, want the default flow", assignment)
+	}
+}
+
+func TestOnboardingService_AssignFromInvite_IgnoresAForeignFlow(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	foreign, _ := svc.CreateFlow(ctx, "org-2", "admin", models.CreateOnboardingFlowRequest{Name: "Outro"})
+
+	// An invite naming another organization's flow must not hand the newcomer a
+	// tour of a company they did not join.
+	assignment, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow(foreign.ID, "admin"))
+	if err != nil {
+		t.Fatalf("AssignFromInvite: %v", err)
+	}
+	if assignment != nil {
+		t.Fatalf("assignment = %+v, want none — the organization has no flow of its own", assignment)
+	}
+}
+
+func TestOnboardingService_AssignFromInvite_IsIdempotent(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+	flow, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Geral", IsDefault: true})
+
+	first, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow(flow.ID, "admin"))
+	if err != nil {
+		t.Fatalf("first AssignFromInvite: %v", err)
+	}
+	second, err := svc.AssignFromInvite(ctx, onbOrg, "user-new", inviteWithFlow(flow.ID, "admin"))
+	if err != nil {
+		t.Fatalf("second AssignFromInvite: %v", err)
+	}
+
+	// A retried callback or a re-issued invite must not split someone's
+	// progress across two assignments.
+	if first.ID != second.ID {
+		t.Errorf("ids %q and %q differ, want the existing assignment returned", first.ID, second.ID)
+	}
+	if len(store.assignments) != 1 {
+		t.Errorf("stored %d assignments, want 1", len(store.assignments))
+	}
+}
+
+func TestOnboardingService_AssignToMember(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+	flow, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Backend"})
+	store.members[onbOrg+"/user-5"] = "member"
+
+	assignment, err := svc.AssignToMember(ctx, onbOrg, "admin", models.AssignOnboardingRequest{
+		FlowID: flow.ID, UserID: "user-5",
+	})
+	if err != nil {
+		t.Fatalf("AssignToMember: %v", err)
+	}
+	if assignment.FlowID != flow.ID || assignment.UserID != "user-5" {
+		t.Errorf("assignment = %+v, want the requested flow and user", assignment)
+	}
+	// Assigned by hand, so there is no invite behind it.
+	if assignment.InviteID != nil {
+		t.Errorf("InviteID = %v, want nil", assignment.InviteID)
+	}
+}
+
+func TestOnboardingService_AssignToMember_RejectsOutsidersAndForeignFlows(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+	flow, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Backend"})
+	foreign, _ := svc.CreateFlow(ctx, "org-2", "admin", models.CreateOnboardingFlowRequest{Name: "Outro"})
+	store.members[onbOrg+"/user-5"] = "member"
+
+	if _, err := svc.AssignToMember(ctx, onbOrg, "admin", models.AssignOnboardingRequest{
+		FlowID: flow.ID, UserID: "stranger",
+	}); !errors.Is(err, ErrUserNotInOrganization) {
+		t.Errorf("err = %v, want ErrUserNotInOrganization", err)
+	}
+
+	if _, err := svc.AssignToMember(ctx, onbOrg, "admin", models.AssignOnboardingRequest{
+		FlowID: foreign.ID, UserID: "user-5",
+	}); !errors.Is(err, ErrOnboardingFlowNotFound) {
+		t.Errorf("err = %v, want ErrOnboardingFlowNotFound", err)
+	}
+}
+
+func TestOnboardingService_ListAssignments(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	flow, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Backend"})
+	if _, err := svc.ReplaceSteps(ctx, onbOrg, flow.ID, []models.OnboardingStepInput{
+		{Kind: models.OnboardingStepKindMarkdown, Title: "Um", Body: "a"},
+		{Kind: models.OnboardingStepKindMarkdown, Title: "Dois", Body: "b"},
+		{Kind: models.OnboardingStepKindMarkdown, Title: "Três", Body: "c"},
+	}); err != nil {
+		t.Fatalf("ReplaceSteps: %v", err)
+	}
+	store.members[onbOrg+"/user-5"] = "member"
+
+	assignment, _ := svc.AssignToMember(ctx, onbOrg, "admin", models.AssignOnboardingRequest{FlowID: flow.ID, UserID: "user-5"})
+	store.progressDone[assignment.ID] = 2
+
+	rows, err := svc.ListAssignments(ctx, onbOrg)
+	if err != nil {
+		t.Fatalf("ListAssignments: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("listed %d rows, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.FlowName != "Backend" || row.StepsTotal != 3 || row.StepsDone != 2 {
+		t.Errorf("row = %+v, want Backend 2/3", row)
+	}
+	// The dashboard is about people, so it has to name them.
+	if row.UserName == "" || row.UserEmail == "" {
+		t.Errorf("row = %+v, want the person identified", row)
+	}
+}
+
+func TestOnboardingService_ListAssignments_SurvivesADeletedFlow(t *testing.T) {
+	store := newMockOnboardingStore()
+	svc := NewOnboardingService(store)
+	ctx := context.Background()
+
+	flow, _ := svc.CreateFlow(ctx, onbOrg, "admin", models.CreateOnboardingFlowRequest{Name: "Antigo"})
+	store.members[onbOrg+"/user-5"] = "member"
+	if _, err := svc.AssignToMember(ctx, onbOrg, "admin", models.AssignOnboardingRequest{FlowID: flow.ID, UserID: "user-5"}); err != nil {
+		t.Fatalf("AssignToMember: %v", err)
+	}
+	if err := svc.DeleteFlow(ctx, onbOrg, flow.ID); err != nil {
+		t.Fatalf("DeleteFlow: %v", err)
+	}
+
+	rows, err := svc.ListAssignments(ctx, onbOrg)
+	if err != nil {
+		t.Fatalf("ListAssignments: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("listed %d rows, want the history kept", len(rows))
+	}
+	// The flow is gone but the fact that this person walked it is not; saying so
+	// beats rendering a blank name.
+	if !strings.Contains(rows[0].FlowName, "removido") {
+		t.Errorf("FlowName = %q, want it marked as removed", rows[0].FlowName)
 	}
 }

@@ -553,3 +553,183 @@ func (s *OnboardingService) findTermByName(ctx context.Context, orgID, name, exc
 func (s *OnboardingService) Templates() []onboarding.Template {
 	return onboarding.Templates()
 }
+
+// ── assignments ──────────────────────────────────────────────────────────────
+
+// AssignFromInvite gives the invited person the onboarding their invite named,
+// falling back to the organization's default flow.
+//
+// It returns (nil, nil) when there is nothing to assign: an invite with no flow
+// in an organization with no default is the ordinary case for a company that
+// has not written an onboarding yet, and must not read as a failure.
+//
+// Callers treat an error here as non-fatal. Joining an organization cannot
+// depend on the onboarding working — being unable to accept an invite because a
+// flow row went missing would be a far worse failure than starting without a
+// guided tour.
+func (s *OnboardingService) AssignFromInvite(ctx context.Context, orgID, userID string, invite *models.OrganizationInvite) (*models.OnboardingAssignment, error) {
+	flow, err := s.resolveFlowForInvite(ctx, orgID, invite)
+	if err != nil || flow == nil {
+		return nil, err
+	}
+
+	assignedBy := ""
+	if invite != nil && invite.CreatedByUserID != nil {
+		assignedBy = *invite.CreatedByUserID
+	}
+	var inviteID *string
+	if invite != nil {
+		id := invite.ID
+		inviteID = &id
+	}
+
+	return s.assign(ctx, orgID, flow.ID, userID, assignedBy, inviteID)
+}
+
+// resolveFlowForInvite picks the flow an invite implies, ignoring one that has
+// been deleted since the invite was written — the default takes over, and if
+// there is none, nobody is onboarded.
+func (s *OnboardingService) resolveFlowForInvite(ctx context.Context, orgID string, invite *models.OrganizationInvite) (*models.OnboardingFlow, error) {
+	if invite != nil && invite.OnboardingFlowID != nil && *invite.OnboardingFlowID != "" {
+		flow, err := s.repo.GetOnboardingFlow(ctx, *invite.OnboardingFlowID)
+		if err != nil {
+			return nil, err
+		}
+		if flow != nil && flow.OrganizationID == orgID {
+			return flow, nil
+		}
+	}
+	return s.repo.GetDefaultOnboardingFlow(ctx, orgID)
+}
+
+// AssignToMember assigns a flow to someone already in the organization, which
+// is what happens when a person changes teams or an onboarding is written after
+// they joined.
+func (s *OnboardingService) AssignToMember(ctx context.Context, orgID, actorUserID string, req models.AssignOnboardingRequest) (*models.OnboardingAssignment, error) {
+	flow, err := s.getScopedFlow(ctx, orgID, req.FlowID)
+	if err != nil {
+		return nil, err
+	}
+
+	member, err := s.repo.GetOrganizationMember(ctx, orgID, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if member == nil {
+		return nil, ErrUserNotInOrganization
+	}
+
+	return s.assign(ctx, orgID, flow.ID, req.UserID, actorUserID, nil)
+}
+
+// assign creates the row, or returns the live one that already exists.
+//
+// Idempotency is checked here and enforced by a partial unique index underneath:
+// re-inviting someone, or a retried callback, must not produce a second
+// assignment that splits their progress in two.
+func (s *OnboardingService) assign(ctx context.Context, orgID, flowID, userID, assignedByUserID string, inviteID *string) (*models.OnboardingAssignment, error) {
+	existing, err := s.repo.ListOnboardingAssignmentsForUser(ctx, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range existing {
+		if existing[i].FlowID == flowID {
+			return &existing[i], nil
+		}
+	}
+
+	assignment := &models.OnboardingAssignment{
+		OrganizationID: orgID,
+		FlowID:         flowID,
+		UserID:         userID,
+		Status:         models.OnboardingAssignmentPending,
+		InviteID:       inviteID,
+	}
+	if assignedByUserID != "" {
+		assignment.AssignedByUserID = &assignedByUserID
+	}
+
+	if err := s.repo.CreateOnboardingAssignment(ctx, assignment); err != nil {
+		return nil, err
+	}
+	return assignment, nil
+}
+
+// ListAssignments builds the progress dashboard.
+//
+// Every lookup it needs is a list, not a per-row query: members, flows, step
+// counts and progress counts each cost one query, so a dashboard of fifty
+// people is five queries rather than two hundred.
+func (s *OnboardingService) ListAssignments(ctx context.Context, orgID string) ([]models.OnboardingAssignmentSummary, error) {
+	assignments, err := s.repo.ListOnboardingAssignments(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if len(assignments) == 0 {
+		return []models.OnboardingAssignmentSummary{}, nil
+	}
+
+	flows, err := s.repo.ListOnboardingFlows(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	flowNames := make(map[string]string, len(flows))
+	flowIDs := make([]string, 0, len(flows))
+	for i := range flows {
+		flowNames[flows[i].ID] = flows[i].Name
+		flowIDs = append(flowIDs, flows[i].ID)
+	}
+
+	stepCounts, err := s.repo.CountOnboardingStepsByFlow(ctx, flowIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	members, err := s.repo.ListOrganizationMembers(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	type person struct{ name, email string }
+	people := make(map[string]person, len(members))
+	for i := range members {
+		people[members[i].UserID] = person{name: members[i].User.FullName, email: members[i].User.Email}
+	}
+
+	ids := make([]string, 0, len(assignments))
+	for i := range assignments {
+		ids = append(ids, assignments[i].ID)
+	}
+	doneCounts, err := s.repo.CountOnboardingProgressByAssignment(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]models.OnboardingAssignmentSummary, 0, len(assignments))
+	for i := range assignments {
+		assignment := assignments[i]
+		summary := models.OnboardingAssignmentSummary{
+			ID:          assignment.ID,
+			FlowID:      assignment.FlowID,
+			FlowName:    flowNames[assignment.FlowID],
+			UserID:      assignment.UserID,
+			UserName:    people[assignment.UserID].name,
+			UserEmail:   people[assignment.UserID].email,
+			Status:      assignment.Status,
+			StepsTotal:  stepCounts[assignment.FlowID],
+			StepsDone:   doneCounts[assignment.ID],
+			StartedAt:   assignment.StartedAt,
+			CompletedAt: assignment.CompletedAt,
+			Feedback:    assignment.Feedback,
+			FeedbackAt:  assignment.FeedbackAt,
+			CreatedAt:   assignment.CreatedAt,
+		}
+		// A flow deleted after someone was assigned still has a name worth
+		// showing, but its steps are gone from the count; say so rather than
+		// implying a zero-step onboarding.
+		if summary.FlowName == "" {
+			summary.FlowName = "(fluxo removido)"
+		}
+		out = append(out, summary)
+	}
+	return out, nil
+}

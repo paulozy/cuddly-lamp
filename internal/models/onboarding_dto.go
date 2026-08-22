@@ -131,6 +131,40 @@ func OnboardingFlowToResponse(flow *OnboardingFlow, stepCount int) OnboardingFlo
 	return resp
 }
 
+// ── assignments ──────────────────────────────────────────────────────────────
+
+type AssignOnboardingRequest struct {
+	FlowID string `json:"flow_id" binding:"required"`
+	UserID string `json:"user_id" binding:"required"`
+}
+
+// OnboardingAssignmentSummary is one row of the admin progress dashboard.
+type OnboardingAssignmentSummary struct {
+	ID        string `json:"id"`
+	FlowID    string `json:"flow_id"`
+	FlowName  string `json:"flow_name"`
+	UserID    string `json:"user_id"`
+	UserName  string `json:"user_name,omitempty"`
+	UserEmail string `json:"user_email,omitempty"`
+
+	Status OnboardingAssignmentStatus `json:"status"`
+	// StepsDone counts recorded outcomes; StepsTotal is the flow's current
+	// length, which can move under someone mid-flow because edits are live.
+	StepsDone  int `json:"steps_done"`
+	StepsTotal int `json:"steps_total"`
+
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Feedback    string     `json:"feedback,omitempty"`
+	FeedbackAt  *time.Time `json:"feedback_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type OnboardingAssignmentListResponse struct {
+	Items []OnboardingAssignmentSummary `json:"items"`
+	Total int                           `json:"total"`
+}
+
 // ── glossary ─────────────────────────────────────────────────────────────────
 
 type GlossaryTermResponse struct {

@@ -41,6 +41,11 @@ func (h *OnboardingHandler) onboardingError(c *gin.Context, err error) {
 			Error:            "conflict",
 			ErrorDescription: err.Error(),
 		})
+	case errors.Is(err, services.ErrUserNotInOrganization):
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "that user does not belong to this organization",
+		})
 	case errors.Is(err, services.ErrOnboardingFlowInvalid),
 		errors.Is(err, services.ErrOnboardingStepInvalid),
 		errors.Is(err, services.ErrOnboardingReferenceNotInOrganization),
@@ -282,6 +287,75 @@ func (h *OnboardingHandler) ListTemplates(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": h.onboarding.Templates(), "total": len(h.onboarding.Templates())})
+}
+
+// AssignFlow gives a flow to a member who is already in the organization.
+//
+// The invite path assigns automatically; this is for the person who changed
+// teams, or who joined before anyone wrote an onboarding.
+//
+// @Summary      Assign an onboarding flow to a member
+// @Tags         onboarding
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body body models.AssignOnboardingRequest true "Flow and member"
+// @Success      201 {object} models.OnboardingAssignmentSummary
+// @Failure      400 {object} models.ErrorResponse
+// @Failure      404 {object} models.ErrorResponse
+// @Router       /onboarding/assignments [post]
+func (h *OnboardingHandler) AssignFlow(c *gin.Context) {
+	orgID, ok := requireOrganization(c)
+	if !ok {
+		return
+	}
+	actorID, _ := utils.GetUserIDFromContext(c)
+
+	var req models.AssignOnboardingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: err.Error(),
+		})
+		return
+	}
+
+	assignment, err := h.onboarding.AssignToMember(c.Request.Context(), orgID, actorID, req)
+	if err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusCreated, models.OnboardingAssignmentSummary{
+		ID:        assignment.ID,
+		FlowID:    assignment.FlowID,
+		UserID:    assignment.UserID,
+		Status:    assignment.Status,
+		CreatedAt: assignment.CreatedAt,
+	})
+}
+
+// ListAssignments is the progress dashboard: who is onboarding, how far along,
+// and what they said was missing.
+// @Summary      List onboarding assignments
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {object} models.OnboardingAssignmentListResponse
+// @Failure      403 {object} models.ErrorResponse
+// @Router       /onboarding/assignments [get]
+func (h *OnboardingHandler) ListAssignments(c *gin.Context) {
+	orgID, ok := requireOrganization(c)
+	if !ok {
+		return
+	}
+
+	items, err := h.onboarding.ListAssignments(c.Request.Context(), orgID)
+	if err != nil {
+		h.onboardingError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, models.OnboardingAssignmentListResponse{Items: items, Total: len(items)})
 }
 
 // ── glossary ─────────────────────────────────────────────────────────────────
