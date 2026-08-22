@@ -61,6 +61,49 @@ type Repository interface {
 	// without a member, or a member admitted by an invite still marked pending.
 	AcceptOrganizationInvite(ctx context.Context, inviteID string, member *models.OrganizationMember) error
 
+	// Onboarding flow operations — the configurable path a new member walks.
+	CreateOnboardingFlow(ctx context.Context, flow *models.OnboardingFlow) error
+	GetOnboardingFlow(ctx context.Context, id string) (*models.OnboardingFlow, error)
+	GetOnboardingFlowBySlug(ctx context.Context, orgID, slug string) (*models.OnboardingFlow, error)
+	// GetDefaultOnboardingFlow returns the flow an invite falls back to, or nil
+	// when the organization has not marked one. Nil is a normal state.
+	GetDefaultOnboardingFlow(ctx context.Context, orgID string) (*models.OnboardingFlow, error)
+	ListOnboardingFlows(ctx context.Context, orgID string) ([]models.OnboardingFlow, error)
+	UpdateOnboardingFlow(ctx context.Context, flow *models.OnboardingFlow) error
+	// ClearDefaultOnboardingFlow unsets the default on every flow except
+	// exceptFlowID. Promoting a new default has to demote the old one first, or
+	// the partial unique index rejects the write.
+	ClearDefaultOnboardingFlow(ctx context.Context, orgID, exceptFlowID string) error
+	DeleteOnboardingFlow(ctx context.Context, id string) error
+
+	ListOnboardingSteps(ctx context.Context, flowID string) ([]models.OnboardingStep, error)
+	GetOnboardingStep(ctx context.Context, id string) (*models.OnboardingStep, error)
+	// ReplaceOnboardingSteps saves the whole step list in one transaction:
+	// steps missing from the payload are deleted, the rest are updated in place,
+	// and positions are rewritten from slice order. Steps that already exist
+	// MUST keep their id — progress rows point at it, so replacing rather than
+	// updating them would wipe everyone's progress on every edit.
+	ReplaceOnboardingSteps(ctx context.Context, flowID string, steps []models.OnboardingStep) error
+
+	CreateOnboardingAssignment(ctx context.Context, assignment *models.OnboardingAssignment) error
+	GetOnboardingAssignment(ctx context.Context, id string) (*models.OnboardingAssignment, error)
+	// ListOnboardingAssignmentsForUser returns the caller's live assignments,
+	// newest first — abandoned ones are excluded.
+	ListOnboardingAssignmentsForUser(ctx context.Context, orgID, userID string) ([]models.OnboardingAssignment, error)
+	ListOnboardingAssignments(ctx context.Context, orgID string) ([]models.OnboardingAssignment, error)
+	UpdateOnboardingAssignment(ctx context.Context, assignment *models.OnboardingAssignment) error
+
+	ListOnboardingStepProgress(ctx context.Context, assignmentID string) ([]models.OnboardingStepProgress, error)
+	UpsertOnboardingStepProgress(ctx context.Context, progress *models.OnboardingStepProgress) error
+
+	// Glossary operations — organization vocabulary, referenced by onboarding
+	// steps but useful on its own.
+	CreateGlossaryTerm(ctx context.Context, term *models.GlossaryTerm) error
+	GetGlossaryTerm(ctx context.Context, id string) (*models.GlossaryTerm, error)
+	ListGlossaryTerms(ctx context.Context, orgID string) ([]models.GlossaryTerm, error)
+	UpdateGlossaryTerm(ctx context.Context, term *models.GlossaryTerm) error
+	DeleteGlossaryTerm(ctx context.Context, id string) error
+
 	// Repository operations
 	GetRepository(ctx context.Context, id string) (*models.Repository, error)
 	GetRepositoryByURL(ctx context.Context, organizationID, url string) (*models.Repository, error)
@@ -104,7 +147,6 @@ type Repository interface {
 	ListOrgDocGenerations(ctx context.Context, orgID string) ([]models.DocGeneration, error)
 	GetLatestOrgDocs(ctx context.Context, orgID string, types []string) ([]models.DocGeneration, error)
 
-
 	// Maintenance / startup recovery
 	ResetStaleSyncingRepositories(ctx context.Context) ([]string, error)
 
@@ -141,7 +183,7 @@ type RepositoryFilter struct {
 	OwnerTeamIDs []string
 	// UnownedOnly lists repositories with no owning team — the input to the
 	// first scorecard check.
-	UnownedOnly bool
+	UnownedOnly    bool
 	OwnerUserID    string
 	Type           models.RepositoryType
 	IsPublic       bool
