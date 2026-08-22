@@ -198,7 +198,12 @@ type OnboardingStep struct {
 
 	Config datatypes.JSON `gorm:"type:jsonb;not null;default:'{}'" json:"config"`
 
-	IsRequired bool `gorm:"not null;default:true" json:"is_required"`
+	// No `default:true` in the tag on purpose. GORM treats a field's zero value
+	// as "unset" when the tag carries a default, so `false` would be omitted
+	// from the INSERT and the column default (TRUE) would win — every optional
+	// step arrived required. The column keeps its default for hand-written SQL;
+	// Go always sends the value.
+	IsRequired bool `gorm:"not null" json:"is_required"`
 	// EstimatedMinutes is nil when unstated, which is not the same as zero.
 	EstimatedMinutes *int `gorm:"column:estimated_minutes" json:"estimated_minutes,omitempty"`
 
