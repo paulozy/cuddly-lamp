@@ -41,9 +41,10 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
 	coverageHandler := factories.MakeCoverageHandler(repository)
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
+	onboardingHandler := factories.MakeOnboardingHandler(repository)
 	teamHandler := factories.MakeTeamHandler(repository)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler, onboardingHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -66,6 +67,7 @@ func setupAPIRoutes(
 	coverageHandler *handlers.CoverageHandler,
 	memberHandler *handlers.OrganizationMemberHandler,
 	teamHandler *handlers.TeamHandler,
+	onboardingHandler *handlers.OnboardingHandler,
 ) {
 	// Swagger UI
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -149,6 +151,24 @@ func setupAPIRoutes(
 		protected.DELETE("/teams/:id/members/:userID", maintainer, teamHandler.RemoveMember)
 
 		// Pull request routes (read-only GitHub pass-through)
+		// Onboarding: any member reads the flows (the runner walks one), while
+		// composing them is an admin concern, like membership and org config.
+		protected.GET("/onboarding/flows", onboardingHandler.ListFlows)
+		protected.GET("/onboarding/flows/:id", onboardingHandler.GetFlow)
+		protected.GET("/onboarding/templates", onboardingHandler.ListTemplates)
+		protected.POST("/onboarding/flows", admin, onboardingHandler.CreateFlow)
+		protected.PATCH("/onboarding/flows/:id", admin, onboardingHandler.UpdateFlow)
+		protected.DELETE("/onboarding/flows/:id", admin, onboardingHandler.DeleteFlow)
+		protected.POST("/onboarding/flows/:id/duplicate", admin, onboardingHandler.DuplicateFlow)
+		protected.PUT("/onboarding/flows/:id/steps", admin, onboardingHandler.ReplaceSteps)
+
+		// The glossary is organization vocabulary: everyone reads it, and
+		// maintainers curate it — the same bar as teams.
+		protected.GET("/glossary", onboardingHandler.ListGlossaryTerms)
+		protected.POST("/glossary", maintainer, onboardingHandler.CreateGlossaryTerm)
+		protected.PATCH("/glossary/:id", maintainer, onboardingHandler.UpdateGlossaryTerm)
+		protected.DELETE("/glossary/:id", maintainer, onboardingHandler.DeleteGlossaryTerm)
+
 		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)
 		protected.GET("/repositories/:id/pull-requests/:pr_number", pullRequestHandler.GetPullRequest)
 		protected.GET("/repositories/:id/pull-requests/:pr_number/files", pullRequestHandler.GetPullRequestFiles)

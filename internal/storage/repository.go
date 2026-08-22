@@ -77,6 +77,9 @@ type Repository interface {
 	DeleteOnboardingFlow(ctx context.Context, id string) error
 
 	ListOnboardingSteps(ctx context.Context, flowID string) ([]models.OnboardingStep, error)
+	// CountOnboardingStepsByFlow counts steps for several flows at once, so the
+	// list screen does not load every step of every flow to show a number.
+	CountOnboardingStepsByFlow(ctx context.Context, flowIDs []string) (map[string]int, error)
 	GetOnboardingStep(ctx context.Context, id string) (*models.OnboardingStep, error)
 	// ReplaceOnboardingSteps saves the whole step list in one transaction:
 	// steps missing from the payload are deleted, the rest are updated in place,

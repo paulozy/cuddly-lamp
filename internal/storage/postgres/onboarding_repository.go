@@ -137,6 +137,33 @@ func (pr *PostgresRepository) ListOnboardingSteps(ctx context.Context, flowID st
 	return steps, nil
 }
 
+// stepCount is the projection of the grouped count query.
+type stepCount struct {
+	FlowID string
+	Count  int
+}
+
+func (pr *PostgresRepository) CountOnboardingStepsByFlow(ctx context.Context, flowIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(flowIDs))
+	if len(flowIDs) == 0 {
+		return counts, nil
+	}
+
+	var rows []stepCount
+	if err := pr.db.WithContext(ctx).
+		Table("onboarding_steps").
+		Select("flow_id, COUNT(*) AS count").
+		Where("flow_id IN ?", flowIDs).
+		Group("flow_id").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("count onboarding steps: %w", err)
+	}
+	for i := range rows {
+		counts[rows[i].FlowID] = rows[i].Count
+	}
+	return counts, nil
+}
+
 func (pr *PostgresRepository) GetOnboardingStep(ctx context.Context, id string) (*models.OnboardingStep, error) {
 	var step models.OnboardingStep
 	if err := pr.db.WithContext(ctx).First(&step, "id = ?", id).Error; err != nil {
