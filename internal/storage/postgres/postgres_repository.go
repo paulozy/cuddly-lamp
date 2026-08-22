@@ -867,8 +867,11 @@ func (pr *PostgresRepository) GetOAuthConnection(ctx context.Context, provider, 
 func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *models.OAuthConnection) error {
 	if err := pr.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_user_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"user_id", "access_token", "updated_at"}),
+			Columns: []clause.Column{{Name: "provider"}, {Name: "provider_user_id"}},
+			// provider_username belongs here or it would never persist for a
+			// connection that already exists — which is every returning user,
+			// and the whole point of backfilling it on login.
+			DoUpdates: clause.AssignmentColumns([]string{"user_id", "provider_username", "access_token", "updated_at"}),
 		}).
 		Create(conn).Error; err != nil {
 		return fmt.Errorf("upsert oauth connection: %w", err)

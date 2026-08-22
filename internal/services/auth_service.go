@@ -1021,6 +1021,14 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, cod
 		}
 	}
 
+	// Record the provider login on every callback, not just on the first one:
+	// connections created before it was stored are backfilled here, which is
+	// what lets a verified onboarding step recognise the person on a change
+	// request. Guarded so a provider that omits it cannot blank a known value.
+	if userInfo.Username != "" {
+		conn.ProviderUsername = userInfo.Username
+	}
+
 	if err := s.repo.UpsertOAuthConnection(ctx, conn); err != nil {
 		return nil, fmt.Errorf("failed to upsert oauth connection: %w", err)
 	}

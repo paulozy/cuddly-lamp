@@ -64,6 +64,13 @@ func (gp *GitHubProvider) ExchangeCode(ctx context.Context, code string) (*OAuth
 		return nil, fmt.Errorf("failed to decode user: %w", err)
 	}
 
+	return userInfoFromGitHub(user), nil
+}
+
+// userInfoFromGitHub maps the profile payload onto the neutral type. It is split
+// out of ExchangeCode so the mapping is testable without performing a token
+// exchange against GitHub.
+func userInfoFromGitHub(user githubUser) *OAuthUserInfo {
 	email := user.Email
 	if email == "" {
 		email = fmt.Sprintf("github_%d@noreply.github.com", user.ID)
@@ -71,7 +78,8 @@ func (gp *GitHubProvider) ExchangeCode(ctx context.Context, code string) (*OAuth
 
 	return &OAuthUserInfo{
 		ProviderUserID: fmt.Sprintf("%d", user.ID),
+		Username:       user.Login,
 		Email:          email,
 		Name:           user.Name,
-	}, nil
+	}
 }
