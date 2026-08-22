@@ -19,6 +19,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/oauth"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -38,6 +39,7 @@ var (
 type AuthService struct {
 	repo        storage.Repository
 	membership  *MembershipService
+	onboarding  *OnboardingService
 	jwtSecret   string
 	jwtIssuer   string
 	jwtAudience string
@@ -50,6 +52,7 @@ func NewAuthService(repo storage.Repository, jwtSecret, jwtIssuer, jwtAudience s
 	return &AuthService{
 		repo:        repo,
 		membership:  NewMembershipService(repo),
+		onboarding:  NewOnboardingService(repo),
 		jwtSecret:   jwtSecret,
 		jwtIssuer:   jwtIssuer,
 		jwtAudience: jwtAudience,
@@ -631,6 +634,17 @@ func (s *AuthService) admit(ctx context.Context, adm *organizationAdmission, use
 	if err := s.repo.AcceptOrganizationInvite(ctx, adm.invite.ID, member); err != nil {
 		return nil, ErrInviteRejected
 	}
+
+	// The invite may carry an onboarding. This runs after the membership is
+	// committed, not inside its transaction, and its failure is logged rather
+	// than returned: being unable to join an organization because an onboarding
+	// flow went missing would be a much worse failure than joining without a
+	// guided tour. An admin can assign one afterwards.
+	if _, err := s.onboarding.AssignFromInvite(ctx, adm.org.ID, userID, adm.invite); err != nil {
+		utils.Warn("auth: could not assign the onboarding from the invite",
+			"organization_id", adm.org.ID, "user_id", userID, "error", err)
+	}
+
 	return member, nil
 }
 
@@ -1019,6 +1033,14 @@ func (s *AuthService) LoginWithOAuth(ctx context.Context, orgSlug, provider, cod
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}
+	}
+
+	// Record the provider login on every callback, not just on the first one:
+	// connections created before it was stored are backfilled here, which is
+	// what lets a verified onboarding step recognise the person on a change
+	// request. Guarded so a provider that omits it cannot blank a known value.
+	if userInfo.Username != "" {
+		conn.ProviderUsername = userInfo.Username
 	}
 
 	if err := s.repo.UpsertOAuthConnection(ctx, conn); err != nil {

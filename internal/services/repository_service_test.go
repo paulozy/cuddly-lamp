@@ -26,6 +26,10 @@ type mockRepoStore struct {
 	// `maybeEnqueueInitialEmbeddings` can fire. nil → returns nil (no
 	// provider configured → no embeddings enqueue).
 	orgConfig *models.OrganizationConfig
+
+	// lastFilter records what the service asked storage for, so tests can
+	// assert on the filter rather than on the rows a mock chose to return.
+	lastFilter *storage.RepositoryFilter
 }
 
 func newMockRepoStore() *mockRepoStore {
@@ -79,6 +83,7 @@ func (m *mockRepoStore) DeleteRepository(_ context.Context, id string) error {
 }
 
 func (m *mockRepoStore) ListRepositories(_ context.Context, filter *storage.RepositoryFilter) ([]models.Repository, int64, error) {
+	m.lastFilter = filter
 	var result []models.Repository
 	for _, r := range m.repos {
 		if filter.OrganizationID == "" || r.OrganizationID == filter.OrganizationID {
@@ -350,7 +355,7 @@ func TestRepositoryService_List_OnlyOwnerRepos(t *testing.T) {
 	// Seed a repo for another user directly so the URL doesn't conflict
 	store.repos["other-1"] = &models.Repository{ID: "other-1", URL: glURL, OrganizationID: otherOrgID, Name: "owner/repo2", Type: models.RepositoryTypeGitLab}
 
-	result, err := svc.ListRepositories(context.Background(), orgID, 10, 0)
+	result, err := svc.ListRepositories(context.Background(), orgID, RepositoryListOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -419,5 +424,45 @@ func TestRepositoryService_Delete_Forbidden(t *testing.T) {
 
 	if err := svc.DeleteRepository(context.Background(), created.ID, otherOrgID, maintainerActor()); err != ErrForbidden {
 		t.Errorf("error = %v, want ErrForbidden", err)
+	}
+}
+
+// The team step of an onboarding flow asks "what does this team answer for",
+// and every team page needs the same answer. The storage layer could already
+// filter on owner team; nothing exposed it.
+func TestRepositoryService_ListRepositories_FiltersByOwnerTeam(t *testing.T) {
+	store := newMockRepoStore()
+	svc := newRepoService(store, nil)
+
+	if _, err := svc.ListRepositories(context.Background(), "org-1", RepositoryListOptions{
+		Limit:       10,
+		OwnerTeamID: "team-1",
+	}); err != nil {
+		t.Fatalf("ListRepositories: %v", err)
+	}
+
+	if store.lastFilter == nil {
+		t.Fatal("no filter reached the storage layer")
+	}
+	if len(store.lastFilter.OwnerTeamIDs) != 1 || store.lastFilter.OwnerTeamIDs[0] != "team-1" {
+		t.Fatalf("OwnerTeamIDs = %v, want [team-1]", store.lastFilter.OwnerTeamIDs)
+	}
+}
+
+func TestRepositoryService_ListRepositories_NoTeamMeansNoFilter(t *testing.T) {
+	store := newMockRepoStore()
+	svc := newRepoService(store, nil)
+
+	if _, err := svc.ListRepositories(context.Background(), "org-1", RepositoryListOptions{Limit: 10}); err != nil {
+		t.Fatalf("ListRepositories: %v", err)
+	}
+
+	// An empty option must not become a filter for the empty string, which
+	// would list nothing at all.
+	if store.lastFilter == nil {
+		t.Fatal("no filter reached the storage layer")
+	}
+	if len(store.lastFilter.OwnerTeamIDs) != 0 {
+		t.Fatalf("OwnerTeamIDs = %v, want empty", store.lastFilter.OwnerTeamIDs)
 	}
 }

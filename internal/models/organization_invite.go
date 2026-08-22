@@ -26,6 +26,11 @@ type OrganizationInvite struct {
 
 	TokenHash string `gorm:"type:varchar(64);not null;uniqueIndex" json:"-"`
 
+	// OnboardingFlowID is the flow the invited person should walk. Nil means
+	// "use the organization's default", and an organization with no default
+	// simply produces no onboarding — a normal outcome, not an error.
+	OnboardingFlowID *string `gorm:"column:onboarding_flow_id;type:uuid" json:"onboarding_flow_id,omitempty"`
+
 	CreatedByUserID *string `gorm:"type:uuid" json:"created_by_user_id,omitempty"`
 	CreatedByUser   *User   `gorm:"foreignKey:CreatedByUserID" json:"-"`
 

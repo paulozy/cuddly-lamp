@@ -148,16 +148,34 @@ func (s *RepositoryService) TriggerSync(ctx context.Context, id, organizationID 
 	return true, nil
 }
 
-func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID string, limit, offset int) (*models.RepositoryListResponse, error) {
+// RepositoryListOptions are the knobs the list endpoint exposes.
+type RepositoryListOptions struct {
+	Limit  int
+	Offset int
+	// OwnerTeamID narrows the list to the repositories one team answers for.
+	// The storage layer could already filter on it; nothing exposed it, and
+	// "what does this team own" is the question the onboarding's team step —
+	// and any team page — has to answer.
+	OwnerTeamID string
+}
+
+func (s *RepositoryService) ListRepositories(ctx context.Context, organizationID string, opts RepositoryListOptions) (*models.RepositoryListResponse, error) {
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = 20
 	}
+	offset := opts.Offset
 
-	repos, total, err := s.repo.ListRepositories(ctx, &storage.RepositoryFilter{
+	filter := &storage.RepositoryFilter{
 		OrganizationID: organizationID,
 		Limit:          limit,
 		Offset:         offset,
-	})
+	}
+	if opts.OwnerTeamID != "" {
+		filter.OwnerTeamIDs = []string{opts.OwnerTeamID}
+	}
+
+	repos, total, err := s.repo.ListRepositories(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("list repositories: %w", err)
 	}

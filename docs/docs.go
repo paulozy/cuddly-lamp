@@ -505,6 +505,738 @@ const docTemplate = `{
                 }
             }
         },
+        "/glossary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "glossary"
+                ],
+                "summary": "List glossary terms",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "glossary"
+                ],
+                "summary": "Create a glossary term",
+                "parameters": [
+                    {
+                        "description": "Term",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CreateGlossaryTermRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/glossary/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "glossary"
+                ],
+                "summary": "Delete a glossary term",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Term ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "glossary"
+                ],
+                "summary": "Update a glossary term",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Term ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateGlossaryTermRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/assignments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "List onboarding assignments",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentListResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Assign an onboarding flow to a member",
+                "parameters": [
+                    {
+                        "description": "Flow and member",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.AssignOnboardingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentSummary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/flows": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "List onboarding flows",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Create an onboarding flow",
+                "parameters": [
+                    {
+                        "description": "Flow",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.CreateOnboardingFlowRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/flows/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Get an onboarding flow",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Flow ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Delete an onboarding flow",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Flow ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Update an onboarding flow",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Flow ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UpdateOnboardingFlowRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/flows/{id}/duplicate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Duplicate an onboarding flow",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Flow ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/flows/{id}/steps": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Replace the steps of an onboarding flow",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Flow ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Steps, in order",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ReplaceOnboardingStepsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Get my onboarding",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/me/assignments/{assignmentID}/feedback": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Leave onboarding feedback",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Assignment ID",
+                        "name": "assignmentID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Feedback",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFeedbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/me/steps/{stepID}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Mark an onboarding step",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Step ID",
+                        "name": "stepID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Outcome",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.MarkOnboardingStepRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/me/steps/{stepID}/verify": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Run a verified onboarding step's check",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Step ID",
+                        "name": "stepID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerificationResult"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "List onboarding templates",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_onboarding.Template"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/organizations/configs": {
             "get": {
                 "security": [
@@ -988,6 +1720,12 @@ const docTemplate = `{
                         "default": 0,
                         "description": "Pagination offset",
                         "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only repositories this team answers for",
+                        "name": "owner_team_id",
                         "in": "query"
                     }
                 ],
@@ -2363,6 +3101,10 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "datatypes.JSONMap": {
+            "type": "object",
+            "additionalProperties": true
+        },
         "docs.DocTemplate": {
             "type": "object",
             "properties": {
@@ -2419,6 +3161,21 @@ const docTemplate = `{
             "properties": {
                 "role": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRole"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.AssignOnboardingRequest": {
+            "type": "object",
+            "required": [
+                "flow_id",
+                "user_id"
+            ],
+            "properties": {
+                "flow_id": {
+                    "type": "string"
                 },
                 "user_id": {
                     "type": "string"
@@ -2515,6 +3272,21 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CreateGlossaryTermRequest": {
+            "type": "object",
+            "required": [
+                "definition",
+                "term"
+            ],
+            "properties": {
+                "definition": {
+                    "type": "string"
+                },
+                "term": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.CreateInviteRequest": {
             "type": "object",
             "required": [
@@ -2522,6 +3294,10 @@ const docTemplate = `{
             ],
             "properties": {
                 "email": {
+                    "type": "string"
+                },
+                "onboarding_flow_id": {
+                    "description": "OnboardingFlowID marks the invite as an onboarding: the flow is assigned\nthe moment the person joins. Empty falls back to the organization's\ndefault flow, if it has one.",
                     "type": "string"
                 },
                 "role": {
@@ -2540,6 +3316,30 @@ const docTemplate = `{
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.InviteResponse"
                 },
                 "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.CreateOnboardingFlowRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "description": "TemplateID seeds the flow from the static registry in\n` + "`" + `internal/onboarding` + "`" + `. Empty creates an empty flow.",
                     "type": "string"
                 }
             }
@@ -2848,6 +3648,40 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "definition": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "term": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.InviteListResponse": {
             "type": "object",
             "properties": {
@@ -2878,6 +3712,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "onboarding_flow_id": {
+                    "description": "OnboardingFlowID is set when the invite carries an onboarding, so the\nsettings screen can show which one the person will walk.",
                     "type": "string"
                 },
                 "revoked_at": {
@@ -2947,6 +3785,25 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.MarkOnboardingStepRequest": {
+            "type": "object",
+            "required": [
+                "status"
+            ],
+            "properties": {
+                "note": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is ` + "`" + `done` + "`" + ` or ` + "`" + `skipped` + "`" + `.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepStatus"
+                        }
+                    ]
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.MemberListResponse": {
             "type": "object",
             "properties": {
@@ -2983,6 +3840,615 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentSummary"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "abandoned"
+            ],
+            "x-enum-varnames": [
+                "OnboardingAssignmentPending",
+                "OnboardingAssignmentInProgress",
+                "OnboardingAssignmentCompleted",
+                "OnboardingAssignmentAbandoned"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentSummary": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "feedback": {
+                    "type": "string"
+                },
+                "feedback_at": {
+                    "type": "string"
+                },
+                "flow_id": {
+                    "type": "string"
+                },
+                "flow_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentStatus"
+                },
+                "steps_done": {
+                    "description": "StepsDone counts recorded outcomes; StepsTotal is the flow's current\nlength, which can move under someone mid-flow because edits are live.",
+                    "type": "integer"
+                },
+                "steps_total": {
+                    "type": "integer"
+                },
+                "user_email": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "user_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingCompletionMode": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "acknowledge",
+                "self_reported",
+                "verified"
+            ],
+            "x-enum-varnames": [
+                "OnboardingCompletionAuto",
+                "OnboardingCompletionAcknowledge",
+                "OnboardingCompletionSelfReported",
+                "OnboardingCompletionVerified"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFeedbackRequest": {
+            "type": "object",
+            "required": [
+                "feedback"
+            ],
+            "properties": {
+                "feedback": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingFlowResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "step_count": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepResponse"
+                    }
+                },
+                "total_minutes": {
+                    "description": "TotalMinutes sums the steps that state an estimate, so the list can say\n\"about 40 minutes\" without the client adding it up.",
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedContact": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "when_to_reach": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedDoc": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "doc_type": {
+                    "description": "DocType is the section rendered, when the generation produced several.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedTeam": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamMemberResponse"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "repositories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.TeamRepositoryRef"
+                    }
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunResponse": {
+            "type": "object",
+            "properties": {
+                "assignment_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "feedback": {
+                    "type": "string"
+                },
+                "flow_id": {
+                    "type": "string"
+                },
+                "flow_name": {
+                    "type": "string"
+                },
+                "flow_summary": {
+                    "type": "string"
+                },
+                "required_remaining": {
+                    "description": "RequiredRemaining counts required steps still pending, which is what\ndecides whether the flow can be completed and whether the banner shows.",
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingAssignmentStatus"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunStep"
+                    }
+                },
+                "steps_done": {
+                    "type": "integer"
+                },
+                "steps_total": {
+                    "type": "integer"
+                },
+                "total_minutes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingRunStep": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "completion_mode": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingCompletionMode"
+                },
+                "config": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepConfig"
+                },
+                "estimated_minutes": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepKind"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "resolved": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepResolved"
+                },
+                "status": {
+                    "description": "Status is empty when the step is still pending: the absence of a\nprogress row, not a third stored value.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepStatus"
+                        }
+                    ]
+                },
+                "title": {
+                    "type": "string"
+                },
+                "unavailable": {
+                    "description": "Unavailable explains, in place of the entity, why it could not be shown —\na repository that was deleted, a document that was removed. A step whose\nreference vanished still renders; it just says so.",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepChecklistItem": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepConfig": {
+            "type": "object",
+            "properties": {
+                "check": {
+                    "description": "verified",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerifiedCheck"
+                        }
+                    ]
+                },
+                "doc_generation_id": {
+                    "description": "doc",
+                    "type": "string"
+                },
+                "doc_type": {
+                    "type": "string"
+                },
+                "instructions": {
+                    "description": "task",
+                    "type": "string"
+                },
+                "items": {
+                    "description": "checklist",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepChecklistItem"
+                    }
+                },
+                "label": {
+                    "type": "string"
+                },
+                "people": {
+                    "description": "contacts",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepContact"
+                    }
+                },
+                "repository_id": {
+                    "description": "repository, verified",
+                    "type": "string"
+                },
+                "repository_ids": {
+                    "description": "architecture — empty means the whole organization",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "task_url": {
+                    "type": "string"
+                },
+                "team_id": {
+                    "description": "team, verified",
+                    "type": "string"
+                },
+                "term_ids": {
+                    "description": "glossary — empty means every term in the organization",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "url": {
+                    "description": "link",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepContact": {
+            "type": "object",
+            "properties": {
+                "area": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "when_to_reach": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepInput": {
+            "type": "object",
+            "required": [
+                "kind",
+                "title"
+            ],
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepConfig"
+                },
+                "estimated_minutes": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepKind"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepKind": {
+            "type": "string",
+            "enum": [
+                "markdown",
+                "checklist",
+                "link",
+                "contacts",
+                "task",
+                "repository",
+                "team",
+                "doc",
+                "architecture",
+                "glossary",
+                "verified"
+            ],
+            "x-enum-varnames": [
+                "OnboardingStepKindMarkdown",
+                "OnboardingStepKindChecklist",
+                "OnboardingStepKindLink",
+                "OnboardingStepKindContacts",
+                "OnboardingStepKindTask",
+                "OnboardingStepKindRepository",
+                "OnboardingStepKindTeam",
+                "OnboardingStepKindDoc",
+                "OnboardingStepKindArchitecture",
+                "OnboardingStepKindGlossary",
+                "OnboardingStepKindVerified"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepResolved": {
+            "type": "object",
+            "properties": {
+                "doc": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedDoc"
+                },
+                "graph": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphResponse"
+                },
+                "people": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedContact"
+                    }
+                },
+                "repository": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryResponse"
+                },
+                "team": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingResolvedTeam"
+                },
+                "terms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.GlossaryTermResponse"
+                    }
+                },
+                "verification": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerificationState"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepResponse": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "completion_mode": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingCompletionMode"
+                },
+                "config": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepConfig"
+                },
+                "estimated_minutes": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepKind"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepStatus": {
+            "type": "string",
+            "enum": [
+                "done",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "OnboardingStepDone",
+                "OnboardingStepSkipped"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerificationResult": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "how": {
+                    "description": "How states what was actually inspected. A verification that cannot say\nhow it verified is indistinguishable from a checkbox.",
+                    "type": "string"
+                },
+                "passed": {
+                    "type": "boolean"
+                },
+                "pending": {
+                    "description": "Pending means the check could not run — nobody has connected the provider\nyet, or the organization has no token for it. It is not a failure, and\nsaying \"not yet confirmed\" is the honest rendering.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerificationState": {
+            "type": "object",
+            "properties": {
+                "check": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerifiedCheck"
+                },
+                "description": {
+                    "description": "Description is the plain-language claim being made, so the UI can show\nwhat is being proven instead of a bare tick.",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingVerifiedCheck": {
+            "type": "string",
+            "enum": [
+                "first_change_request",
+                "team_membership"
+            ],
+            "x-enum-varnames": [
+                "OnboardingCheckFirstChangeRequest",
+                "OnboardingCheckTeamMembership"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.Organization": {
             "type": "object",
@@ -3033,6 +4499,10 @@ const docTemplate = `{
                 },
                 "github_token_configured": {
                     "type": "boolean"
+                },
+                "gitlab_base_url": {
+                    "description": "GitlabBaseURL is the API root for self-hosted GitLab. Empty means\ngitlab.com, which is what nearly every organization wants.",
+                    "type": "string"
                 },
                 "gitlab_callback_url": {
                     "type": "string"
@@ -3265,6 +4735,17 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.ReplaceOnboardingStepsRequest": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepInput"
+                    }
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.Repository": {
             "type": "object",
             "properties": {
@@ -3343,6 +4824,81 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.Webhook"
+                    }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphEdge": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryRelationshipKind"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/datatypes.JSONMap"
+                },
+                "source": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryRelationshipSource"
+                },
+                "source_repository_id": {
+                    "type": "string"
+                },
+                "target_repository_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphNode": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryMetadata"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sync_status": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryType"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphResponse": {
+            "type": "object",
+            "properties": {
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphEdge"
+                    }
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryGraphNode"
                     }
                 }
             }
@@ -3449,6 +5005,46 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryRelationshipKind": {
+            "type": "string",
+            "enum": [
+                "http",
+                "async",
+                "library",
+                "data",
+                "infra",
+                "manual",
+                "other"
+            ],
+            "x-enum-varnames": [
+                "RepositoryRelationshipKindHTTP",
+                "RepositoryRelationshipKindAsync",
+                "RepositoryRelationshipKindLibrary",
+                "RepositoryRelationshipKindData",
+                "RepositoryRelationshipKindInfra",
+                "RepositoryRelationshipKindManual",
+                "RepositoryRelationshipKindOther"
+            ]
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryRelationshipSource": {
+            "type": "string",
+            "enum": [
+                "manual",
+                "analysis",
+                "manifest",
+                "import",
+                "webhook",
+                "legacy_dependency"
+            ],
+            "x-enum-varnames": [
+                "RepositoryRelationshipSourceManual",
+                "RepositoryRelationshipSourceAnalysis",
+                "RepositoryRelationshipSourceManifest",
+                "RepositoryRelationshipSourceImport",
+                "RepositoryRelationshipSourceWebhook",
+                "RepositoryRelationshipSourceLegacyDependency"
+            ]
         },
         "github_com_paulozy_idp-with-ai-backend_internal_models.RepositoryResponse": {
             "type": "object",
@@ -3637,6 +5233,20 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.TeamRepositoryRef": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.TeamResponse": {
             "type": "object",
             "properties": {
@@ -3776,6 +5386,17 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateGlossaryTermRequest": {
+            "type": "object",
+            "properties": {
+                "definition": {
+                    "type": "string"
+                },
+                "term": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateMemberRoleRequest": {
             "type": "object",
             "required": [
@@ -3784,6 +5405,23 @@ const docTemplate = `{
             "properties": {
                 "role": {
                     "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.UserRole"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_models.UpdateOnboardingFlowRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
                 }
             }
         },
@@ -3806,6 +5444,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "github_token": {
+                    "type": "string"
+                },
+                "gitlab_base_url": {
                     "type": "string"
                 },
                 "gitlab_callback_url": {
@@ -4081,6 +5722,49 @@ const docTemplate = `{
                 },
                 "tokens_used": {
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_onboarding.Template": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_onboarding.TemplateStep"
+                    }
+                }
+            }
+        },
+        "github_com_paulozy_idp-with-ai-backend_internal_onboarding.TemplateStep": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/github_com_paulozy_idp-with-ai-backend_internal_models.OnboardingStepConfig"
+                },
+                "estimated_minutes": {
+                    "type": "integer"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },

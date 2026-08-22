@@ -864,11 +864,29 @@ func (pr *PostgresRepository) GetOAuthConnection(ctx context.Context, provider, 
 	return &conn, nil
 }
 
+func (pr *PostgresRepository) GetOAuthConnectionByUser(ctx context.Context, userID, provider string) (*models.OAuthConnection, error) {
+	var conn models.OAuthConnection
+	if err := pr.db.WithContext(ctx).
+		Where("user_id = ? AND provider = ?", userID, provider).
+		First(&conn).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Not every member connected every provider; the caller reports
+			// "cannot confirm yet" rather than failing a check.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get oauth connection by user: %w", err)
+	}
+	return &conn, nil
+}
+
 func (pr *PostgresRepository) UpsertOAuthConnection(ctx context.Context, conn *models.OAuthConnection) error {
 	if err := pr.db.WithContext(ctx).
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "provider"}, {Name: "provider_user_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"user_id", "access_token", "updated_at"}),
+			Columns: []clause.Column{{Name: "provider"}, {Name: "provider_user_id"}},
+			// provider_username belongs here or it would never persist for a
+			// connection that already exists — which is every returning user,
+			// and the whole point of backfilling it on login.
+			DoUpdates: clause.AssignmentColumns([]string{"user_id", "provider_username", "access_token", "updated_at"}),
 		}).
 		Create(conn).Error; err != nil {
 		return fmt.Errorf("upsert oauth connection: %w", err)

@@ -32,6 +32,9 @@ type InviteResponse struct {
 	CreatedAt  time.Time    `json:"created_at"`
 	AcceptedAt *time.Time   `json:"accepted_at,omitempty"`
 	RevokedAt  *time.Time   `json:"revoked_at,omitempty"`
+	// OnboardingFlowID is set when the invite carries an onboarding, so the
+	// settings screen can show which one the person will walk.
+	OnboardingFlowID *string `json:"onboarding_flow_id,omitempty"`
 }
 
 type InviteListResponse struct {
@@ -44,6 +47,10 @@ type CreateInviteRequest struct {
 	Role  UserRole `json:"role"`
 	// TTLHours overrides the default invite lifetime. Optional.
 	TTLHours int `json:"ttl_hours,omitempty"`
+	// OnboardingFlowID marks the invite as an onboarding: the flow is assigned
+	// the moment the person joins. Empty falls back to the organization's
+	// default flow, if it has one.
+	OnboardingFlowID string `json:"onboarding_flow_id,omitempty"`
 }
 
 // CreateInviteResponse is the only place the plaintext token is ever returned.
@@ -55,13 +62,14 @@ type CreateInviteResponse struct {
 
 func OrganizationInviteToResponse(invite *OrganizationInvite, now time.Time) InviteResponse {
 	return InviteResponse{
-		ID:         invite.ID,
-		Email:      invite.Email,
-		Role:       invite.Role,
-		Status:     invite.Status(now),
-		ExpiresAt:  invite.ExpiresAt,
-		CreatedAt:  invite.CreatedAt,
-		AcceptedAt: invite.AcceptedAt,
-		RevokedAt:  invite.RevokedAt,
+		ID:               invite.ID,
+		Email:            invite.Email,
+		Role:             invite.Role,
+		Status:           invite.Status(now),
+		ExpiresAt:        invite.ExpiresAt,
+		CreatedAt:        invite.CreatedAt,
+		AcceptedAt:       invite.AcceptedAt,
+		RevokedAt:        invite.RevokedAt,
+		OnboardingFlowID: invite.OnboardingFlowID,
 	}
 }

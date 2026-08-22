@@ -101,6 +101,20 @@ func (s *MembershipService) CreateInvite(
 		TokenHash:      HashInviteToken(plain),
 		ExpiresAt:      time.Now().UTC().Add(ttl),
 	}
+
+	// An invite may name the onboarding the person should walk. It has to be
+	// this organization's flow: pointing at somebody else's would hand a
+	// newcomer a tour of a company they did not join.
+	if flowID := strings.TrimSpace(req.OnboardingFlowID); flowID != "" {
+		flow, err := s.repo.GetOnboardingFlow(ctx, flowID)
+		if err != nil {
+			return nil, "", err
+		}
+		if flow == nil || flow.OrganizationID != orgID {
+			return nil, "", ErrOnboardingFlowNotFound
+		}
+		invite.OnboardingFlowID = &flowID
+	}
 	if createdByUserID != "" {
 		invite.CreatedByUserID = &createdByUserID
 	}

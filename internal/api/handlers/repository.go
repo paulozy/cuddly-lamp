@@ -150,8 +150,9 @@ func (h *RepositoryHandler) SyncRepository(c *gin.Context) {
 // @Tags         repositories
 // @Produce      json
 // @Security     BearerAuth
-// @Param        limit   query     int  false  "Items per page"  default(20)
-// @Param        offset  query     int  false  "Pagination offset"  default(0)
+// @Param        limit          query     int     false  "Items per page"  default(20)
+// @Param        offset         query     int     false  "Pagination offset"  default(0)
+// @Param        owner_team_id  query     string  false  "Only repositories this team answers for"
 // @Success      200     {object}  models.RepositoryListResponse
 // @Failure      401     {object}  models.ErrorResponse
 // @Failure      500     {object}  models.ErrorResponse
@@ -169,7 +170,11 @@ func (h *RepositoryHandler) ListRepositories(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-	resp, err := h.repoService.ListRepositories(c.Request.Context(), orgID, limit, offset)
+	resp, err := h.repoService.ListRepositories(c.Request.Context(), orgID, services.RepositoryListOptions{
+		Limit:       limit,
+		Offset:      offset,
+		OwnerTeamID: c.Query("owner_team_id"),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error:            "list_failed",
