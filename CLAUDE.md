@@ -33,7 +33,9 @@ internal/
 ├── coverage/             # Coverage report parsers (go, lcov, cobertura, jacoco)
 ├── integrations/
 │   ├── anthropic/        # Claude documentation prompts + org context builder
-│   └── github/           # GitHub API client + webhook HMAC validation + Contents/PR APIs
+│   ├── scm/              # Provider-neutral types, capability interfaces, adapters, resolver
+│   ├── github/           # GitHub API client + webhook HMAC validation + Contents/PR APIs
+│   └── gitlab/           # GitLab REST v4 client + webhook token validation
 ├── models/               # GORM models (User, Repository, Token, WebhookConfig, etc.)
 ├── services/             # Business logic (AuthService, RepositoryService, RepositoryRelationshipService, SyncService)
 ├── workers/              # asynq task handlers (SyncWorker, WebhookProcessor, DocsWorker)
@@ -64,6 +66,13 @@ internal/
 - Use table-driven tests for multiple scenarios
 - Run `go test ./...` before considering a task complete
 - Database tests should use PostgreSQL test instance (docker-compose)
+- **End-to-end**: `make test-e2e` (build tag `e2e`, package `e2e/`) drives the real
+  server binary over HTTP against throwaway Postgres/Redis containers and
+  `internal/testsupport/fakegitlab`, a fake GitLab serving payloads captured from
+  gitlab.com. Provider behaviour belongs there, not in a mock: the fake's own
+  contract tests keep it honest against the real client, and `make test-e2e-live`
+  checks the recorded shapes against gitlab.com. Browser coverage is Playwright in
+  the frontend repo, run against `make e2e-stack`.
 
 ## Git Conventions
 
@@ -78,12 +87,12 @@ internal/
 
 1. **Authentication & JWT**: Complete — email/password onboarding creates organizations, login supports multi-org selection tickets, JWT access tokens, refresh token rotation (RFC 9700), OAuth (GitHub/GitLab)
 2. **Infrastructure**: Complete — Redis cache layer + asynq job queue wired in `main.go` with no-op fallbacks
-3. **Repository management**: Complete — CRUD endpoints, enriched list with aggregated stats via LATERAL joins, GitHub sync (branches, commits, PRs, languages), WebhookConfig registration
-4. **Webhook pipeline**: Complete — HMAC-validated ingestion, idempotency via delivery ID, background processing worker
+3. **Repository management**: Complete — CRUD endpoints, enriched list with aggregated stats via LATERAL joins, GitHub and GitLab sync (branches, commits, PRs/MRs, languages, tree-based CI/test detection), WebhookConfig registration
+4. **Webhook pipeline**: Complete — `POST /api/v1/webhooks/github/:repoID` (HMAC-SHA256 signature) and `POST /api/v1/webhooks/gitlab/:repoID` (constant-time `X-Gitlab-Token` comparison — GitLab sends a shared secret, not a signature), both normalized into the same `WebhookEventPayload` so `webhook_processor` is provider-agnostic. Idempotency uses the provider's delivery ID (`X-GitHub-Delivery` / `X-Gitlab-Event-UUID`), falling back to a key derived from the payload when GitLab sends none.
 5. **Field-level encryption**: Complete — AES-256-GCM encryption for sensitive fields (OAuth tokens, webhook secrets), transparent GORM hooks, CLI migration tool
 6. **API Documentation**: Complete — Swagger/OpenAPI 2.0 with swaggo/swag, committed docs at `/swagger/index.html`; `make swagger` uses pinned `swag@v1.8.12`
-7. **Pull Request Browsing**: Complete — read-only `PullRequestHandler` proxying the GitHub API: list, detail, and changed files with patches. No queue, no cache, no analysis.
-8. **Auto-Generated Documentation**: Complete — `TypeGenerateDocs` / `TypeGenerateOrgDocs` workers, `doc_generations` JSONB storage, GitHub branch/file/PR creation, in-app Markdown editing via `PATCH /docs/:id`, and org-wide docs built from `anthropic.OrgContextBuilder`
+7. **Pull Request Browsing**: Complete — read-only `PullRequestHandler` proxying the repository's own host (GitHub pull requests or GitLab merge requests): list, detail, and changed files with patches. Routes and DTOs keep saying "pull request"; the neutral term "change request" is internal to `internal/integrations/scm`. No queue, no cache, no analysis.
+8. **Auto-Generated Documentation**: Complete — `TypeGenerateDocs` / `TypeGenerateOrgDocs` workers, `doc_generations` JSONB storage, branch/file/change-request creation on GitHub or GitLab, in-app Markdown editing via `PATCH /docs/:id`, and org-wide docs built from `anthropic.OrgContextBuilder`
 9. **Spatial Repository Navigation**: Complete — `repository_relationships` graph model, directed typed repo-to-repo edges, `GET /repositories/graph`, relationship CRUD endpoints, and legacy `repository_dependencies` backfill
 10. **Enriched Repository List**: Complete — Optimized SQL with a LATERAL join fetches the newest coverage upload per repository in a single query, zero N+1 problem
 11. **Configurable AI Output Language**: Complete — `OrganizationConfig.OutputLanguage` (BCP 47) drives a System prompt injected into every Claude documentation call. Validated with `golang.org/x/text/language`. Defaults to `"en"`.
@@ -99,11 +108,14 @@ internal/
 - **Timezone handling**: PostgreSQL TIMESTAMP (no timezone) requires explicit UTC conversion in Go — always use `.UTC()`
 - **StringArray**: `models.StringArray` is a custom type for PostgreSQL `text[]` — use it instead of `[]string` on any GORM model field mapped to a `text[]` column
 - **Repository relationships**: `repository_relationships` is the canonical graph model for spatial navigation. Do not add new map behavior to legacy `repository_dependencies` except compatibility/backfill. Relationships are directed, same-organization only, allow multiple edges between the same repositories, and use `kind` values `http`, `async`, `library`, `data`, `infra`, `manual`, `other`.
-- **Sync is GitHub-only**: `SyncService` refuses any repository whose URL does not resolve to `github.com`, returning `ErrUnsupportedProvider` and recording it on `sync_status`/`sync_error`. This guard is load-bearing: `owner/repo` is not unique across forges, so a `gitlab.com` URL run through the GitHub client silently imports an unrelated project's data. Do not remove it before `plans/integration-gitlab.md` ships a real GitLab sync path.
+- **Providers go through `internal/integrations/scm`**: `SyncService`, `DocsWorker` and `PullRequestHandler` depend on `scm.Provider` (capability interfaces: `CatalogReader`, `ChangeRequestReader`, `ChangeRequestWriter`, `WebhookRegistrar`, `CloneAuthorizer`), never on a forge client directly. `scm.For(repoType, creds)` dispatches on the provider the repository **URL** resolves to. Honouring that dispatch is load-bearing: the project path is not unique across forges, so a GitLab path run through the GitHub client silently imports an unrelated project's data. GitHub and GitLab (gitlab.com) are implemented; Gitea still returns `ErrUnsupportedProvider`, recorded on `sync_status`/`sync_error`.
+- **Provider credentials are per host**: a repository is only synced with its own host's token — `scm.For` returns `ErrMissingCredentials` rather than falling back to another provider's token. Organization tokens (`organization_configs.github_token` / `gitlab_token`) win over the platform-level `GITHUB_TOKEN` / `GITLAB_TOKEN` env vars.
+- **GitLab specifics that are easy to get wrong**: merge requests are addressed by `iid`, not `id`; `/languages` returns percentages, not byte counts; the recursive tree is paginated with no `truncated` flag, so `gitlab.Client.GetTree` synthesizes one at a 30-page ceiling (a path missing from a truncated tree proves nothing — `internal/detect` treats it as `unknown`); `changes_count` is a string and can be `"1000+"`; per-file line counts do not exist and are counted from the diff body. Nested groups are real project paths, so `utils.ParseRepositoryURL` keeps every GitLab path segment (`group/subgroup/project`) while GitHub stays `owner/repo`.
 - **Webhook registration on localhost**: skipped automatically when `WEBHOOK_BASE_URL` contains `localhost`/`127.0.0.1` — use ngrok for local webhook testing
 - **Field-level encryption**: Encrypted fields require `ENCRYPTION_KEY` at startup; existing unencrypted data must be migrated using `cmd/migrate-encrypt/` tool; decryption happens transparently via GORM `AfterFind` hooks
-- **Documentation generation**: Doc generation is asynchronous and requires Redis/asynq, an organization `ANTHROPIC_API_KEY`, and an organization `GITHUB_TOKEN` with repository contents/PR permissions. Generated Markdown is committed to the target repository via PR and also stored in `doc_generations.content`.
+- **Documentation generation**: Doc generation is asynchronous and requires Redis/asynq, an organization `ANTHROPIC_API_KEY`, and the token of the repository's own provider (`github_token` with contents/PR permissions, or `gitlab_token` with the `api` scope). Generated Markdown is delivered as a pull request on GitHub or a merge request on GitLab, and also stored in `doc_generations.content`. Clone credentials come from `scm.CloneAuthorizer` (`x-access-token` on GitHub, `oauth2` on GitLab).
 - **Swagger docs**: Generated by `swag init` from annotations in handler code; regenerate with `make swagger` or `go run github.com/swaggo/swag/cmd/swag@v1.8.12 init -g cmd/server/main.go -o docs --parseInternal --parseDependency`
+- **Organization config upsert**: `UpsertOrganizationConfig` lists its `ON CONFLICT DO UPDATE` columns by hand. Postgres rejects the whole statement for one unknown name — it referenced five columns migration `023` dropped, which broke every config update until the E2E suite caught it — and a column missing from that list silently fails to persist on an existing row. Adding a field to `OrganizationConfig` means adding it there too.
 - **Swagger CLI**: `swag` is not required globally; `make swagger` invokes the pinned CLI through `go run`. In restricted sandboxes this can fail until network/module cache access is available.
 
 ## Authentication & Organization Notes
@@ -139,10 +151,10 @@ internal/
 
 ## Auto-Generated Documentation Notes
 
-- **Generation flow**: `POST /api/v1/repositories/:id/docs/generate` creates a `DocGeneration` row with `pending` status, enqueues `TypeGenerateDocs`, and returns `202 Accepted` with the doc generation ID.
+- **Generation flow**: `POST /api/v1/repositories/:id/docs/generate` creates a `DocGeneration` row with `pending` status, enqueues `TypeGenerateDocs`, and returns `202 Accepted` with the doc generation ID. The handler resolves the repository's provider up front, so a missing GitLab/GitHub token is a `503` at request time instead of a failed generation later.
 - **Supported doc types**: `adr`, `architecture`, `service_doc`, and `guidelines`.
 - **Worker flow**: `DocsWorker` clones the repository shallowly, builds context from the directory tree, key files, and recent commits/PRs, then asks Claude to generate Markdown for each requested type.
-- **Delivery**: Generated docs are committed to a new GitHub branch (`docs/auto-generated-{timestamp}`) through the Contents API and opened as a PR against the requested/base branch.
+- **Delivery**: Generated docs are committed to a new branch (`docs/auto-generated-{timestamp}`) on the repository's own host and opened as a pull request (GitHub) or merge request (GitLab) against the requested/base branch.
 - **Storage**: `doc_generations.content` stores generated Markdown as JSONB; PR URL/number, status, branch, token usage, and errors are stored on the same row. `PATCH /docs/:id` edits the stored Markdown in place.
 - **Token budget**: The HTTP handler enforces the org's hourly Anthropic budget via `SumTokensUsedSince`, which sums `doc_generations.tokens_used` — doc generation is the only token consumer left. Worker token usage is written back to the same row.
 - **Org-wide docs**: `POST /api/v1/organizations/docs/generate` builds on `anthropic.OrgContextBuilder`, an aggregated snapshot of repos, dominant stacks, relationships and existing per-repo docs. ADRs require a `template_id` from the static registry in `internal/docs/templates.go`.
@@ -189,7 +201,7 @@ internal/
 - `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`: JWT configuration
 - `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`: Token expiration (in minutes)
 - `ENCRYPTION_KEY`: Base64-encoded 32-byte AES-256-GCM key for field encryption (generate with `openssl rand -base64 32`)
-- `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`: External API keys; Anthropic is used for documentation generation only. `GITHUB_TOKEN` is used for webhook registration, PR reads, private repository clones during doc generation, and documentation PR creation.
+- `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `GITLAB_TOKEN`: External API keys; Anthropic is used for documentation generation only. The provider tokens are platform-level fallbacks (organizations normally configure their own) used for webhook registration, PR/MR reads, private repository clones during doc generation, and documentation PR/MR creation.
 - `ANTHROPIC_TOKENS_PER_HOUR`: Hourly token budget for doc generation (default `20000`)
 - `WEBHOOK_BASE_URL`: Public base URL for webhook registration (e.g. ngrok URL); omit or use localhost to skip GitHub webhook registration
 - `LOG_LEVEL`: Logging verbosity (info, debug, error)

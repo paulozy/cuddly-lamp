@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
@@ -50,7 +51,7 @@ func (r *docsHandlerRepo) GetDocGeneration(ctx context.Context, id string) (*mod
 }
 
 func newDocsHandler(repo *docsHandlerRepo) *DocsHandler {
-	return NewDocsHandler(repo, nil)
+	return NewDocsHandler(repo, nil, scm.Credentials{})
 }
 
 // repoIDPtr is a small helper so test fixtures can keep the concise
@@ -291,13 +292,13 @@ func indexOf(haystack, needle string) int {
 // own state without re-implementing every interface method.
 type orgDocsRepo struct {
 	storage.Repository
-	orgConfig    *models.OrganizationConfig
-	tokensUsed   int64
-	createdDocs  []*models.DocGeneration
-	updatedDocs  []*models.DocGeneration
-	listOrgDocs  []models.DocGeneration
-	docByID      map[string]*models.DocGeneration
-	createErr    error
+	orgConfig   *models.OrganizationConfig
+	tokensUsed  int64
+	createdDocs []*models.DocGeneration
+	updatedDocs []*models.DocGeneration
+	listOrgDocs []models.DocGeneration
+	docByID     map[string]*models.DocGeneration
+	createErr   error
 }
 
 func (r *orgDocsRepo) GetOrganizationConfig(_ context.Context, orgID string) (*models.OrganizationConfig, error) {
@@ -365,7 +366,7 @@ func TestDocsHandler_GenerateOrgDocs_RequiresAdmin(t *testing.T) {
 	repo := &orgDocsRepo{
 		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
 	}
-	handler := NewDocsHandler(repo, nil)
+	handler := NewDocsHandler(repo, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -387,7 +388,7 @@ func TestDocsHandler_GenerateOrgDocs_RejectsRepoOnlyTypes(t *testing.T) {
 	repo := &orgDocsRepo{
 		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
 	}
-	handler := NewDocsHandler(repo, nil)
+	handler := NewDocsHandler(repo, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -409,7 +410,7 @@ func TestDocsHandler_GenerateOrgDocs_ADRRequiresTemplateID(t *testing.T) {
 	repo := &orgDocsRepo{
 		orgConfig: &models.OrganizationConfig{AnthropicAPIKey: "sk-test", AnthropicTokensPerHour: 20000},
 	}
-	handler := NewDocsHandler(repo, nil)
+	handler := NewDocsHandler(repo, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -434,7 +435,7 @@ func TestDocsHandler_ListOrgDocs_FiltersByOrg(t *testing.T) {
 			{ID: "doc-org", OrganizationID: "org-1", Scope: models.DocGenerationScopeOrg, Status: models.DocGenerationStatusCompleted, CreatedAt: now, UpdatedAt: now},
 		},
 	}
-	handler := NewDocsHandler(repo, nil)
+	handler := NewDocsHandler(repo, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -458,7 +459,7 @@ func TestDocsHandler_ListOrgDocs_FiltersByOrg(t *testing.T) {
 
 func TestDocsHandler_ListDocTemplates_ReturnsRegistry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewDocsHandler(&orgDocsRepo{}, nil)
+	handler := NewDocsHandler(&orgDocsRepo{}, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -492,7 +493,7 @@ func TestDocsHandler_UpdateDocContent_CreatesSupersedingVersion(t *testing.T) {
 	repo := &orgDocsRepo{
 		docByID: map[string]*models.DocGeneration{"doc-1": previous},
 	}
-	handler := NewDocsHandler(repo, nil)
+	handler := NewDocsHandler(repo, nil, scm.Credentials{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

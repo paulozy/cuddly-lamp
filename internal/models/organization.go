@@ -43,7 +43,14 @@ type OrganizationConfig struct {
 	AnthropicAPIKey        string `gorm:"type:bytea;serializer:enc" json:"-"`
 	AnthropicTokensPerHour int    `gorm:"default:20000" json:"anthropic_tokens_per_hour"`
 	GithubToken            string `gorm:"type:bytea;serializer:enc" json:"-"`
-	WebhookBaseURL         string `gorm:"type:text" json:"webhook_base_url,omitempty"`
+	// GitlabToken is the API token used to sync projects, read merge requests,
+	// register webhooks and open documentation MRs. It is deliberately not the
+	// same credential as GitLabClientSecret, which only logs users in.
+	GitlabToken string `gorm:"column:gitlab_token;type:bytea;serializer:enc" json:"-"`
+	// GitlabBaseURL is reserved for self-hosted instances and read by nothing
+	// yet — the client is pinned to gitlab.com.
+	GitlabBaseURL  string `gorm:"column:gitlab_base_url;type:text" json:"gitlab_base_url,omitempty"`
+	WebhookBaseURL string `gorm:"type:text" json:"webhook_base_url,omitempty"`
 
 	GitHubClientID     string `gorm:"column:github_client_id;type:varchar(255)" json:"github_client_id,omitempty"`
 	GitHubClientSecret string `gorm:"column:github_client_secret;type:bytea;serializer:enc" json:"-"`

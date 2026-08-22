@@ -8,11 +8,11 @@ import (
 
 func TestParseRepositoryURL(t *testing.T) {
 	tests := []struct {
-		name        string
-		url         string
-		wantName    string
-		wantType    models.RepositoryType
-		wantErr     bool
+		name     string
+		url      string
+		wantName string
+		wantType models.RepositoryType
+		wantErr  bool
 	}{
 		{
 			name:     "GitHub URL",
@@ -31,6 +31,25 @@ func TestParseRepositoryURL(t *testing.T) {
 			url:      "https://gitlab.com/owner/repo",
 			wantName: "owner/repo",
 			wantType: models.RepositoryTypeGitLab,
+		},
+		{
+			name:     "GitLab nested group",
+			url:      "https://gitlab.com/group/subgroup/project",
+			wantName: "group/subgroup/project",
+			wantType: models.RepositoryTypeGitLab,
+		},
+		{
+			name:     "GitLab nested group with .git suffix",
+			url:      "https://gitlab.com/group/subgroup/project.git",
+			wantName: "group/subgroup/project",
+			wantType: models.RepositoryTypeGitLab,
+		},
+		{
+			// GitHub does not nest, so extra segments are a deep link.
+			name:     "GitHub deep link keeps owner/repo",
+			url:      "https://github.com/owner/repo/tree/main/internal",
+			wantName: "owner/repo",
+			wantType: models.RepositoryTypeGitHub,
 		},
 		{
 			name:     "Gitea URL",

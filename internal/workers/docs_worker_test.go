@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"gorm.io/datatypes"
@@ -83,11 +84,13 @@ func TestDocsWorker_Handle(t *testing.T) {
 		},
 	}
 	gh := &docsMockGithub{files: map[string]string{}, pr: &github.PullRequest{Number: 7, HTMLURL: "https://github.com/owner/repo/pull/7"}}
-	worker := NewDocsWorker(mockRepo)
-	worker.cloneRepo = func(context.Context, string, string, string) (string, func(), error) {
+	worker := NewDocsWorker(mockRepo, scm.Credentials{})
+	worker.cloneRepo = func(context.Context, string, string, string, string) (string, func(), error) {
 		return tmp, func() {}, nil
 	}
-	worker.githubFactory = func(string) github.ClientInterface { return gh }
+	worker.resolve = func(models.RepositoryType, scm.Credentials) (scm.Provider, error) {
+		return scm.NewGitHubProviderWithClient(gh, "github"), nil
+	}
 	worker.generatorFactory = func(string) ai.DocumentationGenerator {
 		return &ai.MockDocumentationGenerator{
 			GenerateDocumentationFunc: func(ctx context.Context, req *ai.DocumentationRequest) (*ai.DocumentationResult, error) {

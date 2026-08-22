@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 )
@@ -76,6 +77,63 @@ func (m *mockGitHubClient) CreatePullRequest(_ context.Context, _, _, _, _, _, _
 	return nil, nil
 }
 
+// stubProvider is an scm.Provider that records the ref it was asked about.
+// Used for hosts whose real client would otherwise need the network.
+type stubProvider struct {
+	info     *scm.RepoInfo
+	branches []scm.Branch
+	ref      scm.RepoRef
+}
+
+func (s *stubProvider) GetRepository(_ context.Context, ref scm.RepoRef) (*scm.RepoInfo, error) {
+	s.ref = ref
+	return s.info, nil
+}
+
+func (s *stubProvider) ListBranches(_ context.Context, _ scm.RepoRef) ([]scm.Branch, error) {
+	return s.branches, nil
+}
+
+func (s *stubProvider) ListCommits(_ context.Context, _ scm.RepoRef, _ string, _ int) ([]scm.Commit, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) ListLanguages(_ context.Context, _ scm.RepoRef) (map[string]int, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) GetTree(_ context.Context, _ scm.RepoRef, _ string) (*scm.RepoTree, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) ListChangeRequests(_ context.Context, _ scm.RepoRef) ([]scm.ChangeRequest, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) GetChangeRequest(_ context.Context, _ scm.RepoRef, _ int64) (*scm.ChangeRequest, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) GetChangeRequestFiles(_ context.Context, _ scm.RepoRef, _ int64) ([]scm.ChangeRequestFile, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) CreateBranch(_ context.Context, _ scm.RepoRef, _, _ string) error { return nil }
+
+func (s *stubProvider) UpsertFile(_ context.Context, _ scm.RepoRef, _, _, _, _ string) error {
+	return nil
+}
+
+func (s *stubProvider) OpenChangeRequest(_ context.Context, _ scm.RepoRef, _, _, _, _ string) (*scm.ChangeRequest, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) RegisterWebhook(_ context.Context, _ scm.RepoRef, _, _ string) (*scm.Webhook, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) CloneAuth() (string, string) { return "stub", "stub" }
+
 // ── extended mock repo store for SyncService ─────────────────────────────────
 
 type mockSyncRepoStore struct {
@@ -131,7 +189,17 @@ func (m *spyGitHubClient) GetRepository(ctx context.Context, owner, name string)
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newSyncService(store *mockSyncRepoStore, gh githubclient.ClientInterface) *SyncService {
-	return NewSyncService(store, gh, newMockCache(), "")
+	svc := NewSyncService(store, scm.Credentials{GitHubToken: "test-token"}, newMockCache(), "")
+	// Resolve through the real GitHub adapter wrapped around a mock HTTP
+	// client. The provider dispatch stays real — a non-GitHub URL is still
+	// refused by scm.For — so only the network is replaced here.
+	svc.resolve = func(kind models.RepositoryType, creds scm.Credentials) (scm.Provider, error) {
+		if kind != models.RepositoryTypeGitHub {
+			return scm.For(kind, creds)
+		}
+		return scm.NewGitHubProviderWithClient(gh, creds.GitHubToken), nil
+	}
+	return svc
 }
 
 func seedRepo(store *mockSyncRepoStore, id, url string) {
@@ -244,52 +312,113 @@ func TestSyncService_SyncRepository_DBUpdateError(t *testing.T) {
 }
 
 // Regression: SyncRepository used to discard the provider returned by
-// ParseRepositoryURL and always build a GitHub client. Because "owner/repo" is
-// not unique across forges, a gitlab.com URL would be queried against
+// ParseRepositoryURL and always build a GitHub client. Because the project
+// path is not unique across forges, a gitlab.com URL would be queried against
 // api.github.com — silently importing an unrelated GitHub project's languages,
 // branches and commits into the catalog, and trying to register a webhook on
 // someone else's repository.
-func TestSyncService_SyncRepository_RejectsNonGitHubProvider(t *testing.T) {
-	tests := []struct {
-		name string
-		url  string
-	}{
-		{name: "gitlab", url: "https://gitlab.com/owner/repo"},
-		{name: "gitea", url: "https://gitea.example.com/owner/repo"},
+//
+// GitLab now has a client of its own, so the guard's job narrowed to hosts we
+// still cannot talk to; the "never queried through the wrong client" half of
+// the regression is covered by
+// TestSyncService_SyncRepository_UsesTheProviderMatchingTheHost.
+func TestSyncService_SyncRepository_RefusesHostsWithoutAClient(t *testing.T) {
+	store := newMockSyncRepoStore()
+	seedRepo(store, "repo-1", "https://gitea.example.com/owner/repo")
+
+	gh := &spyGitHubClient{mockGitHubClient: mockGitHubClient{
+		repoInfo: &githubclient.RepoInfo{ID: 42, Language: "Go", DefaultBranch: "main"},
+	}}
+
+	svc := newSyncService(store, gh)
+	err := svc.SyncRepository(context.Background(), "repo-1")
+
+	if !errors.Is(err, ErrUnsupportedProvider) {
+		t.Fatalf("error = %v, want ErrUnsupportedProvider", err)
+	}
+	if gh.called {
+		t.Error("the GitHub API was queried for a non-GitHub repository")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newMockSyncRepoStore()
-			seedRepo(store, "repo-1", tt.url)
+	updated := store.repos["repo-1"]
+	if updated.SyncStatus != "error" {
+		t.Errorf("SyncStatus = %q, want %q", updated.SyncStatus, "error")
+	}
+	if updated.SyncError == "" {
+		t.Error("SyncError should explain why the sync was refused")
+	}
+	// The catalog row must keep its original metadata — importing a
+	// same-named GitHub project is exactly the failure being prevented.
+	if updated.Metadata.DefaultBranch != "" {
+		t.Errorf("metadata was populated from GitHub: %+v", updated.Metadata)
+	}
+}
 
-			gh := &spyGitHubClient{mockGitHubClient: mockGitHubClient{
-				repoInfo: &githubclient.RepoInfo{ID: 42, Language: "Go", DefaultBranch: "main"},
-			}}
+// A GitLab URL must be synced through the GitLab client and never through
+// GitHub's, whatever tokens happen to be configured.
+func TestSyncService_SyncRepository_UsesTheProviderMatchingTheHost(t *testing.T) {
+	store := newMockSyncRepoStore()
+	seedRepo(store, "repo-1", "https://gitlab.com/group/subgroup/project")
 
-			svc := newSyncService(store, gh)
-			err := svc.SyncRepository(context.Background(), "repo-1")
+	gh := &spyGitHubClient{mockGitHubClient: mockGitHubClient{
+		repoInfo: &githubclient.RepoInfo{ID: 42, Language: "Go", DefaultBranch: "main"},
+	}}
+	stub := &stubProvider{
+		info:     &scm.RepoInfo{ID: 7, DefaultBranch: "trunk", StarCount: 11},
+		branches: []scm.Branch{{Name: "trunk"}},
+	}
 
-			if !errors.Is(err, ErrUnsupportedProvider) {
-				t.Fatalf("error = %v, want ErrUnsupportedProvider", err)
-			}
-			if gh.called {
-				t.Error("the GitHub API was queried for a non-GitHub repository")
-			}
+	svc := newSyncService(store, gh)
+	var resolvedKind models.RepositoryType
+	svc.resolve = func(kind models.RepositoryType, creds scm.Credentials) (scm.Provider, error) {
+		resolvedKind = kind
+		if kind != models.RepositoryTypeGitLab {
+			t.Fatalf("resolved %q for a gitlab.com URL", kind)
+		}
+		return stub, nil
+	}
 
-			updated := store.repos["repo-1"]
-			if updated.SyncStatus != "error" {
-				t.Errorf("SyncStatus = %q, want %q", updated.SyncStatus, "error")
-			}
-			if updated.SyncError == "" {
-				t.Error("SyncError should explain why the sync was refused")
-			}
-			// The catalog row must keep its original metadata — importing a
-			// same-named GitHub project is exactly the failure being prevented.
-			if updated.Metadata.DefaultBranch != "" {
-				t.Errorf("metadata was populated from GitHub: %+v", updated.Metadata)
-			}
-		})
+	if err := svc.SyncRepository(context.Background(), "repo-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolvedKind != models.RepositoryTypeGitLab {
+		t.Fatalf("resolved kind = %q, want gitlab", resolvedKind)
+	}
+	if gh.called {
+		t.Error("the GitHub API was queried for a GitLab repository")
+	}
+
+	updated := store.repos["repo-1"]
+	if updated.SyncStatus != "synced" {
+		t.Fatalf("SyncStatus = %q, want synced", updated.SyncStatus)
+	}
+	if updated.Metadata.DefaultBranch != "trunk" || updated.Metadata.StarCount != 11 {
+		t.Errorf("metadata = %+v, want the GitLab values", updated.Metadata)
+	}
+	// Nested groups must survive: `group/subgroup` is the namespace, and
+	// truncating it to `group` would point at a different project.
+	if updated.Metadata.OwnerName != "group/subgroup" {
+		t.Errorf("OwnerName = %q, want the full nested namespace", updated.Metadata.OwnerName)
+	}
+	if stub.ref.FullPath() != "group/subgroup/project" {
+		t.Errorf("queried %q, want group/subgroup/project", stub.ref.FullPath())
+	}
+}
+
+// A repository whose host has a client but no token must fail loudly instead of
+// falling back to another provider's token.
+func TestSyncService_SyncRepository_RequiresTheHostsOwnToken(t *testing.T) {
+	store := newMockSyncRepoStore()
+	seedRepo(store, "repo-1", "https://gitlab.com/owner/repo")
+
+	svc := NewSyncService(store, scm.Credentials{GitHubToken: "gh-only"}, newMockCache(), "")
+	err := svc.SyncRepository(context.Background(), "repo-1")
+
+	if !errors.Is(err, scm.ErrMissingCredentials) {
+		t.Fatalf("error = %v, want ErrMissingCredentials", err)
+	}
+	if updated := store.repos["repo-1"]; updated.SyncStatus != "error" || updated.SyncError == "" {
+		t.Errorf("repository = %+v, want the failure recorded", updated)
 	}
 }
 

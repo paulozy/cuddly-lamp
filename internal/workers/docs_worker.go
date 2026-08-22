@@ -16,7 +16,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
 	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
-	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
@@ -27,15 +27,18 @@ import (
 type DocsWorker struct {
 	repo             storage.Repository
 	generatorFactory func(apiKey string) ai.DocumentationGenerator
-	githubFactory    func(token string) github.ClientInterface
-	cloneRepo        func(ctx context.Context, repoURL, githubToken, branch string) (string, func(), error)
+	resolve          scm.ResolverFunc
+	// hosts carries the deployment's provider API roots, with no tokens.
+	hosts     scm.Credentials
+	cloneRepo func(ctx context.Context, repoURL, username, password, branch string) (string, func(), error)
 }
 
-func NewDocsWorker(repo storage.Repository) *DocsWorker {
+func NewDocsWorker(repo storage.Repository, hosts scm.Credentials) *DocsWorker {
 	return &DocsWorker{
 		repo:             repo,
 		generatorFactory: func(apiKey string) ai.DocumentationGenerator { return anthropicclient.NewClient(apiKey) },
-		githubFactory:    func(token string) github.ClientInterface { return github.NewClient(token) },
+		resolve:          scm.For,
+		hosts:            hosts,
 		cloneRepo:        cloneRepositoryForDocs,
 	}
 }
@@ -69,9 +72,6 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	if cfg == nil || cfg.AnthropicAPIKey == "" {
 		return w.failDocGeneration(ctx, doc, "anthropic api key is not configured for organization")
 	}
-	if cfg.GithubToken == "" {
-		return w.failDocGeneration(ctx, doc, "github token is not configured for organization")
-	}
 
 	branch := payload.Branch
 	if branch == "" {
@@ -88,24 +88,31 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 		return fmt.Errorf("docs worker: mark in progress: %w", err)
 	}
 
-	ownerRepo, _, err := utils.ParseRepositoryURL(repository.URL)
+	projectPath, provider, err := utils.ParseRepositoryURL(repository.URL)
 	if err != nil {
 		return w.failDocGeneration(ctx, doc, fmt.Sprintf("invalid repository URL: %v", err))
 	}
-	parts := strings.Split(ownerRepo, "/")
-	if len(parts) != 2 {
-		return w.failDocGeneration(ctx, doc, "invalid repository format")
+	ref, err := scm.ParseRepoRef(projectPath)
+	if err != nil {
+		return w.failDocGeneration(ctx, doc, fmt.Sprintf("invalid repository format: %v", err))
 	}
-	owner, repoName := parts[0], parts[1]
 
-	cloneDir, cleanup, err := w.cloneRepo(ctx, repository.URL, cfg.GithubToken, branch)
+	// The documentation lands as a change request on the repository's own
+	// host, so both the clone credentials and the API client come from the
+	// provider that host resolves to.
+	client, err := w.resolve(provider, scm.CredentialsFromConfig(cfg, w.hosts))
+	if err != nil {
+		return w.failDocGeneration(ctx, doc, err.Error())
+	}
+	cloneUser, clonePassword := client.CloneAuth()
+
+	cloneDir, cleanup, err := w.cloneRepo(ctx, repository.URL, cloneUser, clonePassword, branch)
 	if err != nil {
 		return w.failDocGeneration(ctx, doc, fmt.Sprintf("clone repository: %v", err))
 	}
 	defer cleanup()
 
-	ghClient := w.githubFactory(cfg.GithubToken)
-	contextMarkdown := w.buildDocContext(ctx, ghClient, repository, owner, repoName, branch, cloneDir)
+	contextMarkdown := w.buildDocContext(ctx, client, repository, ref, branch, cloneDir)
 	generator := w.generatorFactory(cfg.AnthropicAPIKey)
 
 	content := make(map[string]string)
@@ -131,7 +138,7 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	}
 
 	genBranch := fmt.Sprintf("docs/auto-generated-%d", time.Now().UTC().Unix())
-	if err := ghClient.CreateBranch(ctx, owner, repoName, branch, genBranch); err != nil {
+	if err := client.CreateBranch(ctx, ref, branch, genBranch); err != nil {
 		return w.failDocGeneration(ctx, doc, fmt.Sprintf("create documentation branch: %v", err))
 	}
 
@@ -141,12 +148,12 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 			continue
 		}
 		msg := fmt.Sprintf("docs: update %s documentation", docType)
-		if err := ghClient.CreateOrUpdateFile(ctx, owner, repoName, genBranch, path, msg, markdown); err != nil {
+		if err := client.UpsertFile(ctx, ref, genBranch, path, msg, markdown); err != nil {
 			return w.failDocGeneration(ctx, doc, fmt.Sprintf("commit %s: %v", path, err))
 		}
 	}
 
-	pr, err := ghClient.CreatePullRequest(ctx, owner, repoName, "docs: auto-generate project documentation", genBranch, branch, "Generated project documentation from repository analysis.")
+	pr, err := client.OpenChangeRequest(ctx, ref, "docs: auto-generate project documentation", genBranch, branch, "Generated project documentation from repository analysis.")
 	if err != nil {
 		return w.failDocGeneration(ctx, doc, fmt.Sprintf("create pull request: %v", err))
 	}
@@ -157,7 +164,7 @@ func (w *DocsWorker) Handle(ctx context.Context, task *asynq.Task) error {
 	doc.TokensUsed = tokensUsed
 	if pr != nil {
 		doc.PullRequestNumber = int(pr.Number)
-		doc.PullRequestURL = pr.HTMLURL
+		doc.PullRequestURL = pr.WebURL
 	}
 	doc.ErrorMessage = ""
 	if err := w.repo.UpdateDocGeneration(ctx, doc); err != nil {
@@ -216,7 +223,7 @@ func (w *DocsWorker) failDocGeneration(ctx context.Context, doc *models.DocGener
 	return fmt.Errorf("docs worker: %s", message)
 }
 
-func (w *DocsWorker) buildDocContext(ctx context.Context, ghClient github.ClientInterface, repository *models.Repository, owner, repoName, branch, cloneDir string) string {
+func (w *DocsWorker) buildDocContext(ctx context.Context, client scm.Provider, repository *models.Repository, ref scm.RepoRef, branch, cloneDir string) string {
 	sb := strings.Builder{}
 	sb.WriteString("## Directory Tree\n")
 	sb.WriteString(renderDirectoryTree(cloneDir, 2))
@@ -228,27 +235,30 @@ func (w *DocsWorker) buildDocContext(ctx context.Context, ghClient github.Client
 		}
 	}
 
-	if commits, err := ghClient.GetCommits(ctx, owner, repoName, branch, 20); err == nil && len(commits) > 0 {
+	if commits, err := client.ListCommits(ctx, ref, branch, 20); err == nil && len(commits) > 0 {
 		sb.WriteString("\n## Recent Commits\n")
 		for _, commit := range commits {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", shortSHA(commit.SHA), strings.Split(commit.Commit.Message, "\n")[0]))
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", shortSHA(commit.SHA), strings.Split(commit.Message, "\n")[0]))
 		}
 	}
 
-	if prs, err := ghClient.ListPullRequests(ctx, owner, repoName); err == nil && len(prs) > 0 {
+	if prs, err := client.ListChangeRequests(ctx, ref); err == nil && len(prs) > 0 {
 		sb.WriteString("\n## Recent Pull Requests\n")
 		for i, pr := range prs {
 			if i >= 5 {
 				break
 			}
-			sb.WriteString(fmt.Sprintf("- #%d %s by %s\n", pr.Number, pr.Title, pr.User.Login))
+			sb.WriteString(fmt.Sprintf("- #%d %s by %s\n", pr.Number, pr.Title, pr.AuthorLogin))
 		}
 	}
 
 	return truncateString(sb.String(), 60000)
 }
 
-func cloneRepositoryForDocs(ctx context.Context, repoURL, githubToken, branch string) (string, func(), error) {
+// cloneRepositoryForDocs shallow-clones over HTTPS. The basic-auth pair comes
+// from the provider (scm.CloneAuthorizer), because the magic username differs
+// per host and this function has no business knowing which.
+func cloneRepositoryForDocs(ctx context.Context, repoURL, username, password, branch string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "docs-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp dir: %w", err)
@@ -259,8 +269,8 @@ func cloneRepositoryForDocs(ctx context.Context, repoURL, githubToken, branch st
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
 		opts.SingleBranch = true
 	}
-	if githubToken != "" {
-		opts.Auth = &githttp.BasicAuth{Username: "x-access-token", Password: githubToken}
+	if password != "" {
+		opts.Auth = &githttp.BasicAuth{Username: username, Password: password}
 	}
 	if _, err := git.PlainCloneContext(ctx, dir, false, opts); err != nil {
 		cleanup()

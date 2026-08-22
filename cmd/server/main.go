@@ -15,7 +15,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/api"
 	"github.com/paulozy/idp-with-ai-backend/internal/config"
 	appcrypto "github.com/paulozy/idp-with-ai-backend/internal/crypto"
-	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
+	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -119,12 +119,18 @@ func main() {
 				}
 			}
 		}
-		ghClient := githubclient.NewClient(cfg.API.GithubToken)
-		syncSvc := services.NewSyncService(pgRepo, ghClient, cache, cfg.API.WebhookBaseURL)
+		// Platform-level tokens act as the fallback for organizations that have
+		// not configured their own; the provider itself is picked per repository.
+		platformCreds := scm.Credentials{
+			GitHubToken:   cfg.API.GithubToken,
+			GitLabToken:   cfg.API.GitlabToken,
+			GitLabBaseURL: cfg.API.GitlabBaseURL,
+		}
+		syncSvc := services.NewSyncService(pgRepo, platformCreds, cache, cfg.API.WebhookBaseURL)
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
-		docsWorker := workers.NewDocsWorker(pgRepo)
+		docsWorker := workers.NewDocsWorker(pgRepo, scm.HostsOnly(cfg.API.GitlabBaseURL))
 
 		worker := jobs.NewWorker(&cfg.Redis)
 		worker.Register(tasks.TypeSyncRepo, syncWorker.Handle)
