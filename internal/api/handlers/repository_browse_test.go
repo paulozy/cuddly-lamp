@@ -347,6 +347,7 @@ type writeProvider struct {
 	approved     int64
 	approvedBody string
 	requestErr   error
+	approveErr   error
 }
 
 func (p *writeProvider) CloseIssue(_ context.Context, _ scm.RepoRef, number int64) error {
@@ -355,9 +356,19 @@ func (p *writeProvider) CloseIssue(_ context.Context, _ scm.RepoRef, number int6
 }
 
 func (p *writeProvider) ApproveChangeRequest(_ context.Context, _ scm.RepoRef, number int64, body string) error {
+	if p.approveErr != nil {
+		return p.approveErr
+	}
 	p.approved = number
 	p.approvedBody = body
 	return nil
+}
+
+// CurrentUser is reached when a self-review rejection is being explained. This
+// double reports nothing, which exercises the degraded path: the 409 still goes
+// out, just without naming the token's owner.
+func (p *writeProvider) CurrentUser(_ context.Context) (*scm.Identity, error) {
+	return nil, nil
 }
 
 func (p *writeProvider) RequestChanges(_ context.Context, _ scm.RepoRef, _ int64, _ string) error {

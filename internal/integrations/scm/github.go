@@ -3,7 +3,9 @@ package scm
 import (
 	"context"
 	"errors"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 )
@@ -34,9 +36,11 @@ func NewGitHubProviderWithClient(client github.ClientInterface, token string) Pr
 // mirrors the hardcoded list in github.CreateWebhook.
 var githubEvents = []string{"push", "pull_request", "issues"}
 
-// translateGitHubErr maps the client's sentinels onto the canonical ones,
-// leaving anything else untouched so the original message survives.
+// translateGitHubErr maps the client's sentinels onto the canonical ones, and
+// turns a status-carrying APIError into a classified rejection.
 func translateGitHubErr(err error) error {
+	var apiErr *github.APIError
+
 	switch {
 	case err == nil:
 		return nil
@@ -46,9 +50,59 @@ func translateGitHubErr(err error) error {
 		return ErrUnauthorized
 	case errors.Is(err, github.ErrRateLimited):
 		return ErrRateLimited
+	case errors.As(err, &apiErr):
+		return classifyGitHubAPIError(apiErr)
 	default:
 		return err
 	}
+}
+
+// classifyGitHubAPIError decides whether the host refused the action or simply
+// could not answer.
+//
+// Anything below 500 is a refusal: GitHub read the request and said no, and no
+// amount of retrying changes that. 5xx and anything unrecognized stay
+// unavailability, which is the honest reading of a server that broke.
+func classifyGitHubAPIError(apiErr *github.APIError) error {
+	if apiErr.Status >= 500 {
+		return apiErr
+	}
+	return &ProviderError{
+		Provider: "github",
+		Status:   apiErr.Status,
+		Reason:   githubRejectionReason(apiErr),
+		Message:  githubRejectionMessage(apiErr),
+	}
+}
+
+// githubRejectionReason recognizes the refusals worth naming.
+//
+// Matching on prose is fragile and that is accounted for: an unrecognized
+// refusal still returns a ProviderError with the host's message intact, so a
+// wording change on GitHub's side costs a tailored message and nothing more.
+// It must never fall back to reporting the failure as an outage.
+func githubRejectionReason(apiErr *github.APIError) string {
+	haystack := strings.ToLower(strings.Join(append([]string{apiErr.Message}, apiErr.Errors...), " "))
+	switch {
+	// Matches GitHub's "Can not approve your own pull request" and any
+	// rewording that keeps the phrase.
+	case strings.Contains(haystack, "approve your own"):
+		return ReasonSelfReview
+	case strings.Contains(haystack, "already approved"):
+		return ReasonAlreadyReviewed
+	default:
+		return ""
+	}
+}
+
+// githubRejectionMessage prefers the `errors` detail over the top-level
+// message, because that is where GitHub puts the sentence a person can act on
+// — "Unprocessable Entity" alone explains nothing.
+func githubRejectionMessage(apiErr *github.APIError) string {
+	if detail := strings.Join(apiErr.Errors, "; "); detail != "" {
+		return detail
+	}
+	return apiErr.Message
 }
 
 func (p *githubProvider) CloneAuth() (string, string) {
@@ -275,4 +329,79 @@ func githubChangeRequest(pr github.PullRequest) ChangeRequest {
 		UpdatedAt:    pr.UpdatedAt,
 		MergedAt:     pr.MergedAt,
 	}
+}
+
+func (p *githubProvider) CurrentUser(ctx context.Context) (*Identity, error) {
+	user, err := p.client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		return nil, translateGitHubErr(err)
+	}
+	return &Identity{
+		Login: user.Login,
+		Name:  user.Name,
+		IsBot: user.Type == "Bot",
+	}, nil
+}
+
+// GetChangeRequestReviews reduces GitHub's review history to a current verdict.
+//
+// Two GitHub behaviours make this more than a filter. A person can review
+// repeatedly, so only their latest verdict counts — replaying the list in order
+// and overwriting per login is what implements that. And COMMENTED reviews do
+// not change anyone's position, so they mark the change request as reviewed
+// without displacing an earlier approval or objection; DISMISSED and PENDING
+// are not positions at all.
+//
+// Changes-requested outranks approved in the summary: an unresolved objection
+// is the more important fact for someone deciding whether to merge.
+func (p *githubProvider) GetChangeRequestReviews(ctx context.Context, ref RepoRef, number int64) (*ReviewState, error) {
+	reviews, err := p.client.ListReviews(ctx, ref.Namespace, ref.Name, number)
+	if err != nil {
+		return nil, translateGitHubErr(err)
+	}
+
+	// Latest verdict per reviewer, in the order GitHub returned them.
+	verdicts := make(map[string]string, len(reviews))
+	commented := false
+	for _, review := range reviews {
+		login := review.User.Login
+		if login == "" {
+			continue
+		}
+		switch strings.ToUpper(review.State) {
+		case "APPROVED":
+			verdicts[login] = ReviewDecisionApproved
+		case "CHANGES_REQUESTED":
+			verdicts[login] = ReviewDecisionChangesRequested
+		case "DISMISSED":
+			// A dismissed review is explicitly no longer a position.
+			delete(verdicts, login)
+		case "COMMENTED":
+			commented = true
+		}
+	}
+
+	state := &ReviewState{}
+	for login, verdict := range verdicts {
+		switch verdict {
+		case ReviewDecisionApproved:
+			state.ApprovedBy = append(state.ApprovedBy, login)
+		case ReviewDecisionChangesRequested:
+			state.ChangesRequestedBy = append(state.ChangesRequestedBy, login)
+		}
+	}
+	// Sorted so the same state does not render in a different order on every
+	// request — Go randomizes map iteration.
+	sort.Strings(state.ApprovedBy)
+	sort.Strings(state.ChangesRequestedBy)
+
+	switch {
+	case len(state.ChangesRequestedBy) > 0:
+		state.Decision = ReviewDecisionChangesRequested
+	case len(state.ApprovedBy) > 0:
+		state.Decision = ReviewDecisionApproved
+	case commented:
+		state.Decision = ReviewDecisionCommented
+	}
+	return state, nil
 }

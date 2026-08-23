@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,5 +113,100 @@ func TestRequestChanges_SupportedProviderSucceeds(t *testing.T) {
 
 	if rec := reviewRequest(h.RequestPullRequestChanges, models.RoleMaintainer, ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+// The bug this whole change exists for. GitHub refuses a self-approval with a
+// 422; the platform used to report that as 503 "provider unavailable", which
+// says "retry later" about something that can never succeed, and blamed the
+// organization's token, which is perfectly valid.
+func TestApprovePullRequest_SelfReviewIsAConflictNotAnOutage(t *testing.T) {
+	h := newReviewHandler(&writeProvider{approveErr: &scm.ProviderError{
+		Provider: "github",
+		Status:   http.StatusUnprocessableEntity,
+		Reason:   scm.ReasonSelfReview,
+		Message:  "Review Can not approve your own pull request",
+	}})
+
+	rec := reviewRequest(h.ApprovePullRequest, models.RoleMaintainer, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "self_review") {
+		t.Errorf("body = %s, want the self_review code", rec.Body)
+	}
+	// The description has to explain the platform's situation, not repeat the
+	// host's wording — the author is usually the org token, not the clicker.
+	if !strings.Contains(rec.Body.String(), "token") {
+		t.Errorf("body = %s, want it to explain whose identity acted", rec.Body)
+	}
+}
+
+// A named token owner is the whole point of enriching the failure: it turns a
+// dead end into something the reader can act on.
+func TestApprovePullRequest_SelfReviewNamesTheTokenOwner(t *testing.T) {
+	h := newReviewHandler(&writeProvider{approveErr: &scm.ProviderError{
+		Provider:   "github",
+		Status:     http.StatusUnprocessableEntity,
+		Reason:     scm.ReasonSelfReview,
+		Message:    "Review Can not approve your own pull request",
+		TokenOwner: "paulozy",
+	}})
+
+	rec := reviewRequest(h.ApprovePullRequest, models.RoleMaintainer, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "@paulozy") {
+		t.Errorf("body = %s, want the token owner named", rec.Body)
+	}
+}
+
+// Every other refusal the host spelled out: pass its words through, still 409.
+func TestApprovePullRequest_OtherRefusalsKeepTheHostsWords(t *testing.T) {
+	h := newReviewHandler(&writeProvider{approveErr: &scm.ProviderError{
+		Provider: "github",
+		Status:   http.StatusUnprocessableEntity,
+		Message:  "No commits between main and feature",
+	}})
+
+	rec := reviewRequest(h.ApprovePullRequest, models.RoleMaintainer, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "provider_rejected") {
+		t.Errorf("body = %s, want the provider_rejected code", rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "No commits between") {
+		t.Errorf("body = %s, want the host's explanation preserved", rec.Body)
+	}
+}
+
+// The other half of the distinction: a real outage must stay a 503, or the fix
+// has just moved the lie somewhere else.
+func TestApprovePullRequest_RealOutageStaysUnavailable(t *testing.T) {
+	h := newReviewHandler(&writeProvider{approveErr: scm.ErrUnauthorized})
+
+	rec := reviewRequest(h.ApprovePullRequest, models.RoleMaintainer, "")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "provider_unavailable") {
+		t.Errorf("body = %s, want the provider_unavailable code", rec.Body)
+	}
+}
+
+// An unclassified failure must not put the provider's raw payload in the
+// response. It is the case where that text is least likely to mean anything and
+// most likely to leak.
+func TestApprovePullRequest_UnclassifiedFailureDoesNotLeakRawText(t *testing.T) {
+	h := newReviewHandler(&writeProvider{approveErr: errors.New("dial tcp 10.0.0.5:443: connect: connection refused")})
+
+	rec := reviewRequest(h.ApprovePullRequest, models.RoleMaintainer, "")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Errorf("body = %s, want no raw provider/transport detail", rec.Body)
 	}
 }

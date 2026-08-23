@@ -36,6 +36,8 @@ type ClientInterface interface {
 	CreateBranch(ctx context.Context, owner, repo, baseBranch, newBranch string) error
 	CreateOrUpdateFile(ctx context.Context, owner, repo, branch, path, message, content string) error
 	CreatePullRequest(ctx context.Context, owner, repo, title, head, base, body string) (*PullRequest, error)
+	GetAuthenticatedUser(ctx context.Context) (*AuthenticatedUser, error)
+	ListReviews(ctx context.Context, owner, repo string, number int64) ([]Review, error)
 }
 
 type RepoInfo struct {
@@ -198,7 +200,14 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 	case http.StatusUnauthorized:
 		return ErrUnauthorized
 	case http.StatusForbidden:
-		return ErrRateLimited
+		// 403 is two different answers on GitHub: throttling, and "your token
+		// may not do that". Only the former is worth waiting out, so the
+		// headers decide — see isRateLimited.
+		if isRateLimited(resp.Header) {
+			return ErrRateLimited
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return newAPIError(resp.StatusCode, raw)
 	case http.StatusNotFound:
 		return ErrNotFound
 	case http.StatusNoContent:
@@ -206,8 +215,8 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("github API error %d: %s", resp.StatusCode, string(raw))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return newAPIError(resp.StatusCode, raw)
 	}
 
 	if v != nil {
@@ -296,4 +305,52 @@ func (c *Client) ListContributors(ctx context.Context, owner, repo string) ([]Co
 		return nil, err
 	}
 	return contributors, nil
+}
+
+// AuthenticatedUser is the account a token acts as.
+type AuthenticatedUser struct {
+	Login string `json:"login"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+}
+
+// GetAuthenticatedUser resolves who the configured token belongs to.
+//
+// It answers "whose approval would this have been?" — the question a 422 about
+// approving your own pull request raises and does not answer, because the
+// acting identity is the organization's token rather than the person clicking.
+// https://docs.github.com/en/rest/users/users#get-the-authenticated-user
+func (c *Client) GetAuthenticatedUser(ctx context.Context) (*AuthenticatedUser, error) {
+	var user AuthenticatedUser
+	if err := c.do(ctx, http.MethodGet, "/user", nil, &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// Review is one recorded verdict on a pull request.
+//
+// State is GitHub's vocabulary: APPROVED, CHANGES_REQUESTED, COMMENTED,
+// DISMISSED, PENDING. A person can review more than once, so the list is a
+// history, not a set of current positions — see the adapter for how it is
+// reduced.
+type Review struct {
+	ID          int64  `json:"id"`
+	User        User   `json:"user"`
+	State       string `json:"state"`
+	Body        string `json:"body"`
+	SubmittedAt string `json:"submitted_at"`
+}
+
+// ListReviews returns the reviews on a pull request, oldest first — the order
+// GitHub returns them in, and the order the adapter depends on to find each
+// reviewer's most recent position.
+// https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request
+func (c *Client) ListReviews(ctx context.Context, owner, repo string, number int64) ([]Review, error) {
+	var reviews []Review
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, number)
+	if err := c.do(ctx, http.MethodGet, path, nil, &reviews); err != nil {
+		return nil, err
+	}
+	return reviews, nil
 }

@@ -90,6 +90,34 @@ type IssueWriter interface {
 	CloseIssue(ctx context.Context, ref RepoRef, number int64) error
 }
 
+// IdentityReader reports who the credential in use belongs to.
+//
+// It exists to answer one question the platform could not answer before: when a
+// host refuses a write because the acting identity is the resource's author,
+// *which* identity was that? Writes run as the organization's configured token,
+// so the answer is rarely the person who clicked, and without it the refusal
+// reads as nonsense.
+//
+// Callers should treat this as diagnostic. It costs a request, so the value of
+// knowing has to justify it — see how the review handler uses it only after a
+// rejection has already happened.
+type IdentityReader interface {
+	CurrentUser(ctx context.Context) (*Identity, error)
+}
+
+// ChangeRequestReviewReader reports the verdicts already recorded on a change
+// request.
+//
+// Without it the platform could submit a review and then show no trace of it —
+// the approval landed on the host, and the screen that triggered it looked
+// exactly as it had before. A toast is not a state.
+type ChangeRequestReviewReader interface {
+	// GetChangeRequestReviews returns the current verdicts. A change request
+	// nobody has reviewed yields a ReviewState with an empty Decision, not an
+	// error and not nil.
+	GetChangeRequestReviews(ctx context.Context, ref RepoRef, number int64) (*ReviewState, error)
+}
+
 // ChangeRequestReviewer submits a review verdict on a change request.
 //
 // RequestChanges may return ErrUnsupportedCapability: GitLab has approve and
@@ -108,6 +136,8 @@ type Provider interface {
 	ChangeRequestReader
 	ChangeRequestWriter
 	ChangeRequestReviewer
+	ChangeRequestReviewReader
+	IdentityReader
 	IssueReader
 	IssueWriter
 	ContributorReader

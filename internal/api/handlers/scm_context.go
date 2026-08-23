@@ -65,6 +65,11 @@ type resolvedRepo struct {
 	repository *models.Repository
 	provider   scm.Provider
 	ref        scm.RepoRef
+	// kind is the provider the repository's URL resolved to, which is not
+	// necessarily repository.Type — the URL wins, see resolveRepository. Kept
+	// here so callers that need to name the host (looking up the caller's OAuth
+	// identity on it, for instance) do not re-parse the URL.
+	kind models.RepositoryType
 }
 
 // resolveRepository runs the full chain, writing the appropriate error
@@ -113,7 +118,7 @@ func (r *scmResolver) resolveRepository(c *gin.Context, repoID string) (*resolve
 		return nil, false
 	}
 
-	return &resolvedRepo{repository: repository, provider: client, ref: ref}, true
+	return &resolvedRepo{repository: repository, provider: client, ref: ref, kind: provider}, true
 }
 
 // fetchAccessibleRepository loads a repository and refuses it unless it
@@ -195,10 +200,57 @@ func (r *scmResolver) providerError(c *gin.Context, err error) {
 			Error:            "provider_rate_limited",
 			ErrorDescription: "provider API rate limit exceeded",
 		})
+	case errors.Is(err, scm.ErrSelfReview):
+		// 409, not 503: the host understood the request and refused it. The
+		// action can never succeed as sent, so reporting it as a temporary
+		// outage would invite a retry that cannot work.
+		c.JSON(http.StatusConflict, models.ErrorResponse{
+			Error:            "self_review",
+			ErrorDescription: selfReviewDescription(err),
+		})
+	case errors.Is(err, scm.ErrProviderRejected):
+		// Every other refusal the host spelled out: already approved, no
+		// commits between branches, a duplicate. Its own words are the most
+		// useful thing we can pass on, and they are already truncated.
+		c.JSON(http.StatusConflict, models.ErrorResponse{
+			Error:            "provider_rejected",
+			ErrorDescription: providerRejectionDescription(err),
+		})
 	default:
+		// Deliberately not err.Error(): an unclassified failure is the one case
+		// where the underlying text is least likely to mean anything to a
+		// caller, and most likely to leak a raw provider payload.
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
 			Error:            "provider_unavailable",
-			ErrorDescription: err.Error(),
+			ErrorDescription: "the repository's host could not complete this request",
 		})
 	}
+}
+
+// selfReviewDescription explains the refusal in the platform's own terms.
+//
+// The host's wording ("Can not approve your own pull request") is technically
+// true and practically confusing here, because the identity that authored the
+// change request is usually the organization's configured token rather than the
+// person clicking. Saying so is the difference between a dead end and a fix.
+func selfReviewDescription(err error) string {
+	var providerErr *scm.ProviderError
+	owner := ""
+	if errors.As(err, &providerErr) {
+		owner = providerErr.TokenOwner
+	}
+	if owner != "" {
+		return "this change request was opened by @" + owner + ", the identity this organization's token belongs to — a review has to come from someone else"
+	}
+	return "the identity this organization's token belongs to opened this change request, and a host will not let an author review their own work"
+}
+
+// providerRejectionDescription passes the host's own explanation through,
+// falling back to a neutral sentence when there is none.
+func providerRejectionDescription(err error) string {
+	var providerErr *scm.ProviderError
+	if errors.As(err, &providerErr) && providerErr.Message != "" {
+		return providerErr.Message
+	}
+	return "the repository's host refused this action"
 }

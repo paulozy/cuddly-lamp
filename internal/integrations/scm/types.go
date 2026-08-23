@@ -43,7 +43,114 @@ var (
 	// reviewer "requested changes" state has no stable REST equivalent across
 	// the versions a self-hosted instance may be running.
 	ErrUnsupportedCapability = errors.New("scm: provider does not support this action")
+	// ErrProviderRejected marks a failure the host understood and refused on
+	// its own rules — not an outage.
+	//
+	// The distinction is the whole point: a rejection is permanent, so
+	// reporting it as unavailability tells the caller to retry something that
+	// can never succeed. Approving a change request you authored is the case
+	// it was added for.
+	ErrProviderRejected = errors.New("scm: provider refused this action")
+	// ErrSelfReview is the one rejection specific enough to name.
+	//
+	// It gets its own sentinel because it is the only one where the platform
+	// can say something more useful than the host did: the acting identity is
+	// the change request's author, which on this platform usually means the
+	// organization's token belongs to the person who opened it.
+	ErrSelfReview = errors.New("scm: the acting identity authored this change request")
 )
+
+// Rejection reasons carried by ProviderError. Empty means "refused, no
+// recognized reason" — still a rejection, still permanent.
+const (
+	ReasonSelfReview      = "self_review"
+	ReasonAlreadyReviewed = "already_reviewed"
+)
+
+// ProviderError is a rejection with the upstream status kept intact.
+//
+// Callers switch on ErrProviderRejected or ErrSelfReview via errors.Is and
+// never read Status directly; it is here because dropping it was the original
+// bug, and because a log line without it cannot be diagnosed.
+type ProviderError struct {
+	// Provider is "github" or "gitlab".
+	Provider string
+	// Status is the host's HTTP status.
+	Status int
+	// Reason is one of the Reason* constants, or empty when the refusal was
+	// not recognized. Classification is best-effort by design — see the
+	// adapters — so an unrecognized refusal is still a ProviderError.
+	Reason string
+	// Message is the host's own words, already truncated by the client. It is
+	// safe to show a user: it says what the host objected to.
+	Message string
+	// TokenOwner is the login the acting credential belongs to, filled in by
+	// the caller after the fact when it is worth naming.
+	//
+	// It is not set by the adapters: discovering it costs an extra request to
+	// the host, and paying that on every call to explain a failure that is rare
+	// would be backwards. The handler resolves it only once a rejection has
+	// already happened.
+	TokenOwner string
+}
+
+func (e *ProviderError) Error() string {
+	return fmt.Sprintf("%s refused this action (%d): %s", e.Provider, e.Status, e.Message)
+}
+
+// Is makes every ProviderError an ErrProviderRejected, and additionally an
+// ErrSelfReview when that is what it turned out to be. Handlers can therefore
+// treat the general case without enumerating reasons, and special-case the one
+// reason worth its own message.
+func (e *ProviderError) Is(target error) bool {
+	switch target {
+	case ErrProviderRejected:
+		return true
+	case ErrSelfReview:
+		return e.Reason == ReasonSelfReview
+	default:
+		return false
+	}
+}
+
+// Identity is whoever a credential acts as on its host.
+//
+// Login is the only field callers rely on, because it is the only one both
+// hosts agree on and the only one that can be compared against a change
+// request's author.
+type Identity struct {
+	Login string
+	Name  string
+	// IsBot is GitHub's `type: "Bot"`, and is always false on GitLab, which has
+	// no portable equivalent. Do not branch on it for anything that must behave
+	// the same on both hosts.
+	IsBot bool
+}
+
+// Review verdict states, as the platform reports them.
+const (
+	// ReviewDecisionApproved means at least one reviewer approved and nobody is
+	// currently asking for changes.
+	ReviewDecisionApproved = "approved"
+	// ReviewDecisionChangesRequested means at least one reviewer wants changes.
+	// It outranks an approval: an outstanding objection is the more important
+	// fact for whoever is deciding whether to merge.
+	ReviewDecisionChangesRequested = "changes_requested"
+	// ReviewDecisionCommented means the change request has been reviewed, but
+	// with no verdict either way.
+	ReviewDecisionCommented = "commented"
+)
+
+// ReviewState is who has weighed in on a change request, and how.
+//
+// Decision is empty when nobody has reviewed. That is distinct from a provider
+// that could not be asked — the caller represents "unknown" by holding no
+// ReviewState at all, never by an empty one.
+type ReviewState struct {
+	Decision           string
+	ApprovedBy         []string
+	ChangesRequestedBy []string
+}
 
 // RepoRef identifies a repository on its host.
 //
