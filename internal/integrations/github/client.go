@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,7 @@ type ClientInterface interface {
 	GetPullRequest(ctx context.Context, owner, repo string, prID int64) (*PullRequest, error)
 	GetPullRequestFiles(ctx context.Context, owner, repo string, prID int64) ([]PRFile, error)
 	GetRepositoryTree(ctx context.Context, owner, repo, ref string) (*RepoTree, error)
+	GetFileContent(ctx context.Context, owner, repo, ref, path string, limit int64) ([]byte, error)
 	GetLanguages(ctx context.Context, owner, repo string) (map[string]int, error)
 	CreateBranch(ctx context.Context, owner, repo, baseBranch, newBranch string) error
 	CreateOrUpdateFile(ctx context.Context, owner, repo, branch, path, message, content string) error
@@ -178,6 +180,20 @@ func NewClient(token string) *Client {
 	}
 }
 
+// NewClientWithBaseURL points the client at a specific API root.
+//
+// It exists so the provider-neutral contract tests can run the *production*
+// client against an httptest server, the same way the GitLab client is already
+// pointed at the fake. A contract test that used a hand-written double would
+// only prove the double agrees with itself.
+func NewClientWithBaseURL(token, baseURL string) *Client {
+	c := NewClient(token)
+	if baseURL != "" {
+		c.baseURL = strings.TrimSuffix(baseURL, "/")
+	}
+	return c
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
@@ -223,6 +239,50 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 		return json.NewDecoder(resp.Body).Decode(v)
 	}
 	return nil
+}
+
+// doRaw issues a GET whose body is not JSON and returns at most limit bytes.
+//
+// It exists for the contents endpoint in raw mode: `do` would try to decode
+// the file as JSON. Status handling is deliberately identical to `do`, because
+// callers switch on the same sentinels either way.
+func (c *Client) doRaw(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", accept)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return nil, ErrUnauthorized
+	case http.StatusForbidden:
+		if isRateLimited(resp.Header) {
+			return nil, ErrRateLimited
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, newAPIError(resp.StatusCode, raw)
+	case http.StatusNotFound:
+		return nil, ErrNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, newAPIError(resp.StatusCode, raw)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	return body, nil
 }
 
 func (c *Client) GetRepository(ctx context.Context, owner, repo string) (*RepoInfo, error) {

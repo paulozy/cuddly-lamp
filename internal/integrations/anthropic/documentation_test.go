@@ -44,8 +44,8 @@ func TestBuildOrgDocumentationPrompt_ADRTechChoiceHasMADRSections(t *testing.T) 
 		"Pros and Cons",
 		"Consequences",
 		"Postgres vs Mongo for the auth service", // user prompt echoed verbatim
-		"ORGANIZATION CONTEXT:",                   // header preserved
-		"# Organization: Acme",                    // context body included
+		"ORGANIZATION CONTEXT:",                  // header preserved
+		"# Organization: Acme",                   // context body included
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("ADR tech-choice prompt missing %q\nprompt:\n%s", want, prompt)

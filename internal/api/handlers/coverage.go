@@ -5,23 +5,23 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/paulozy/idp-with-ai-backend/internal/coverage"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
-const (
-	headerCoverageFormat = "X-Coverage-Format"
-	headerCommitSHA      = "X-Commit-SHA"
-	headerBranch         = "X-Coverage-Branch"
-)
-
 type CoverageHandler struct {
 	service *services.CoverageService
+	// platformBaseURL is the deployment's publicly reachable root
+	// (`WEBHOOK_BASE_URL`), the fallback under any per-organization override. It
+	// is a narrowed value rather than the whole *config.Config, matching how
+	// scm.HostsOnly is threaded into the other handlers.
+	platformBaseURL string
 }
 
-func NewCoverageHandler(service *services.CoverageService) *CoverageHandler {
-	return &CoverageHandler{service: service}
+func NewCoverageHandler(service *services.CoverageService, platformBaseURL string) *CoverageHandler {
+	return &CoverageHandler{service: service, platformBaseURL: platformBaseURL}
 }
 
 // IngestCoverage uploads a CI-generated coverage report.
@@ -56,9 +56,9 @@ func (h *CoverageHandler) IngestCoverage(c *gin.Context) {
 		return
 	}
 
-	format := c.GetHeader(headerCoverageFormat)
-	sha := c.GetHeader(headerCommitSHA)
-	branch := c.GetHeader(headerBranch)
+	format := c.GetHeader(coverage.HeaderFormat)
+	sha := c.GetHeader(coverage.HeaderCommitSHA)
+	branch := c.GetHeader(coverage.HeaderBranch)
 
 	if format == "" {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "missing X-Coverage-Format header"})
@@ -195,6 +195,48 @@ func (h *CoverageHandler) ListCoverageTokens(c *gin.Context) {
 		out = append(out, models.CoverageTokenToResponse(t))
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// GetCoverageSetup returns everything needed to wire this repository's CI to the
+// coverage endpoint.
+// @Summary      Coverage CI setup instructions
+// @Tags         coverage
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string true "Repository ID"
+// @Success      200  {object}  models.CoverageSetupResponse
+// @Failure      401  {object}  models.ErrorResponse
+// @Failure      403  {object}  models.ErrorResponse
+// @Failure      404  {object}  models.ErrorResponse
+// @Router       /repositories/{id}/coverage/setup [get]
+func (h *CoverageHandler) GetCoverageSetup(c *gin.Context) {
+	repoID := c.Param("id")
+	if repoID == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "missing repository id"})
+		return
+	}
+	orgID, err := utils.GetOrganizationIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:            "unauthorized",
+			ErrorDescription: "missing or invalid authentication",
+		})
+		return
+	}
+
+	setup, err := h.service.BuildSetup(c.Request.Context(), repoID, orgID, h.platformBaseURL)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrRepositoryNotFound):
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "repository not found"})
+		case errors.Is(err, services.ErrForbidden):
+			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "forbidden"})
+		default:
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "build setup failed: " + err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, setup)
 }
 
 // RevokeCoverageToken revokes an existing upload token.

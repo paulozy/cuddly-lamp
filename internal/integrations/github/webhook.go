@@ -9,9 +9,9 @@ import (
 )
 
 type createWebhookRequest struct {
-	Name   string              `json:"name"`
-	Active bool                `json:"active"`
-	Events []string            `json:"events"`
+	Name   string               `json:"name"`
+	Active bool                 `json:"active"`
+	Events []string             `json:"events"`
 	Config webhookConfigPayload `json:"config"`
 }
 

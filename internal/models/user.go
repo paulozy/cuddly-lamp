@@ -30,7 +30,7 @@ type User struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 
-	Tokens       []Token      `gorm:"foreignKey:UserID" json:"tokens,omitempty"`
+	Tokens []Token `gorm:"foreignKey:UserID" json:"tokens,omitempty"`
 }
 
 func (User) TableName() string {
@@ -58,4 +58,3 @@ func (u *User) HasPermission(requiredRole UserRole) bool {
 
 	return userLevel >= requiredLevel
 }
-

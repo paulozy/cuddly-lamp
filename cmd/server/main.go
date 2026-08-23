@@ -126,9 +126,14 @@ func main() {
 			GitLabToken:   cfg.API.GitlabToken,
 			GitLabBaseURL: cfg.API.GitlabBaseURL,
 		}
-		syncSvc := services.NewSyncService(pgRepo, platformCreds, cache, cfg.API.WebhookBaseURL)
+		// Architecture derivation piggybacks on the sync that already reads the
+		// tree, and reconciles in its own org-scoped task.
+		architectureSvc := services.NewArchitectureService(pgRepo, enqueuer)
+		syncSvc := services.NewSyncService(pgRepo, platformCreds, cache, cfg.API.WebhookBaseURL).
+			WithArchitecture(architectureSvc)
 
 		syncWorker := workers.NewSyncWorker(syncSvc)
+		architectureWorker := workers.NewArchitectureWorker(architectureSvc)
 		webhookProcessor := workers.NewWebhookProcessor(pgRepo, syncSvc, enqueuer)
 		docsWorker := workers.NewDocsWorker(pgRepo, scm.HostsOnly(cfg.API.GitlabBaseURL))
 
@@ -137,6 +142,7 @@ func main() {
 		worker.Register(tasks.TypeProcessWebhook, webhookProcessor.Handle)
 		worker.Register(tasks.TypeGenerateDocs, docsWorker.Handle)
 		worker.Register(tasks.TypeGenerateOrgDocs, docsWorker.HandleOrgDocs)
+		worker.Register(tasks.TypeDeriveArchitecture, architectureWorker.Handle)
 
 		go func() {
 			if err := worker.Run(); err != nil {

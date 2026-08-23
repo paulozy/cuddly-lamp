@@ -127,6 +127,46 @@ type Repository interface {
 	DeleteRepositoryRelationship(ctx context.Context, id string) error
 	ListRepositoryRelationships(ctx context.Context, filter RepositoryRelationshipFilter) ([]models.RepositoryRelationship, error)
 
+	// Derived architecture operations.
+	//
+	// These are deliberately separate from the CRUD above, which forces
+	// source=manual and confidence=1.0 — correct for a person, unusable for a
+	// deriver. Every destructive one is scoped by derivationKey, which is what
+	// makes deleting a human-declared row structurally impossible rather than a
+	// matter of care: a human row has a NULL key and never matches `= $1`.
+	UpsertRepositoryFact(ctx context.Context, fact *models.RepositoryFact) error
+	GetRepositoryFact(ctx context.Context, repositoryID string, kind models.RepositoryFactKind) (*models.RepositoryFact, error)
+	ListRepositoryFacts(ctx context.Context, organizationID string, kind models.RepositoryFactKind) ([]models.RepositoryFact, error)
+	// UpsertDerivedRelationship inserts a derived edge, or revives and refreshes
+	// the row that already carries the same (key, fingerprint) — including a
+	// soft-deleted one, keeping its id so deep links survive.
+	UpsertDerivedRelationship(ctx context.Context, rel *models.RepositoryRelationship) error
+	// SweepDerivedRelationships soft-deletes rows of this derivation key that
+	// the current run did not touch. Callers must gate it on the facts being
+	// complete: a truncated tree is indistinguishable from a removed dependency.
+	SweepDerivedRelationships(ctx context.Context, derivationKey string, runStartedAt time.Time) (int64, error)
+	ListSuppressions(ctx context.Context, organizationID, derivationKey string) ([]models.DerivationSuppression, error)
+	CreateSuppression(ctx context.Context, suppression *models.DerivationSuppression) error
+
+	// API discovery. The sweep is scoped by repository as well as by derivation
+	// key, because what a repository exposes is a purely local fact: it needs no
+	// cross-repository index, so it must not wait for the whole organization.
+	UpsertDerivedAPI(ctx context.Context, api *models.API) error
+	SweepDerivedAPIs(ctx context.Context, repositoryID, derivationKey string, runStartedAt time.Time) (int64, error)
+	ListAPIs(ctx context.Context, organizationID string) ([]models.API, error)
+
+	// Resource discovery. Note the asymmetry: the join is swept, the resource row
+	// is not. A shared resource may still have another repository pointing at it,
+	// and only the join can say — so retracting a claim is per repository while
+	// the resource itself is retired by RetireOrphanResources once nothing
+	// references it.
+	UpsertDerivedResource(ctx context.Context, resource *models.Resource) error
+	UpsertDerivedRepositoryResource(ctx context.Context, link *models.RepositoryResource) error
+	SweepDerivedRepositoryResources(ctx context.Context, repositoryID, derivationKey string, runStartedAt time.Time) (int64, error)
+	RetireOrphanResources(ctx context.Context, organizationID string) (int64, error)
+	ListResources(ctx context.Context, organizationID string) ([]models.Resource, error)
+	ListRepositoryResources(ctx context.Context, organizationID string) ([]models.RepositoryResource, error)
+
 	// Webhook operations
 	GetWebhook(ctx context.Context, id string) (*models.Webhook, error)
 	GetWebhookByDeliveryID(ctx context.Context, deliveryID string) (*models.Webhook, error)

@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	AuthorizationHeader = "Authorization"
-	BearerScheme        = "Bearer"
-	ContextKeyUser      = "user"
+	AuthorizationHeader    = "Authorization"
+	BearerScheme           = "Bearer"
+	ContextKeyUser         = "user"
 	ContextKeyOrganization = "organization"
-	ContextKeyClaims    = "claims"
+	ContextKeyClaims       = "claims"
 )
 
 func ExtractToken(c *gin.Context) (string, error) {

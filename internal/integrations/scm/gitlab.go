@@ -173,6 +173,18 @@ func (p *gitlabProvider) GetTree(ctx context.Context, ref RepoRef, gitRef string
 	return &RepoTree{Truncated: tree.Truncated, Entries: entries}, nil
 }
 
+// GetFileContent reads one file at gitRef, capped at MaxFileBytes.
+//
+// GitLab's tree listing reports no size, so this cap is the only guard the
+// GitLab path has against a committed bundle — see MaxFileBytes.
+func (p *gitlabProvider) GetFileContent(ctx context.Context, ref RepoRef, gitRef, path string) ([]byte, error) {
+	content, err := p.client.GetRawFile(ctx, ref.FullPath(), gitRef, path, MaxFileBytes)
+	if err != nil {
+		return nil, translateGitLabErr(err)
+	}
+	return content, nil
+}
+
 func (p *gitlabProvider) ListChangeRequests(ctx context.Context, ref RepoRef) ([]ChangeRequest, error) {
 	mrs, err := p.client.ListMergeRequests(ctx, ref.FullPath())
 	if err != nil {

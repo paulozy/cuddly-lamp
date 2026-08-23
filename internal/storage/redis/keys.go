@@ -4,11 +4,11 @@ package redis
 // Centralising them here prevents magic strings from spreading across packages.
 
 const (
-	prefixToken            = "token:"
-	prefixUser             = "user:"
-	prefixSession          = "session:"
-	prefixRepo             = "repo:"
-	prefixSearchSynthesis  = "synth:search:"
+	prefixToken           = "token:"
+	prefixUser            = "user:"
+	prefixSession         = "session:"
+	prefixRepo            = "repo:"
+	prefixSearchSynthesis = "synth:search:"
 )
 
 // TokenKey returns the cache key for a JWT token record keyed by JTI.

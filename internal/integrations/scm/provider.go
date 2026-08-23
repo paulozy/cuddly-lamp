@@ -25,6 +25,32 @@ type CatalogReader interface {
 	GetTree(ctx context.Context, ref RepoRef, gitRef string) (*RepoTree, error)
 }
 
+// MaxFileBytes caps a single GetFileContent read.
+//
+// A 300 KB package.json is generated, not written, and is the source of truth
+// for nothing. The cap keeps a committed bundle from being pulled in whole.
+// Callers that have TreeEntry.Size should skip oversized entries before
+// asking; providers that do not report a size (GitLab's tree listing does not)
+// leave this as the only guard, so implementations truncate at it rather than
+// failing.
+const MaxFileBytes = 256 * 1024
+
+// FileReader reads a single file's contents at a git ref.
+//
+// The tree listing (CatalogReader.GetTree) says which paths exist, so callers
+// fetch a known shortlist rather than probing blindly. Absence is reported as
+// ErrNotFound, which callers must treat as "not there" only when the tree that
+// produced the path list was complete.
+//
+// The three failure classes are distinct on purpose, because derivers react
+// differently to each: ErrNotFound means the file is absent and the fact stays
+// complete; ErrUnauthorized and any transport or rate-limit error mean the fact
+// is incomplete. Collapsing them is what lets a 429 look like "the dependency
+// was removed" and sweep a good edge away.
+type FileReader interface {
+	GetFileContent(ctx context.Context, ref RepoRef, gitRef, path string) ([]byte, error)
+}
+
 // ChangeRequestReader serves read-only pull/merge request browsing.
 type ChangeRequestReader interface {
 	// ListChangeRequests returns the open change requests for a repository.
@@ -133,6 +159,7 @@ type ChangeRequestReviewer interface {
 // for the resolver's return type.
 type Provider interface {
 	CatalogReader
+	FileReader
 	ChangeRequestReader
 	ChangeRequestWriter
 	ChangeRequestReviewer

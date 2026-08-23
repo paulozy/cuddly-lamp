@@ -39,7 +39,7 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	pullRequestHandler := factories.MakePullRequestHandler(repository, providerHosts)
 	docsHandler := factories.MakeDocsHandler(repository, params.Enqueuer, providerHosts)
 	orgConfigHandler := handlers.NewOrganizationConfigHandler(repository)
-	coverageHandler := factories.MakeCoverageHandler(repository)
+	coverageHandler := factories.MakeCoverageHandler(repository, params.Config.API.WebhookBaseURL)
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
 	onboardingHandler := factories.MakeOnboardingHandler(repository, providerHosts)
 	teamHandler := factories.MakeTeamHandler(repository)
@@ -229,6 +229,10 @@ func setupAPIRoutes(
 		// a maintainer action.
 		protected.POST("/repositories/:id/coverage/tokens", maintainer, coverageHandler.CreateCoverageToken)
 		protected.GET("/repositories/:id/coverage/tokens", maintainer, coverageHandler.ListCoverageTokens)
+		// Same gate as its sibling token routes: the panel that consumes this is
+		// only rendered for a role that may manage tokens, and the payload names
+		// the platform's own URL.
+		protected.GET("/repositories/:id/coverage/setup", maintainer, coverageHandler.GetCoverageSetup)
 		protected.DELETE("/repositories/:id/coverage/tokens/:tokenID", maintainer, coverageHandler.RevokeCoverageToken)
 	}
 }

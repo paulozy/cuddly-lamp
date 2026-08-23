@@ -103,6 +103,35 @@ var prefixCIPaths = []struct {
 	{"azure-pipelines/", "ci.azure"},
 }
 
+// CISystemForPath names the CI system a config path belongs to, or "" when the
+// path is not a CI config this package recognizes.
+//
+// It exists because the stored repository metadata keeps only the *evidence path*
+// that proved CI (`RepositoryMetadata.CIEvidence`, one path — see
+// sync_service.applyDetection), not the rule id that DetectCI computed. Reading
+// the system back off the path means a repository synced before this function
+// existed still gets a correct answer, with no re-sync and no new metadata field.
+//
+// It reuses the same two tables DetectCI matches on, so the two can never
+// disagree about what `.gitlab-ci.yml` is.
+func CISystemForPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	// Exact match first, and on the whole path: this is the same root-anchored
+	// rule DetectCI relies on, and it is what keeps
+	// `node_modules/x/.travis.yml` from being read as this repository's CI.
+	if ruleID, ok := exactCIPaths[path]; ok {
+		return ruleID
+	}
+	for _, entry := range prefixCIPaths {
+		if strings.HasPrefix(path, entry.Prefix) {
+			return entry.RuleID
+		}
+	}
+	return ""
+}
+
 // DetectCI reports whether the repository has automated pipelines configured.
 //
 // The claim is deliberately "pipelines are configured", not "CI runs tests":
@@ -142,6 +171,14 @@ var vendoredSegments = map[string]bool{
 	"Godeps": true, "dist": true, "deps": true, "Carthage": true, "Pods": true,
 	".yarn": true, "site-packages": true, ".venv": true, "venv": true, "env": true,
 }
+
+// IsVendored reports whether path sits inside a vendored dependency tree.
+//
+// Exported because the architecture derivers need the same list. One auditable
+// list, derived from github-linguist's `vendor.yml`, is the filter that kills a
+// whole class of false positive — `node_modules/lodash/package.json` is not a
+// manifest of this repository. Two copies of the list diverge within a year.
+func IsVendored(path string) bool { return isVendored(path) }
 
 func isVendored(path string) bool {
 	segments := strings.Split(path, "/")

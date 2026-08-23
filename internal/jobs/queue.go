@@ -16,6 +16,14 @@ import (
 type Enqueuer interface {
 	Enqueue(ctx context.Context, taskType string, payload any, opts ...asynq.Option) error
 	EnqueueIn(ctx context.Context, taskType string, payload any, delay time.Duration, opts ...asynq.Option) error
+	// Available reports whether a queue is actually behind this enqueuer.
+	//
+	// It exists because the no-op returns nil on purpose — a deployment without
+	// Redis still serves HTTP — which makes a dropped job indistinguishable from
+	// an accepted one at the call site. A handler that answers "queued" for a job
+	// nobody will ever run sends the caller off to wait forever, and that is
+	// exactly the failure this method lets a caller avoid.
+	Available() bool
 }
 
 // ── asynq implementation ──────────────────────────────────────────────────────
@@ -34,6 +42,8 @@ func NewAsynqEnqueuer(cfg *config.RedisConfig) Enqueuer {
 	})
 	return &asynqEnqueuer{client: client}
 }
+
+func (e *asynqEnqueuer) Available() bool { return true }
 
 func (e *asynqEnqueuer) Enqueue(ctx context.Context, taskType string, payload any, opts ...asynq.Option) error {
 	task, err := newTask(taskType, payload)
@@ -71,6 +81,9 @@ type noopEnqueuer struct{}
 func NewNoopEnqueuer() Enqueuer {
 	return &noopEnqueuer{}
 }
+
+// Available is false: the whole point of this implementation is that nothing runs.
+func (n *noopEnqueuer) Available() bool { return false }
 
 func (n *noopEnqueuer) Enqueue(_ context.Context, taskType string, _ any, _ ...asynq.Option) error {
 	utils.Warn("Noop enqueuer: job dropped", "type", taskType)
