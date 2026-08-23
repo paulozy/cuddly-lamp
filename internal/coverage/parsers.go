@@ -206,8 +206,8 @@ type jacocoCounter struct {
 }
 
 type jacocoPackage struct {
-	Name        string                       `xml:"name,attr"`
-	Sourcefiles []jacocoSourcefile           `xml:"sourcefile"`
+	Name        string             `xml:"name,attr"`
+	Sourcefiles []jacocoSourcefile `xml:"sourcefile"`
 }
 
 type jacocoSourcefile struct {
