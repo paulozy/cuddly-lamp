@@ -342,9 +342,12 @@ func filterGraph(graph *models.RepositoryGraphResponse, repositoryIDs []string) 
 	if graph == nil {
 		return nil
 	}
+	// Node ids on the graph payload are prefixed (`repo:<uuid>`), so the wanted
+	// set has to be keyed the same way — comparing a bare UUID against a prefixed
+	// id matches nothing, and an onboarding step would render an empty graph.
 	wanted := make(map[string]bool, len(repositoryIDs))
 	for _, id := range repositoryIDs {
-		wanted[id] = true
+		wanted[models.GraphNodeID(models.GraphNodeKindRepo, id)] = true
 	}
 
 	filtered := &models.RepositoryGraphResponse{}
@@ -354,7 +357,7 @@ func filterGraph(graph *models.RepositoryGraphResponse, repositoryIDs []string) 
 		}
 	}
 	for i := range graph.Edges {
-		if wanted[graph.Edges[i].SourceRepositoryID] && wanted[graph.Edges[i].TargetRepositoryID] {
+		if wanted[graph.Edges[i].Source] && wanted[graph.Edges[i].Target] {
 			filtered.Edges = append(filtered.Edges, graph.Edges[i])
 		}
 	}

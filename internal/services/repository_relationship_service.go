@@ -23,10 +23,51 @@ func NewRepositoryRelationshipService(repo storage.Repository) *RepositoryRelati
 }
 
 type RepositoryGraphFilter struct {
-	RepositoryID    string
-	Kind            models.RepositoryRelationshipKind
-	Source          models.RepositoryRelationshipSource
+	RepositoryID string
+	Kind         models.RepositoryRelationshipKind
+	Source       models.RepositoryRelationshipSource
+	// NodeKinds selects which node types the payload carries. Empty means the
+	// default set.
+	//
+	// It exists because APIs and Resources can multiply the node count several
+	// times over, and GetGraph has never paginated — a half-drawn graph is worse
+	// than none, so paginating was never an option. Filtering by node type is the
+	// answer instead, with the toolbar toggling it.
+	NodeKinds       []string
+	MinConfidence   float64
 	IncludeMetadata bool
+}
+
+// defaultGraphNodeKinds is what a client that asks for nothing specific gets.
+//
+// Resources are off by default deliberately: they are the most numerous and the
+// least precise, so leading with them would make the first impression of the graph
+// its noisiest layer.
+var defaultGraphNodeKinds = []string{models.GraphNodeKindRepo, models.GraphNodeKindAPI}
+
+func (f RepositoryGraphFilter) nodeKindSet() map[string]bool {
+	kinds := f.NodeKinds
+	if len(kinds) == 0 {
+		kinds = defaultGraphNodeKinds
+	}
+	set := make(map[string]bool, len(kinds))
+	for _, kind := range kinds {
+		set[kind] = true
+	}
+	// Repositories are never optional. Every other node hangs off one, so hiding
+	// them would leave APIs and resources floating with no owner visible.
+	set[models.GraphNodeKindRepo] = true
+	return set
+}
+
+// IsValidGraphNodeKind reports whether a node kind exists.
+func IsValidGraphNodeKind(kind string) bool {
+	switch kind {
+	case models.GraphNodeKindRepo, models.GraphNodeKindAPI, models.GraphNodeKindResource:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *RepositoryRelationshipService) GetGraph(ctx context.Context, organizationID string, filter RepositoryGraphFilter) (*models.RepositoryGraphResponse, error) {
@@ -46,6 +87,15 @@ func (s *RepositoryRelationshipService) GetGraph(ctx context.Context, organizati
 		}
 	}
 
+	for _, kind := range filter.NodeKinds {
+		if !IsValidGraphNodeKind(kind) {
+			return nil, ErrInvalidRepositoryRelationship
+		}
+	}
+	if filter.MinConfidence < 0 || filter.MinConfidence > 1 {
+		return nil, ErrInvalidRepositoryRelationship
+	}
+
 	repos, _, err := s.repo.ListRepositories(ctx, &storage.RepositoryFilter{
 		OrganizationID: organizationID,
 	})
@@ -62,17 +112,80 @@ func (s *RepositoryRelationshipService) GetGraph(ctx context.Context, organizati
 		return nil, fmt.Errorf("list graph relationships: %w", err)
 	}
 
+	wantKind := filter.nodeKindSet()
 	resp := &models.RepositoryGraphResponse{
 		Nodes: make([]models.RepositoryGraphNode, 0, len(repos)),
 		Edges: make([]models.RepositoryGraphEdge, 0, len(relationships)),
 	}
+	// present is every node id the payload will carry, so a dangling edge can be
+	// dropped. An edge to a node that was filtered out draws a line into nowhere,
+	// which React Flow renders as a stub pointing at empty canvas.
+	present := make(map[string]bool, len(repos))
+
 	for i := range repos {
-		resp.Nodes = append(resp.Nodes, models.RepositoryToGraphNode(&repos[i]))
+		node := models.RepositoryToGraphNode(&repos[i])
+		resp.Nodes = append(resp.Nodes, node)
+		present[node.ID] = true
 	}
+
+	if wantKind[models.GraphNodeKindAPI] {
+		apis, err := s.repo.ListAPIs(ctx, organizationID)
+		if err != nil {
+			return nil, fmt.Errorf("list graph apis: %w", err)
+		}
+		for i := range apis {
+			node := models.APIToGraphNode(&apis[i])
+			resp.Nodes = append(resp.Nodes, node)
+			present[node.ID] = true
+			resp.Edges = append(resp.Edges, models.APIProvidesEdge(&apis[i]))
+		}
+	}
+
+	if wantKind[models.GraphNodeKindResource] {
+		resources, err := s.repo.ListResources(ctx, organizationID)
+		if err != nil {
+			return nil, fmt.Errorf("list graph resources: %w", err)
+		}
+		for i := range resources {
+			node := models.ResourceToGraphNode(&resources[i])
+			resp.Nodes = append(resp.Nodes, node)
+			present[node.ID] = true
+		}
+		links, err := s.repo.ListRepositoryResources(ctx, organizationID)
+		if err != nil {
+			return nil, fmt.Errorf("list graph repository resources: %w", err)
+		}
+		for i := range links {
+			resp.Edges = append(resp.Edges, models.ResourceUsesEdge(&links[i], filter.IncludeMetadata))
+		}
+	}
+
 	for i := range relationships {
 		resp.Edges = append(resp.Edges, models.RepositoryRelationshipToGraphEdge(&relationships[i], filter.IncludeMetadata))
 	}
+
+	resp.Edges = pruneEdges(resp.Edges, present, filter.MinConfidence)
 	return resp, nil
+}
+
+// pruneEdges drops edges whose endpoints are absent or whose confidence is below
+// the requested floor.
+//
+// The confidence floor is applied here rather than in SQL because the same value
+// has to cut across three sources — relationships, `provides` and `uses` — and
+// pushing it into three queries would mean three places for the threshold to drift.
+func pruneEdges(edges []models.RepositoryGraphEdge, present map[string]bool, minConfidence float64) []models.RepositoryGraphEdge {
+	kept := make([]models.RepositoryGraphEdge, 0, len(edges))
+	for _, edge := range edges {
+		if !present[edge.Source] || !present[edge.Target] {
+			continue
+		}
+		if edge.Confidence < minConfidence {
+			continue
+		}
+		kept = append(kept, edge)
+	}
+	return kept
 }
 
 func (s *RepositoryRelationshipService) CreateRelationship(ctx context.Context, organizationID, userID string, req models.CreateRepositoryRelationshipRequest) (*models.RepositoryRelationshipResponse, error) {
@@ -133,6 +246,11 @@ func (s *RepositoryRelationshipService) UpdateRelationship(ctx context.Context, 
 	if req.Metadata != nil {
 		rel.Metadata = req.Metadata
 	}
+	// A person editing a derived edge takes ownership of it. Promoting instead
+	// of copying is what keeps the graph from holding two competing truths about
+	// the same dependency, and it is what makes the next sweep leave the row
+	// alone — a NULL derivation key never matches the sweep's `= $1`.
+	rel.Promote()
 	if err := s.repo.UpdateRepositoryRelationship(ctx, rel); err != nil {
 		return nil, fmt.Errorf("update repository relationship: %w", err)
 	}

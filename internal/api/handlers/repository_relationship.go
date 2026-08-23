@@ -3,6 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
@@ -18,6 +20,25 @@ func NewRepositoryRelationshipHandler(service *services.RepositoryRelationshipSe
 	return &RepositoryRelationshipHandler{service: service}
 }
 
+// splitCSV reads a comma-separated query parameter, dropping blanks.
+//
+// An empty result means "the client did not choose", which the service reads as
+// the default node set — distinct from a client that chose an empty list, which
+// cannot be expressed in a query string anyway.
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func (h *RepositoryRelationshipHandler) GetGraph(c *gin.Context) {
 	orgID, ok := organizationIDFromContext(c)
 	if !ok {
@@ -28,7 +49,22 @@ func (h *RepositoryRelationshipHandler) GetGraph(c *gin.Context) {
 		RepositoryID:    c.Query("repository_id"),
 		Kind:            models.RepositoryRelationshipKind(c.Query("kind")),
 		Source:          models.RepositoryRelationshipSource(c.Query("source")),
+		NodeKinds:       splitCSV(c.Query("node_kinds")),
 		IncludeMetadata: c.DefaultQuery("include_metadata", "true") != "false",
+	}
+	// An unparseable threshold is refused rather than silently treated as zero:
+	// a client that meant "hide everything under 0.8" and got "hide nothing" would
+	// see the noisiest possible graph and no indication why.
+	if raw := c.Query("min_confidence"); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "invalid_request",
+				ErrorDescription: "min_confidence must be a number between 0 and 1",
+			})
+			return
+		}
+		filter.MinConfidence = parsed
 	}
 	resp, err := h.service.GetGraph(c.Request.Context(), orgID, filter)
 	if err != nil {
