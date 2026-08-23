@@ -22,6 +22,30 @@ type PullRequestResponse struct {
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
 	MergedAt       string `json:"merged_at,omitempty"`
+	// ReviewBlockedReason names why the caller cannot review this change
+	// request, or is null when nothing is known to stop them.
+	//
+	// Deliberately without `omitempty`: a numeric or boolean field that
+	// disappears from the JSON when it holds its zero value has bitten this
+	// codebase before (see the sibling *int fields, and FOLLOWUPS.md). Null and
+	// absent must not be the same thing here — absent would read as "reviewable"
+	// on a client that treats the key as required.
+	//
+	// This is advisory. It catches the case the platform can see for itself; it
+	// is not a permission check, and the host remains the authority. See
+	// ReviewBlocked* in the handlers.
+	ReviewBlockedReason *string `json:"review_blocked_reason"`
+	// ReviewDecision is the current verdict: "approved",
+	// "changes_requested", "commented", or "" when nobody has reviewed.
+	//
+	// Null means the host could not be asked — distinct from "" which is a
+	// measured "nobody reviewed yet". Do not collapse the two: null must render
+	// as nothing, never as "not reviewed".
+	ReviewDecision *string `json:"review_decision"`
+	// Who holds each position. Empty rather than null when the decision is
+	// known, so a client can iterate without a nil check.
+	ApprovedBy         []string `json:"approved_by,omitempty"`
+	ChangesRequestedBy []string `json:"changes_requested_by,omitempty"`
 }
 
 type PullRequestListItemResponse struct {

@@ -88,6 +88,12 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 	case http.StatusUnauthorized, http.StatusForbidden:
 		// GitLab answers 403 for a token whose scopes are too narrow, which is
 		// an authorization problem — unlike GitHub, it uses 429 for throttling.
+		//
+		// 401 is the ambiguous one: GitLab's approvals API documents 401 for a
+		// caller who is not allowed to approve, which is a rule refusal rather
+		// than a bad token. It stays folded in here until that is confirmed
+		// against a real instance — mapping it on a reading of the docs alone
+		// would trade a misleading error for a guessed one. See FOLLOWUPS.md.
 		return resp.Header, ErrUnauthorized
 	case http.StatusTooManyRequests:
 		return resp.Header, ErrRateLimited
@@ -98,8 +104,8 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return resp.Header, fmt.Errorf("gitlab API error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return resp.Header, newAPIError(resp.StatusCode, raw)
 	}
 
 	if v != nil {
@@ -564,4 +570,45 @@ func jsonReader(payload interface{}) (io.Reader, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 	return strings.NewReader(string(data)), nil
+}
+
+// AuthenticatedUser is the account a token acts as.
+type AuthenticatedUser struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+}
+
+// GetAuthenticatedUser resolves who the configured token belongs to.
+// https://docs.gitlab.com/api/users/#list-current-user
+func (c *Client) GetAuthenticatedUser(ctx context.Context) (*AuthenticatedUser, error) {
+	var user AuthenticatedUser
+	if _, err := c.do(ctx, http.MethodGet, "/user", nil, &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// MergeRequestApprovals is GitLab's approval state for a merge request.
+//
+// There is no "changes requested" here, and that is not an omission on our
+// side: GitLab has no reviewer state equivalent to it over REST.
+type MergeRequestApprovals struct {
+	ApprovalsRequired int `json:"approvals_required"`
+	ApprovalsLeft     int `json:"approvals_left"`
+	ApprovedBy        []struct {
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+	} `json:"approved_by"`
+}
+
+// GetMergeRequestApprovals reports who has approved a merge request.
+// https://docs.gitlab.com/api/merge_request_approvals/
+func (c *Client) GetMergeRequestApprovals(ctx context.Context, path string, iid int64) (*MergeRequestApprovals, error) {
+	var approvals MergeRequestApprovals
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/approvals", projectPath(path), iid)
+	if _, err := c.do(ctx, http.MethodGet, endpoint, nil, &approvals); err != nil {
+		return nil, err
+	}
+	return &approvals, nil
 }

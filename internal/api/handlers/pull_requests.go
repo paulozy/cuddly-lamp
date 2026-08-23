@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
@@ -15,7 +17,15 @@ import (
 
 type pullRequestContext struct {
 	client scm.ChangeRequestReader
-	ref    scm.RepoRef
+	// reviews reads recorded verdicts. Separate from client because it is a
+	// separate capability, and because the two are used at different costs —
+	// one request per change request, versus one for the whole page.
+	reviews scm.ChangeRequestReviewReader
+	ref     scm.RepoRef
+	// kind names the host the repository lives on, so the detail endpoint can
+	// look up the caller's identity there. Reads need nothing else from the
+	// resolution, which is why this stays narrower than resolvedRepo.
+	kind models.RepositoryType
 }
 
 // PullRequestHandler serves read-only pull/merge request data: listing,
@@ -61,6 +71,8 @@ func (h *PullRequestHandler) ListPullRequests(c *gin.Context) {
 		})
 	}
 
+	attachReviewStates(c.Request.Context(), prCtx.reviews, prCtx.ref, items)
+
 	c.JSON(http.StatusOK, models.PullRequestListResponse{
 		Items: items,
 		Total: len(items),
@@ -98,8 +110,12 @@ func (h *PullRequestHandler) GetPullRequest(c *gin.Context) {
 		return
 	}
 
+	response := pullRequestToResponse(*pr)
+	response.ReviewBlockedReason = h.reviewBlockedReason(c, prCtx.kind, *pr)
+	attachReviewState(c.Request.Context(), prCtx.reviews, prCtx.ref, &response)
+
 	c.JSON(http.StatusOK, models.PullRequestDetailResponse{
-		PullRequest: pullRequestToResponse(*pr),
+		PullRequest: response,
 		Files:       pullRequestFilesToResponse(files),
 	})
 }
@@ -153,7 +169,12 @@ func (h *PullRequestHandler) resolveContext(c *gin.Context, repoID string) (*pul
 	if !ok {
 		return nil, false
 	}
-	return &pullRequestContext{client: resolved.provider, ref: resolved.ref}, true
+	return &pullRequestContext{
+		client:  resolved.provider,
+		reviews: resolved.provider,
+		ref:     resolved.ref,
+		kind:    resolved.kind,
+	}, true
 }
 
 func parsePullRequestNumber(c *gin.Context) (int, bool) {
@@ -226,6 +247,7 @@ type ReviewPullRequestRequest struct {
 // @Failure      400        {object}  models.ErrorResponse
 // @Failure      401        {object}  models.ErrorResponse
 // @Failure      403        {object}  models.ErrorResponse
+// @Failure      409        {object}  models.ErrorResponse  "the host refused: self_review or provider_rejected"
 // @Failure      501        {object}  models.ErrorResponse
 // @Failure      503        {object}  models.ErrorResponse
 // @Router       /repositories/{id}/pull-requests/{pr_number}/approve [post]
@@ -248,6 +270,7 @@ func (h *PullRequestHandler) ApprovePullRequest(c *gin.Context) {
 // @Failure      400        {object}  models.ErrorResponse
 // @Failure      401        {object}  models.ErrorResponse
 // @Failure      403        {object}  models.ErrorResponse
+// @Failure      409        {object}  models.ErrorResponse  "the host refused: self_review or provider_rejected"
 // @Failure      501        {object}  models.ErrorResponse  "provider has no equivalent"
 // @Failure      503        {object}  models.ErrorResponse
 // @Router       /repositories/{id}/pull-requests/{pr_number}/request-changes [post]
@@ -301,8 +324,39 @@ func (h *PullRequestHandler) submitReview(
 			ErrorDescription: "this repository's host does not support that review action",
 		})
 	default:
-		h.providerError(c, err)
+		h.providerError(c, h.nameTheActingIdentity(c, resolved, err))
 	}
+}
+
+// nameTheActingIdentity fills in whose credential the host refused, for the one
+// rejection where that is the missing piece.
+//
+// The refusal says "you cannot approve your own change request", which is
+// baffling to read when you did not open it — the author it means is the
+// organization's token. Naming the token's owner turns a dead end into a
+// diagnosis, and it costs a request to the host, which is why it is paid here
+// and not on every successful review.
+//
+// Failing to resolve the identity is not an error. The rejection is already
+// established and still gets reported; only the extra detail is lost.
+func (h *PullRequestHandler) nameTheActingIdentity(c *gin.Context, resolved *resolvedRepo, err error) error {
+	var providerErr *scm.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Reason != scm.ReasonSelfReview || providerErr.TokenOwner != "" {
+		return err
+	}
+
+	identity, identityErr := resolved.provider.CurrentUser(c.Request.Context())
+	if identityErr != nil || identity == nil || identity.Login == "" {
+		utils.Warn("could not resolve the acting identity behind a self-review rejection",
+			"repository", resolved.repository.ID, "error", identityErr)
+		return err
+	}
+
+	// Copied rather than mutated: the error came from the adapter and may be a
+	// shared value for all this function knows.
+	enriched := *providerErr
+	enriched.TokenOwner = identity.Login
+	return &enriched
 }
 
 // reviewBody stamps the acting user onto the review message.
@@ -327,4 +381,132 @@ func reviewBody(c *gin.Context, body, verb string) string {
 		return attribution
 	}
 	return body + "\n\n— " + attribution
+}
+
+// Reasons a change request cannot be reviewed by the caller. These reach the
+// client verbatim, which picks the wording; the backend names the situation,
+// not the sentence.
+const (
+	// ReviewBlockedSelfAuthored means the caller opened this change request.
+	ReviewBlockedSelfAuthored = "self_authored"
+)
+
+// reviewBlockedReason reports why the caller cannot review this change request,
+// or nil when nothing known stops them.
+//
+// It exists so the interface can refuse before the click instead of surfacing a
+// rejection after it. Two things it deliberately is not:
+//
+//   - Not a permission check. The host decides, and it knows things this cannot
+//     — GitLab lets a project forbid approval by the author *or* by anyone who
+//     committed, and either rule is invisible from here. A nil answer means
+//     "nothing we can see", never "allowed".
+//   - Not the answer to the failure people actually hit. The identity that
+//     performs a review is the organization's token, not the caller, so the
+//     common refusal is one this check cannot predict. That case is explained
+//     after the fact, in submitReview.
+//
+// Costs no request to the host: it compares the caller's stored provider login
+// against the change request's author.
+func (h *PullRequestHandler) reviewBlockedReason(c *gin.Context, kind models.RepositoryType, pr scm.ChangeRequest) *string {
+	if pr.AuthorLogin == "" {
+		return nil
+	}
+	login := h.actingProviderLogin(c, kind)
+	if login == "" || !strings.EqualFold(login, pr.AuthorLogin) {
+		return nil
+	}
+	reason := ReviewBlockedSelfAuthored
+	return &reason
+}
+
+// actingProviderLogin resolves the caller's login on a given host, or "" when
+// it cannot be determined.
+//
+// Empty is an ordinary outcome, not a failure: a member who signed up with
+// email and password has no OAuth connection at all, and connections created
+// before migration 029 have no stored username until their next login. Callers
+// must treat "unknown" as "no opinion".
+func (h *PullRequestHandler) actingProviderLogin(c *gin.Context, kind models.RepositoryType) string {
+	actor := actorFromContext(c)
+	if actor.UserID == "" {
+		return ""
+	}
+	conn, err := h.repo.GetOAuthConnectionByUser(c.Request.Context(), actor.UserID, string(kind))
+	if err != nil || conn == nil {
+		// Not worth failing the read over. The detail response is useful without
+		// this, and the host still refuses the action if it must.
+		return ""
+	}
+	return conn.ProviderUsername
+}
+
+// How much provider quota a single list request may spend on review state.
+//
+// Review state is one request per change request — neither host reports it on
+// the list endpoint — so a repository with many open change requests would turn
+// one page view into dozens of API calls. These two constants bound that:
+// reviewStateFanOut caps how many run at once, reviewStateListCeiling caps how
+// many are attempted at all. Change requests past the ceiling report unknown
+// review state rather than silently reporting "not reviewed".
+const (
+	reviewStateFanOut      = 8
+	reviewStateListCeiling = 30
+)
+
+// attachReviewState fills in the review verdict for a single change request.
+//
+// A failure here is not the read's failure. The change request itself loaded
+// fine, and a missing badge is a far better outcome than a 503 on a page that
+// otherwise works — so the error is logged and the field left null, which the
+// client renders as nothing rather than as "not reviewed".
+func attachReviewState(
+	ctx context.Context,
+	reader scm.ChangeRequestReviewReader,
+	ref scm.RepoRef,
+	response *models.PullRequestResponse,
+) {
+	state, err := reader.GetChangeRequestReviews(ctx, ref, response.Number)
+	if err != nil || state == nil {
+		utils.Warn("could not read review state",
+			"repository", ref.FullPath(), "number", response.Number, "error", err)
+		return
+	}
+	decision := state.Decision
+	response.ReviewDecision = &decision
+	response.ApprovedBy = state.ApprovedBy
+	response.ChangesRequestedBy = state.ChangesRequestedBy
+}
+
+// attachReviewStates fills in review verdicts for a page of change requests,
+// bounded by the two constants above.
+//
+// The ceiling is reported rather than applied silently: a caller reading the
+// logs can see that some change requests were skipped, instead of concluding
+// from a page of blank badges that nobody reviews anything.
+func attachReviewStates(
+	ctx context.Context,
+	reader scm.ChangeRequestReviewReader,
+	ref scm.RepoRef,
+	items []models.PullRequestListItemResponse,
+) {
+	attempted := len(items)
+	if attempted > reviewStateListCeiling {
+		attempted = reviewStateListCeiling
+		utils.Warn("review state skipped past the per-list ceiling",
+			"repository", ref.FullPath(), "total", len(items), "attempted", attempted)
+	}
+
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, reviewStateFanOut)
+	for i := 0; i < attempted; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			attachReviewState(ctx, reader, ref, &items[idx].PullRequest)
+		}(i)
+	}
+	wg.Wait()
 }

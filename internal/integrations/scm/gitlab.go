@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,8 @@ func NewGitLabProviderWithBaseURL(token, baseURL string) Provider {
 }
 
 func translateGitLabErr(err error) error {
+	var gitlabAPIErr *gitlab.APIError
+
 	switch {
 	case err == nil:
 		return nil
@@ -44,8 +47,28 @@ func translateGitLabErr(err error) error {
 		return ErrUnauthorized
 	case errors.Is(err, gitlab.ErrRateLimited):
 		return ErrRateLimited
+	case errors.As(err, &gitlabAPIErr):
+		return classifyGitLabAPIError(gitlabAPIErr)
 	default:
 		return err
+	}
+}
+
+// classifyGitLabAPIError splits refusal from outage on status alone.
+//
+// No reason is inferred. GitLab's approvals API is documented as answering 401
+// when the caller may not approve, and 401 is folded into ErrUnauthorized by
+// the client — so the one refusal worth naming does not reach here yet. Adding
+// a prose matcher for a payload nobody has observed would be guesswork; the
+// status split is what can be justified today. See FOLLOWUPS.md.
+func classifyGitLabAPIError(apiErr *gitlab.APIError) error {
+	if apiErr.Status >= 500 {
+		return apiErr
+	}
+	return &ProviderError{
+		Provider: "gitlab",
+		Status:   apiErr.Status,
+		Message:  apiErr.Message,
 	}
 }
 
@@ -385,4 +408,41 @@ func countDiffLines(diff string) (additions, deletions int) {
 		}
 	}
 	return additions, deletions
+}
+
+// CurrentUser reports the token's owner. IsBot is always false: GitLab has no
+// portable equivalent of GitHub's account type, and guessing from a naming
+// convention would be worse than admitting the field is unavailable.
+func (p *gitlabProvider) CurrentUser(ctx context.Context) (*Identity, error) {
+	user, err := p.client.GetAuthenticatedUser(ctx)
+	if err != nil {
+		return nil, translateGitLabErr(err)
+	}
+	return &Identity{Login: user.Username, Name: user.Name}, nil
+}
+
+// GetChangeRequestReviews reports GitLab's approval state.
+//
+// ChangesRequestedBy is always empty, and the decision is never
+// ReviewDecisionChangesRequested: GitLab has no reviewer state equivalent to
+// GitHub's, which is the same asymmetry RequestChanges reports as
+// ErrUnsupportedCapability. Reporting an empty list is honest here — the field
+// means "nobody is asking for changes as far as this host can say".
+func (p *gitlabProvider) GetChangeRequestReviews(ctx context.Context, ref RepoRef, number int64) (*ReviewState, error) {
+	approvals, err := p.client.GetMergeRequestApprovals(ctx, ref.FullPath(), number)
+	if err != nil {
+		return nil, translateGitLabErr(err)
+	}
+
+	state := &ReviewState{}
+	for _, approver := range approvals.ApprovedBy {
+		if approver.User.Username != "" {
+			state.ApprovedBy = append(state.ApprovedBy, approver.User.Username)
+		}
+	}
+	sort.Strings(state.ApprovedBy)
+	if len(state.ApprovedBy) > 0 {
+		state.Decision = ReviewDecisionApproved
+	}
+	return state, nil
 }

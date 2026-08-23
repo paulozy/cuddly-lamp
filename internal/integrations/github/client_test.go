@@ -58,8 +58,14 @@ func TestClient_GetRepository_NotFound(t *testing.T) {
 	}
 }
 
+// A 403 only means throttling when the response says so. GitHub uses the same
+// status for "your token may not do that", and this test used to assert the
+// opposite — every permission error was reported as a rate limit, telling
+// people to wait for something that would never clear. The distinguishing
+// headers are covered in errors_test.go.
 func TestClient_GetRepository_RateLimited(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()

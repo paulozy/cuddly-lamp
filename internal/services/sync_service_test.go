@@ -94,12 +94,32 @@ func (m *mockGitHubClient) CreatePullRequest(_ context.Context, _, _, _, _, _, _
 	return nil, nil
 }
 
+// Sync reads neither the token's identity nor review state; both methods are
+// here only to satisfy the interface.
+func (m *mockGitHubClient) GetAuthenticatedUser(_ context.Context) (*githubclient.AuthenticatedUser, error) {
+	return nil, nil
+}
+
+func (m *mockGitHubClient) ListReviews(_ context.Context, _, _ string, _ int64) ([]githubclient.Review, error) {
+	return nil, nil
+}
+
 // stubProvider is an scm.Provider that records the ref it was asked about.
 // Used for hosts whose real client would otherwise need the network.
 type stubProvider struct {
 	info     *scm.RepoInfo
 	branches []scm.Branch
 	ref      scm.RepoRef
+}
+
+// Sync never needs the token's identity or review state; these satisfy the
+// interface.
+func (s *stubProvider) CurrentUser(_ context.Context) (*scm.Identity, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) GetChangeRequestReviews(_ context.Context, _ scm.RepoRef, _ int64) (*scm.ReviewState, error) {
+	return nil, nil
 }
 
 func (s *stubProvider) GetRepository(_ context.Context, ref scm.RepoRef) (*scm.RepoInfo, error) {
