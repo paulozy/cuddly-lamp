@@ -477,6 +477,77 @@ func TestDocsHandler_ListDocTemplates_ReturnsRegistry(t *testing.T) {
 	}
 }
 
+// Scope has to actually narrow, because the org gallery renders whatever it
+// receives — leaking a repo entry there would offer a repository's
+// CONTRIBUTING.md as an alternative to an org-wide guideline.
+func TestDocsHandler_ListDocTemplates_NarrowsByScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		scope      string
+		wantStatus int
+		wantIn     []string
+		wantNotIn  []string
+	}{
+		{
+			name:       "no scope returns both, keeping the old contract",
+			scope:      "",
+			wantStatus: http.StatusOK,
+			wantIn:     []string{"adr-tech-choice", "repo-architecture"},
+		},
+		{
+			name:       "org excludes repo entries",
+			scope:      "org",
+			wantStatus: http.StatusOK,
+			wantIn:     []string{"adr-tech-choice"},
+			wantNotIn:  []string{"repo-architecture", "repo-service-doc", "CONTRIBUTING.md"},
+		},
+		{
+			name:       "repo excludes org entries and names the output files",
+			scope:      "repo",
+			wantStatus: http.StatusOK,
+			wantIn:     []string{"repo-architecture", "docs/ARCHITECTURE.md", "CONTRIBUTING.md"},
+			wantNotIn:  []string{"adr-tech-choice", "architecture-overview"},
+		},
+		{
+			name:       "an unknown scope is a bad request, not a silent empty list",
+			scope:      "everything",
+			wantStatus: http.StatusBadRequest,
+			wantIn:     []string{"invalid_request"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			handler := NewDocsHandler(&orgDocsRepo{}, nil, scm.Credentials{})
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			url := "/docs/templates"
+			if tt.scope != "" {
+				url += "?scope=" + tt.scope
+			}
+			c.Request = withClaims(httptest.NewRequest(http.MethodGet, url, nil), "developer")
+
+			handler.ListDocTemplates(c)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tt.wantStatus, w.Body.String())
+			}
+			for _, want := range tt.wantIn {
+				if !contains(w.Body.String(), want) {
+					t.Errorf("response missing %q: %s", want, w.Body.String())
+				}
+			}
+			for _, unwanted := range tt.wantNotIn {
+				if contains(w.Body.String(), unwanted) {
+					t.Errorf("response leaked %q into scope=%s: %s", unwanted, tt.scope, w.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func TestDocsHandler_UpdateDocContent_CreatesSupersedingVersion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()

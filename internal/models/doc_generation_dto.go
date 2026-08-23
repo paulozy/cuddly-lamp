@@ -25,6 +25,17 @@ type UpdateDocContentRequest struct {
 	Content map[string]string `json:"content" binding:"required"`
 }
 
+// CreateManualDocRequest is the body of POST /repositories/:id/docs and
+// POST /organizations/docs — a document written by a person.
+//
+// One type per request, unlike the generation flow which accepts several: a
+// person writes one document at a time, and the batching in the generation
+// path exists only to spend one pull request on several files.
+type CreateManualDocRequest struct {
+	Type    string `json:"type" binding:"required"`
+	Content string `json:"content" binding:"required"`
+}
+
 type DocGenerationAcceptedResponse struct {
 	ID     string              `json:"id"`
 	Status DocGenerationStatus `json:"status"`
@@ -40,6 +51,7 @@ type DocGenerationSummary struct {
 	RepositoryID      string              `json:"repository_id,omitempty"`
 	TemplateID        string              `json:"template_id,omitempty"`
 	SupersededByID    string              `json:"superseded_by_id,omitempty"`
+	Source            DocSource           `json:"source"`
 	ProgressStage     string              `json:"progress_stage,omitempty"`
 	Status            DocGenerationStatus `json:"status"`
 	Types             []string            `json:"types"`
@@ -81,6 +93,7 @@ func ToDocGenerationSummary(doc *DocGeneration) DocGenerationSummary {
 		RepositoryID:      derefString(doc.RepositoryID),
 		TemplateID:        derefString(doc.TemplateID),
 		SupersededByID:    derefString(doc.SupersededByID),
+		Source:            doc.Source,
 		ProgressStage:     progress,
 		Status:            doc.Status,
 		Types:             []string(doc.Types),

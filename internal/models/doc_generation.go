@@ -36,6 +36,19 @@ const (
 	DocProgressStagePersisting         DocProgressStage = "persisting"
 )
 
+// DocSource records who produced a row.
+//
+// The table is named for an AI run, but it has always hosted rows that are not
+// one: editing a document by hand inserts a `completed` row with no tokens, no
+// progress stage and no pull request. This names that instead of leaving it to
+// be inferred from absent fields — see migration 031.
+type DocSource string
+
+const (
+	DocSourceAI     DocSource = "ai"
+	DocSourceManual DocSource = "manual"
+)
+
 type DocGeneration struct {
 	ID string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 
@@ -79,11 +92,19 @@ type DocGeneration struct {
 	// Empty for non-ADR and per-repo flows.
 	UserPrompt string `gorm:"type:text" json:"user_prompt,omitempty"`
 
+	// Source distinguishes a Claude generation from a document a person wrote
+	// or edited. No `default:` tag on purpose: the column has a default, and a
+	// GORM `default:` tag makes the zero value unwritable, which is the trap
+	// documented in CLAUDE.md. Every insert sets this explicitly.
+	Source DocSource `gorm:"type:varchar(8);not null;index" json:"source"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 }
 
+// TableName is the historical name. It hosts hand-written documentation too —
+// see DocSource — and renaming it would be churn that fixes nothing.
 func (DocGeneration) TableName() string {
 	return "doc_generations"
 }

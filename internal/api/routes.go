@@ -202,6 +202,16 @@ func setupAPIRoutes(
 
 		// Doc generation spends the organization's Anthropic budget, so it is
 		// gated even though the result is harmless.
+		// Two sibling routes, not one overloaded endpoint: generating needs an
+		// Anthropic key, a host credential, token budget and a live queue, and
+		// can answer 503/429/409 before a document exists. Writing one by hand
+		// needs none of that and answers 201. Folding them together would make
+		// the failure modes of one apply to the other.
+		//
+		// `/manual` rather than a bare POST on the collection so the path means
+		// the same thing here and in the frontend's BFF, where a plain POST to
+		// the docs collection has meant "generate" since it shipped.
+		protected.POST("/repositories/:id/docs/manual", developer, docsHandler.CreateRepositoryDoc)
 		protected.POST("/repositories/:id/docs/generate", developer, docsHandler.GenerateRepositoryDocs)
 		protected.GET("/repositories/:id/docs", docsHandler.ListRepositoryDocs)
 		protected.GET("/docs/:id", docsHandler.GetDocGeneration)
@@ -209,6 +219,9 @@ func setupAPIRoutes(
 		protected.GET("/docs/templates", docsHandler.ListDocTemplates)
 		// GenerateOrgDocs/ListOrgDocs additionally require admin inside the
 		// handler (requireOrgAdmin) — org-wide documents are an admin concern.
+		// Admin is enforced inside both handlers, matching the rest of the
+		// organization-scope routes.
+		protected.POST("/organizations/docs/manual", docsHandler.CreateOrgDoc)
 		protected.POST("/organizations/docs/generate", docsHandler.GenerateOrgDocs)
 		protected.GET("/organizations/docs", docsHandler.ListOrgDocs)
 

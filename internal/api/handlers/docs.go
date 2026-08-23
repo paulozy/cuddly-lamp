@@ -109,6 +109,7 @@ func (h *DocsHandler) GenerateRepositoryDocs(c *gin.Context) {
 		OrganizationID:    repository.OrganizationID,
 		Scope:             models.DocGenerationScopeRepo,
 		RepositoryID:      &repoID,
+		Source:            models.DocSourceAI,
 		Status:            models.DocGenerationStatusPending,
 		Types:             datatypes.JSONSlice[string](types),
 		Branch:            strings.TrimSpace(req.Branch),
@@ -430,6 +431,7 @@ func (h *DocsHandler) GenerateOrgDocs(c *gin.Context) {
 		ID:                uuid.NewString(),
 		OrganizationID:    orgID,
 		Scope:             models.DocGenerationScopeOrg,
+		Source:            models.DocSourceAI,
 		Status:            models.DocGenerationStatusPending,
 		Types:             datatypes.JSONSlice[string](types),
 		Content:           datatypes.NewJSONType(map[string]string{}),
@@ -562,11 +564,17 @@ func (h *DocsHandler) UpdateDocContent(c *gin.Context) {
 	now := time.Now().UTC()
 	prevID := prev.ID
 	next := &models.DocGeneration{
-		ID:                uuid.NewString(),
-		OrganizationID:    prev.OrganizationID,
-		Scope:             prev.Scope,
-		RepositoryID:      prev.RepositoryID,
-		TemplateID:        prev.TemplateID,
+		ID:             uuid.NewString(),
+		OrganizationID: prev.OrganizationID,
+		Scope:          prev.Scope,
+		RepositoryID:   prev.RepositoryID,
+		TemplateID:     prev.TemplateID,
+		// Provenance is inherited, not reset: editing a generated document by
+		// hand does not make the document hand-written, and editing a
+		// hand-written one does not make it generated. The chain records where
+		// the document came from, and this row is a new version of the same
+		// document.
+		Source:            prev.Source,
 		Status:            models.DocGenerationStatusCompleted,
 		Types:             prev.Types,
 		Content:           datatypes.NewJSONType(merged),
@@ -607,5 +615,20 @@ func (h *DocsHandler) ListDocTemplates(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, models.ErrorResponse{Error: "unauthorized", ErrorDescription: "missing or invalid organization"})
 		return
 	}
-	c.JSON(http.StatusOK, docs.Templates())
+
+	// Scope is optional so the existing unscoped response keeps its shape, but
+	// callers should pass it: a gallery that mixes the two offers an org-wide
+	// guideline next to a repository's CONTRIBUTING.md as if they were
+	// alternatives.
+	switch scope := c.Query("scope"); scope {
+	case "":
+		c.JSON(http.StatusOK, docs.Templates())
+	case string(docs.TemplateScopeOrg), string(docs.TemplateScopeRepo):
+		c.JSON(http.StatusOK, docs.TemplatesForScope(docs.TemplateScope(scope)))
+	default:
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:            "invalid_request",
+			ErrorDescription: "scope must be \"org\" or \"repo\"",
+		})
+	}
 }
