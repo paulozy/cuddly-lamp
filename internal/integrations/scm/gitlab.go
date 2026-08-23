@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/gitlab"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 // gitlabProvider adapts the GitLab REST v4 client to the neutral interfaces.
@@ -161,6 +162,88 @@ func (p *gitlabProvider) ListChangeRequests(ctx context.Context, ref RepoRef) ([
 	return out, nil
 }
 
+func (p *gitlabProvider) ListIssues(ctx context.Context, ref RepoRef) ([]Issue, error) {
+	issues, err := p.client.ListIssues(ctx, ref.FullPath())
+	if err != nil {
+		return nil, translateGitLabErr(err)
+	}
+	out := make([]Issue, 0, len(issues))
+	for i := range issues {
+		out = append(out, Issue{
+			// IID, not ID: the per-project number people actually cite, matching
+			// how the change-request adapter treats merge requests.
+			Number:        issues[i].IID,
+			Title:         issues[i].Title,
+			State:         gitlabIssueState(issues[i].State),
+			AuthorLogin:   issues[i].Author.Username,
+			Labels:        issues[i].Labels,
+			CommentsCount: issues[i].UserNotesCount,
+			WebURL:        issues[i].WebURL,
+			CreatedAt:     issues[i].CreatedAt,
+			UpdatedAt:     issues[i].UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+// gitlabIssueState maps GitLab's `opened` onto the canonical `open`, leaving
+// `closed` alone since both providers already agree on it.
+func gitlabIssueState(state string) string {
+	if state == "opened" {
+		return IssueStateOpen
+	}
+	return IssueStateClosed
+}
+
+func (p *gitlabProvider) CloseIssue(ctx context.Context, ref RepoRef, number int64) error {
+	return translateGitLabErr(p.client.CloseIssue(ctx, ref.FullPath(), number))
+}
+
+// ApproveChangeRequest approves and then records who asked for it.
+//
+// The approval itself carries no message on GitLab, so the note is the only
+// place the acting user's name can survive — the API call is authenticated as
+// the organization's token, not as them. A failed note is not worth undoing a
+// successful approval, so it only warns.
+func (p *gitlabProvider) ApproveChangeRequest(ctx context.Context, ref RepoRef, number int64, body string) error {
+	if err := p.client.ApproveMergeRequest(ctx, ref.FullPath(), number); err != nil {
+		return translateGitLabErr(err)
+	}
+	if body == "" {
+		return nil
+	}
+	if err := p.client.CreateMergeRequestNote(ctx, ref.FullPath(), number, body); err != nil {
+		utils.Warn("gitlab: approved the merge request but could not post the attribution note",
+			"project", ref.FullPath(), "iid", number, "error", err)
+	}
+	return nil
+}
+
+// RequestChanges has no portable GitLab equivalent. Reporting that plainly is
+// the point: the alternative — posting a note and calling it a review — would
+// leave the merge request approvable by anyone who glanced at its state.
+func (p *gitlabProvider) RequestChanges(_ context.Context, _ RepoRef, _ int64, _ string) error {
+	return ErrUnsupportedCapability
+}
+
+func (p *gitlabProvider) ListContributors(ctx context.Context, ref RepoRef) ([]Contributor, error) {
+	contributors, err := p.client.ListContributors(ctx, ref.FullPath())
+	if err != nil {
+		return nil, translateGitLabErr(err)
+	}
+	out := make([]Contributor, 0, len(contributors))
+	for i := range contributors {
+		// Login stays empty on purpose: GitLab's contributor endpoint reports
+		// no username, and deriving one from the email would be a guess.
+		out = append(out, Contributor{
+			Name:    contributors[i].Name,
+			Email:   contributors[i].Email,
+			Commits: contributors[i].Commits,
+		})
+	}
+	return out, nil
+}
+
 func (p *gitlabProvider) GetChangeRequest(ctx context.Context, ref RepoRef, number int64) (*ChangeRequest, error) {
 	mr, err := p.client.GetMergeRequest(ctx, ref.FullPath(), number)
 	if err != nil {
@@ -169,15 +252,17 @@ func (p *gitlabProvider) GetChangeRequest(ctx context.Context, ref RepoRef, numb
 	cr := gitlabChangeRequest(mr)
 
 	// GitLab reports no line counts on the merge request itself, so the detail
-	// view sums them from the diffs. Failing to fetch them leaves the counts at
-	// zero rather than failing the request — the metadata is still useful.
+	// view sums them from the diffs. Failing to fetch them leaves the counts
+	// unreported rather than failing the request — the metadata is still useful,
+	// and nil says "we do not know" instead of claiming nothing changed.
 	if diffs, diffErr := p.client.ListMergeRequestDiffs(ctx, ref.FullPath(), number); diffErr == nil {
-		cr.ChangedFiles = len(diffs)
+		files, added, removed := len(diffs), 0, 0
 		for i := range diffs {
 			additions, deletions := countDiffLines(diffs[i].Diff)
-			cr.Additions += additions
-			cr.Deletions += deletions
+			added += additions
+			removed += deletions
 		}
+		cr.ChangedFiles, cr.Additions, cr.Deletions = &files, &added, &removed
 	}
 	return &cr, nil
 }
@@ -249,7 +334,7 @@ func gitlabChangeRequest(mr *gitlab.MergeRequest) ChangeRequest {
 		HeadSHA:      mr.SHA,
 		BaseRef:      mr.TargetBranch,
 		BaseSHA:      mr.DiffRefs.BaseSHA,
-		ChangedFiles: mr.ChangedFileCount(),
+		ChangedFiles: mr.ChangedFileCount(), // nil when GitLab sent no changes_count
 		WebURL:       mr.WebURL,
 		CreatedAt:    mr.CreatedAt,
 		UpdatedAt:    mr.UpdatedAt,

@@ -42,6 +42,22 @@ func (m *mockGitHubClient) ListPullRequests(_ context.Context, _, _ string) ([]g
 	return m.prs, nil
 }
 
+// Issues and contributors are not part of sync — the catalog stores counts,
+// not lists — so these satisfy the interface and nothing more.
+func (m *mockGitHubClient) ListIssues(_ context.Context, _, _ string) ([]githubclient.Issue, error) {
+	return nil, nil
+}
+
+func (m *mockGitHubClient) ListContributors(_ context.Context, _, _ string) ([]githubclient.Contributor, error) {
+	return nil, nil
+}
+
+func (m *mockGitHubClient) CloseIssue(_ context.Context, _, _ string, _ int64) error { return nil }
+
+func (m *mockGitHubClient) SubmitReview(_ context.Context, _, _ string, _ int64, _, _ string) error {
+	return nil
+}
+
 func (m *mockGitHubClient) GetRepositoryTree(_ context.Context, _, _, _ string) (*githubclient.RepoTree, error) {
 	return m.tree, m.treeErr
 }
@@ -109,6 +125,24 @@ func (s *stubProvider) GetTree(_ context.Context, _ scm.RepoRef, _ string) (*scm
 
 func (s *stubProvider) ListChangeRequests(_ context.Context, _ scm.RepoRef) ([]scm.ChangeRequest, error) {
 	return nil, nil
+}
+
+func (s *stubProvider) ListIssues(_ context.Context, _ scm.RepoRef) ([]scm.Issue, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) ListContributors(_ context.Context, _ scm.RepoRef) ([]scm.Contributor, error) {
+	return nil, nil
+}
+
+func (s *stubProvider) CloseIssue(_ context.Context, _ scm.RepoRef, _ int64) error { return nil }
+
+func (s *stubProvider) ApproveChangeRequest(_ context.Context, _ scm.RepoRef, _ int64, _ string) error {
+	return nil
+}
+
+func (s *stubProvider) RequestChanges(_ context.Context, _ scm.RepoRef, _ int64, _ string) error {
+	return nil
 }
 
 func (s *stubProvider) GetChangeRequest(_ context.Context, _ scm.RepoRef, _ int64) (*scm.ChangeRequest, error) {

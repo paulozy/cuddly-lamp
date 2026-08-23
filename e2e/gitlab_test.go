@@ -131,11 +131,13 @@ func TestGitLabRepositoryLifecycle(t *testing.T) {
 	})
 
 	t.Run("the sync registered a webhook with a secret", func(t *testing.T) {
-		hooks := sut.fake.Hooks()
-		if len(hooks) == 0 {
-			t.Fatal("no webhook registered with the provider")
+		// By repository id, not "the last one registered": webhook
+		// registration happens inside an asynchronous sync, so another test's
+		// repository can land its hook in between.
+		hook, ok := sut.fake.HookForRepo(repo.ID)
+		if !ok {
+			t.Fatalf("no webhook registered for repository %s", repo.ID)
 		}
-		hook := hooks[len(hooks)-1]
 		if hook.ProjectPath != fakegitlab.RunnerPath {
 			t.Errorf("hook project = %q, want %q", hook.ProjectPath, fakegitlab.RunnerPath)
 		}
@@ -162,7 +164,7 @@ func TestGitLabRepositoryLifecycle(t *testing.T) {
 		// next sync lands on a distinguishable value.
 		time.Sleep(1100 * time.Millisecond)
 
-		status, err := sut.fake.FireWebhook("Push Hook", "e2e-push-1", pushPayload())
+		status, err := sut.fake.FireWebhookTo(repo.ID, "Push Hook", "e2e-push-1", pushPayload())
 		if err != nil {
 			t.Fatalf("fire webhook: %v", err)
 		}
@@ -184,7 +186,7 @@ func TestGitLabRepositoryLifecycle(t *testing.T) {
 	t.Run("a replayed delivery is ignored", func(t *testing.T) {
 		// Same event UUID as above: GitLab retries, and a retry must not be
 		// recorded twice.
-		status, err := sut.fake.FireWebhook("Push Hook", "e2e-push-1", pushPayload())
+		status, err := sut.fake.FireWebhookTo(repo.ID, "Push Hook", "e2e-push-1", pushPayload())
 		if err != nil {
 			t.Fatalf("fire webhook: %v", err)
 		}
@@ -194,11 +196,11 @@ func TestGitLabRepositoryLifecycle(t *testing.T) {
 	})
 
 	t.Run("a delivery without the UUID header is still deduplicated", func(t *testing.T) {
-		first, err := sut.fake.FireWebhook("Push Hook", "", pushPayload())
+		first, err := sut.fake.FireWebhookTo(repo.ID, "Push Hook", "", pushPayload())
 		if err != nil {
 			t.Fatalf("fire webhook: %v", err)
 		}
-		second, err := sut.fake.FireWebhook("Push Hook", "", pushPayload())
+		second, err := sut.fake.FireWebhookTo(repo.ID, "Push Hook", "", pushPayload())
 		if err != nil {
 			t.Fatalf("fire webhook: %v", err)
 		}
@@ -208,7 +210,7 @@ func TestGitLabRepositoryLifecycle(t *testing.T) {
 	})
 
 	t.Run("a merge request event is accepted and normalized", func(t *testing.T) {
-		status, err := sut.fake.FireWebhook("Merge Request Hook", "e2e-mr-1", mergeRequestPayload())
+		status, err := sut.fake.FireWebhookTo(repo.ID, "Merge Request Hook", "e2e-mr-1", mergeRequestPayload())
 		if err != nil {
 			t.Fatalf("fire webhook: %v", err)
 		}

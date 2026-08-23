@@ -43,8 +43,9 @@ func RegisterRoutes(params *RegisterRoutesParams) {
 	memberHandler := factories.MakeOrganizationMemberHandler(repository)
 	onboardingHandler := factories.MakeOnboardingHandler(repository, providerHosts)
 	teamHandler := factories.MakeTeamHandler(repository)
+	browseHandler := factories.MakeRepositoryBrowseHandler(repository, providerHosts)
 
-	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler, onboardingHandler)
+	setupAPIRoutes(params.Router, authConfig.AuthHandler, authConfig.AuthMiddleware, repoHandler, relationshipHandler, webhookHandler, pullRequestHandler, browseHandler, docsHandler, orgConfigHandler, coverageHandler, memberHandler, teamHandler, onboardingHandler)
 }
 
 func healthCheck(c *gin.Context) {
@@ -62,6 +63,7 @@ func setupAPIRoutes(
 	relationshipHandler *handlers.RepositoryRelationshipHandler,
 	webhookHandler *handlers.WebhookHandler,
 	pullRequestHandler *handlers.PullRequestHandler,
+	browseHandler *handlers.RepositoryBrowseHandler,
 	docsHandler *handlers.DocsHandler,
 	orgConfigHandler *handlers.OrganizationConfigHandler,
 	coverageHandler *handlers.CoverageHandler,
@@ -180,6 +182,19 @@ func setupAPIRoutes(
 		protected.POST("/glossary", maintainer, onboardingHandler.CreateGlossaryTerm)
 		protected.PATCH("/glossary/:id", maintainer, onboardingHandler.UpdateGlossaryTerm)
 		protected.DELETE("/glossary/:id", maintainer, onboardingHandler.DeleteGlossaryTerm)
+
+		// Issues and contributors are the same kind of read as pull requests:
+		// a pass-through of the repository's own host, open to any member.
+		protected.GET("/repositories/:id/issues", browseHandler.ListIssues)
+		protected.GET("/repositories/:id/contributors", browseHandler.ListContributors)
+
+		// Acting on the host — closing an issue, submitting a review verdict —
+		// mutates the customer's repository, so `developer` is the floor and the
+		// handler additionally requires the caller's team to own the repository
+		// (RepositoryService.CanWriteRepository), exactly as repository edits do.
+		protected.POST("/repositories/:id/issues/:number/close", developer, browseHandler.CloseIssue)
+		protected.POST("/repositories/:id/pull-requests/:pr_number/approve", developer, pullRequestHandler.ApprovePullRequest)
+		protected.POST("/repositories/:id/pull-requests/:pr_number/request-changes", developer, pullRequestHandler.RequestPullRequestChanges)
 
 		protected.GET("/repositories/:id/pull-requests", pullRequestHandler.ListPullRequests)
 		protected.GET("/repositories/:id/pull-requests/:pr_number", pullRequestHandler.GetPullRequest)

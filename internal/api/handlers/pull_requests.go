@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -22,15 +23,11 @@ type pullRequestContext struct {
 // is asynchronous — every response is a straight pass-through of the host's
 // API using the repository organization's token.
 type PullRequestHandler struct {
-	repo storage.Repository
-	// hosts carries the deployment's provider API roots, with no tokens — see
-	// scm.HostsOnly for why the two are treated differently.
-	hosts   scm.Credentials
-	resolve scm.ResolverFunc
+	*scmResolver
 }
 
 func NewPullRequestHandler(repo storage.Repository, hosts scm.Credentials) *PullRequestHandler {
-	return &PullRequestHandler{repo: repo, hosts: hosts, resolve: scm.For}
+	return &PullRequestHandler{scmResolver: newSCMResolver(repo, hosts)}
 }
 
 // ListPullRequests lists open pull/merge requests for a repository.
@@ -152,129 +149,11 @@ func (h *PullRequestHandler) resolvePullRequestContext(c *gin.Context) (*pullReq
 }
 
 func (h *PullRequestHandler) resolveContext(c *gin.Context, repoID string) (*pullRequestContext, bool) {
-	repository, ok := h.fetchAccessibleRepository(c, repoID)
+	resolved, ok := h.resolveRepository(c, repoID)
 	if !ok {
 		return nil, false
 	}
-
-	// The host in the URL decides which provider is queried, not the stored
-	// type — the URL is what the user gave us and it is never empty.
-	projectPath, provider, err := utils.ParseRepositoryURL(repository.URL)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_repository_url",
-			ErrorDescription: err.Error(),
-		})
-		return nil, false
-	}
-	ref, err := scm.ParseRepoRef(projectPath)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_repository_url",
-			ErrorDescription: "repository URL must identify a namespace and a repository",
-		})
-		return nil, false
-	}
-
-	cfg, err := h.repo.GetOrganizationConfig(c.Request.Context(), repository.OrganizationID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error:            "internal_error",
-			ErrorDescription: "failed to fetch organization config",
-		})
-		return nil, false
-	}
-
-	// The organization's own token, never the platform's — browsing another
-	// organization's code with the deployment's credentials is not something a
-	// read endpoint should silently do. The host does fall back, because
-	// talking to the wrong GitLab is worse than talking to none.
-	client, err := h.resolve(provider, scm.CredentialsFromConfig(cfg, h.hosts))
-	if err != nil {
-		h.providerError(c, err)
-		return nil, false
-	}
-
-	return &pullRequestContext{client: client, ref: ref}, true
-}
-
-func (h *PullRequestHandler) fetchAccessibleRepository(c *gin.Context, repoID string) (*models.Repository, bool) {
-	if repoID == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "invalid_request",
-			ErrorDescription: "repository id is required",
-		})
-		return nil, false
-	}
-
-	repository, err := h.repo.GetRepository(c.Request.Context(), repoID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error:            "internal_error",
-			ErrorDescription: "failed to fetch repository",
-		})
-		return nil, false
-	}
-	if repository == nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
-			Error:            "not_found",
-			ErrorDescription: "repository not found",
-		})
-		return nil, false
-	}
-
-	orgID, err := utils.GetOrganizationIDFromContext(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
-			Error:            "unauthorized",
-			ErrorDescription: "missing or invalid authentication",
-		})
-		return nil, false
-	}
-	if repository.OrganizationID != orgID {
-		c.JSON(http.StatusForbidden, models.ErrorResponse{
-			Error:            "forbidden",
-			ErrorDescription: "you do not have access to this repository",
-		})
-		return nil, false
-	}
-
-	return repository, true
-}
-
-func (h *PullRequestHandler) providerError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, scm.ErrUnsupportedProvider):
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error:            "unsupported_repository_type",
-			ErrorDescription: err.Error(),
-		})
-	case errors.Is(err, scm.ErrMissingCredentials):
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "provider_unavailable",
-			ErrorDescription: "no access token is configured for this repository's provider",
-		})
-	case errors.Is(err, scm.ErrNotFound):
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
-			Error:            "not_found",
-			ErrorDescription: "provider resource not found",
-		})
-	case errors.Is(err, scm.ErrUnauthorized):
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "provider_unavailable",
-			ErrorDescription: "the configured provider token is invalid or unauthorized",
-		})
-	case errors.Is(err, scm.ErrRateLimited):
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "provider_rate_limited",
-			ErrorDescription: "provider API rate limit exceeded",
-		})
-	default:
-		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error:            "provider_unavailable",
-			ErrorDescription: err.Error(),
-		})
-	}
+	return &pullRequestContext{client: resolved.provider, ref: resolved.ref}, true
 }
 
 func parsePullRequestNumber(c *gin.Context) (int, bool) {
@@ -327,4 +206,125 @@ func pullRequestFilesToResponse(files []scm.ChangeRequestFile) []models.PullRequ
 		})
 	}
 	return out
+}
+
+// ReviewPullRequestRequest carries the optional message attached to a verdict.
+type ReviewPullRequestRequest struct {
+	Body string `json:"body"`
+}
+
+// ApprovePullRequest records an approval on the repository's host.
+// @Summary      Approve a pull request
+// @Tags         pull-requests
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id         path      string                    true   "Repository ID"
+// @Param        pr_number  path      int                       true   "Pull request number"
+// @Param        body       body      ReviewPullRequestRequest  false  "Review message"
+// @Success      204        "approved"
+// @Failure      400        {object}  models.ErrorResponse
+// @Failure      401        {object}  models.ErrorResponse
+// @Failure      403        {object}  models.ErrorResponse
+// @Failure      501        {object}  models.ErrorResponse
+// @Failure      503        {object}  models.ErrorResponse
+// @Router       /repositories/{id}/pull-requests/{pr_number}/approve [post]
+func (h *PullRequestHandler) ApprovePullRequest(c *gin.Context) {
+	h.submitReview(c, func(ctx context.Context, resolved *resolvedRepo, number int64, body string) error {
+		return resolved.provider.ApproveChangeRequest(ctx, resolved.ref, number, body)
+	}, "approved")
+}
+
+// RequestPullRequestChanges asks the author for changes.
+// @Summary      Request changes on a pull request
+// @Tags         pull-requests
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id         path      string                    true   "Repository ID"
+// @Param        pr_number  path      int                       true   "Pull request number"
+// @Param        body       body      ReviewPullRequestRequest  false  "Review message"
+// @Success      204        "changes requested"
+// @Failure      400        {object}  models.ErrorResponse
+// @Failure      401        {object}  models.ErrorResponse
+// @Failure      403        {object}  models.ErrorResponse
+// @Failure      501        {object}  models.ErrorResponse  "provider has no equivalent"
+// @Failure      503        {object}  models.ErrorResponse
+// @Router       /repositories/{id}/pull-requests/{pr_number}/request-changes [post]
+func (h *PullRequestHandler) RequestPullRequestChanges(c *gin.Context) {
+	h.submitReview(c, func(ctx context.Context, resolved *resolvedRepo, number int64, body string) error {
+		return resolved.provider.RequestChanges(ctx, resolved.ref, number, body)
+	}, "requested changes on")
+}
+
+// submitReview is the shared path for both verdicts: parse, authorize, attach
+// attribution, dispatch, and translate the provider's answer.
+func (h *PullRequestHandler) submitReview(
+	c *gin.Context,
+	action func(context.Context, *resolvedRepo, int64, string) error,
+	verb string,
+) {
+	prNumber, ok := parsePullRequestNumber(c)
+	if !ok {
+		return
+	}
+
+	var req ReviewPullRequestRequest
+	// A body is optional; only malformed JSON is an error.
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error:            "invalid_request",
+				ErrorDescription: err.Error(),
+			})
+			return
+		}
+	}
+
+	resolved, ok := h.resolveRepository(c, c.Param("id"))
+	if !ok {
+		return
+	}
+	if !h.requireWriteAccess(c, resolved.repository) {
+		return
+	}
+
+	err := action(c.Request.Context(), resolved, int64(prNumber), reviewBody(c, req.Body, verb))
+	switch {
+	case err == nil:
+		c.Status(http.StatusNoContent)
+	case errors.Is(err, scm.ErrUnsupportedCapability):
+		// Not a failure — this host genuinely has no equivalent action. 501 says
+		// "the server does not implement this", which is exactly the situation.
+		c.JSON(http.StatusNotImplemented, models.ErrorResponse{
+			Error:            "unsupported_capability",
+			ErrorDescription: "this repository's host does not support that review action",
+		})
+	default:
+		h.providerError(c, err)
+	}
+}
+
+// reviewBody stamps the acting user onto the review message.
+//
+// This matters more than it looks. The call is authenticated with the
+// *organization's* token, so the host records the verdict under whoever owns
+// that token — not the person who clicked. On GitHub an approval under the
+// wrong name can also satisfy branch protection. The platform cannot change
+// whose credentials are used without per-user write scopes, so the least it can
+// do is make the real actor part of the permanent record.
+func reviewBody(c *gin.Context, body, verb string) string {
+	actor := "Someone"
+	if claims, ok := c.Request.Context().Value(utils.ContextKeyClaims).(*models.TokenClaims); ok {
+		if claims.FullName != "" {
+			actor = claims.FullName
+		} else if claims.Email != "" {
+			actor = claims.Email
+		}
+	}
+	attribution := actor + " " + verb + " this via the IDP."
+	if body == "" {
+		return attribution
+	}
+	return body + "\n\n— " + attribution
 }

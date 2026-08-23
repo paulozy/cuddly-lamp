@@ -164,13 +164,13 @@ func TestGitLabProvider_GetChangeRequestSumsDiffLines(t *testing.T) {
 	if cr.BaseSHA != "base-sha" || cr.HeadSHA != "head-sha" {
 		t.Errorf("shas = %q/%q, want base-sha/head-sha from diff_refs", cr.BaseSHA, cr.HeadSHA)
 	}
-	// GitLab reports no line counts on a merge request, so they are summed
-	// from the diffs rather than shown as zero.
-	if cr.Additions != 3 || cr.Deletions != 1 {
-		t.Errorf("additions/deletions = %d/%d, want 3/1 counted from the diffs", cr.Additions, cr.Deletions)
+	// GitLab reports no line counts on a merge request, so the detail view sums
+	// them from the diffs rather than leaving them unreported.
+	if cr.Additions == nil || cr.Deletions == nil || *cr.Additions != 3 || *cr.Deletions != 1 {
+		t.Errorf("additions/deletions = %v/%v, want 3/1 counted from the diffs", cr.Additions, cr.Deletions)
 	}
-	if cr.ChangedFiles != 2 {
-		t.Errorf("ChangedFiles = %d, want 2", cr.ChangedFiles)
+	if cr.ChangedFiles == nil || *cr.ChangedFiles != 2 {
+		t.Errorf("ChangedFiles = %v, want 2", cr.ChangedFiles)
 	}
 }
 
@@ -291,5 +291,61 @@ func TestGitLabProvider_CloneAuthUsesOAuth2Username(t *testing.T) {
 	user, password := NewGitLabProvider("glpat-token").CloneAuth()
 	if user != "oauth2" || password != "glpat-token" {
 		t.Fatalf("CloneAuth() = %q/%q, want oauth2/glpat-token", user, password)
+	}
+}
+
+func TestGitLabProvider_NormalizesIssueStateAndNumber(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id": 9001, "iid": 88, "title": "Sidebar", "state": "opened",
+			 "labels": ["bug"], "user_notes_count": 3,
+			 "author": {"username": "julia.r"}}
+		]`))
+	}))
+	defer srv.Close()
+
+	got, err := newGitLabProvider(srv).ListIssues(context.Background(), RepoRef{Namespace: "group", Name: "project"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d issues, want 1", len(got))
+	}
+	// GitLab's `opened` must arrive as the canonical `open` — the frontend
+	// switches on GitHub's vocabulary.
+	if got[0].State != IssueStateOpen {
+		t.Errorf("state = %q, want %q", got[0].State, IssueStateOpen)
+	}
+	// The per-project IID, not the global ID.
+	if got[0].Number != 88 {
+		t.Errorf("number = %d, want 88 (the iid, not the id)", got[0].Number)
+	}
+	if got[0].AuthorLogin != "julia.r" {
+		t.Errorf("author = %q, want julia.r", got[0].AuthorLogin)
+	}
+}
+
+// The two providers report disjoint halves of a contributor's identity, and
+// DisplayName is what keeps callers from having to know which half arrived.
+func TestGitLabProvider_ContributorHasNameButNoLogin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"name": "Paulo Abreu", "email": "paulo@example.com", "commits": 240}]`))
+	}))
+	defer srv.Close()
+
+	got, err := newGitLabProvider(srv).ListContributors(context.Background(), RepoRef{Namespace: "group", Name: "project"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d contributors, want 1", len(got))
+	}
+	if got[0].Login != "" {
+		t.Errorf("login = %q, want empty — GitLab reports no username here", got[0].Login)
+	}
+	if got[0].DisplayName() != "Paulo Abreu" {
+		t.Errorf("DisplayName() = %q, want Paulo Abreu", got[0].DisplayName())
 	}
 }

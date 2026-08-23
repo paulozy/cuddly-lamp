@@ -201,22 +201,30 @@ func TestClient_ListMergeRequestDiffs_FollowsPagination(t *testing.T) {
 
 func TestMergeRequest_ChangedFileCount(t *testing.T) {
 	tests := []struct {
-		raw  string
-		want int
+		raw string
+		// nil means "GitLab said nothing usable", which is a different fact from
+		// a merge request that touches no files.
+		want *int
 	}{
-		{raw: "2", want: 2},
+		{raw: "2", want: intPtr(2)},
 		// GitLab documents changes_count as a string, and it reports "1000+"
 		// for diffs too large to count. Neither may crash or invent a number.
-		{raw: "1000+", want: 1000},
-		{raw: "", want: 0},
-		{raw: "unknown", want: 0},
+		{raw: "1000+", want: intPtr(1000)},
+		{raw: "", want: nil},
+		{raw: "unknown", want: nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
 			mr := MergeRequest{ChangesCount: tt.raw}
-			if got := mr.ChangedFileCount(); got != tt.want {
-				t.Fatalf("ChangedFileCount() = %d, want %d", got, tt.want)
+			got := mr.ChangedFileCount()
+			switch {
+			case tt.want == nil && got != nil:
+				t.Fatalf("ChangedFileCount() = %d, want nil (unreported)", *got)
+			case tt.want != nil && got == nil:
+				t.Fatalf("ChangedFileCount() = nil, want %d", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Fatalf("ChangedFileCount() = %d, want %d", *got, *tt.want)
 			}
 		})
 	}
@@ -347,3 +355,69 @@ func TestValidateWebhookToken(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_ListIssues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/projects/group/project/issues" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		// GitLab says `opened`, not `open`; the adapter is what normalizes it.
+		if got := r.URL.Query().Get("state"); got != "opened" {
+			t.Errorf("state = %q, want opened", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[
+			{"id": 9001, "iid": 88, "title": "Sidebar does not collapse", "state": "opened",
+			 "labels": ["bug", "ui"], "user_notes_count": 3,
+			 "web_url": "https://gitlab.com/group/project/-/issues/88",
+			 "author": {"username": "julia.r", "name": "Julia R"}}
+		]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListIssues(context.Background(), "group/project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d issues, want 1", len(got))
+	}
+	// IID is the number people cite; ID is the global one and must not leak.
+	if got[0].IID != 88 {
+		t.Errorf("iid = %d, want 88", got[0].IID)
+	}
+	if got[0].UserNotesCount != 3 {
+		t.Errorf("user_notes_count = %d, want 3", got[0].UserNotesCount)
+	}
+	if got[0].Author.Username != "julia.r" {
+		t.Errorf("author = %q, want julia.r", got[0].Author.Username)
+	}
+}
+
+func TestClient_ListContributors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/projects/group/project/repository/contributors" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Note the shape: a name and an email, and no username anywhere.
+		fmt.Fprint(w, `[
+			{"name": "Paulo Abreu", "email": "paulo@example.com", "commits": 240},
+			{"name": "Diego Souza", "email": "diego@example.com", "commits": 58}
+		]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListContributors(context.Background(), "group/project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d contributors, want 2", len(got))
+	}
+	if got[0].Name != "Paulo Abreu" || got[0].Commits != 240 {
+		t.Errorf("first contributor = %+v, want Paulo Abreu with 240 commits", got[0])
+	}
+}
+
+func intPtr(v int) *int { return &v }
