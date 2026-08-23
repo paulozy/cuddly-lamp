@@ -47,6 +47,13 @@ type Team struct {
 	MemberCount int `gorm:"-" json:"member_count"`
 	// RepositoryCount is populated by list queries; never persisted.
 	RepositoryCount int `gorm:"-" json:"repository_count"`
+	// ViewerIsMember answers "am I on this team" for whoever asked. It is
+	// populated per request and never persisted — the same team is `true` for
+	// one caller and `false` for another.
+	//
+	// It exists so the catalog can offer a "my teams" filter without the client
+	// fanning out one membership request per team.
+	ViewerIsMember bool `gorm:"-" json:"viewer_is_member"`
 }
 
 func (Team) TableName() string {

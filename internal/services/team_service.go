@@ -77,8 +77,37 @@ func (s *TeamService) CreateTeam(ctx context.Context, orgID, createdByUserID str
 	return team, nil
 }
 
-func (s *TeamService) ListTeams(ctx context.Context, orgID string) ([]models.Team, error) {
-	return s.repo.ListTeams(ctx, orgID)
+// ListTeams returns the organization's teams, marking the ones viewerUserID
+// belongs to.
+//
+// The membership lookup is one query for the whole list rather than one per
+// team. A failure to resolve it is not fatal: the teams themselves are still
+// worth returning, and every team simply reports `viewer_is_member: false` —
+// which the UI reads as "no team filter available", not as "you are on no
+// teams".
+func (s *TeamService) ListTeams(ctx context.Context, orgID, viewerUserID string) ([]models.Team, error) {
+	teams, err := s.repo.ListTeams(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if viewerUserID == "" {
+		return teams, nil
+	}
+
+	mine, err := s.repo.ListTeamIDsForUser(ctx, orgID, viewerUserID)
+	if err != nil {
+		utils.Warn("team: could not resolve the caller's memberships",
+			"user_id", viewerUserID, "error", err)
+		return teams, nil
+	}
+	member := make(map[string]bool, len(mine))
+	for _, id := range mine {
+		member[id] = true
+	}
+	for i := range teams {
+		teams[i].ViewerIsMember = member[teams[i].ID]
+	}
+	return teams, nil
 }
 
 // getScoped fetches a team and refuses to hand back one belonging to another
