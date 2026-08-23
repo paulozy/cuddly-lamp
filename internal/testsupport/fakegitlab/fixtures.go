@@ -43,6 +43,20 @@ func RunnerProject() *Project {
 			{ID: "00f99d44ee172285f44a300aafa38be7b61d77f8", Message: "Merge branch 'vtak/enable_fastzip_by_default' into 'main'", AuthorName: "Vishal Tak"},
 			{ID: "a964cb19b0fd0d01489b6637ba3b1fa65f3bc9a2", Message: "fix: correct typo", AuthorName: "Dev"},
 		},
+		// The issue list and contributor list the browse endpoints read.
+		// "Vishal Tak" also authors a commit above, so the derived
+		// last-commit lookup has a name to match on — GitLab reports no
+		// username here, which is exactly the case worth exercising.
+		Issues: []Issue{
+			{ID: 9001, IID: 88, Title: "Sidebar does not collapse on mobile", State: "opened",
+				Labels: []string{"bug", "ui"}, UserNotesCount: 3, AuthorUsername: "julia.r"},
+			{ID: 9002, IID: 84, Title: "Add an empty state to the graph", State: "opened",
+				Labels: []string{"enhancement"}, UserNotesCount: 1, AuthorUsername: "ana.m"},
+		},
+		Contributors: []Contributor{
+			{Name: "Vishal Tak", Email: "vishal@example.com", Commits: 240},
+			{Name: "Dev", Email: "dev@example.com", Commits: 58},
+		},
 		TreePages: [][]TreeEntry{
 			{
 				{Path: ".gitlab", Type: "tree"},

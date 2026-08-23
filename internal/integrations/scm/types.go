@@ -33,6 +33,16 @@ var (
 	// ErrMissingCredentials is returned by For when the provider exists but
 	// the organization has no token for it.
 	ErrMissingCredentials = errors.New("scm: no credentials configured for provider")
+	// ErrUnsupportedCapability is returned when a provider genuinely has no
+	// equivalent for an action, as opposed to failing to perform it.
+	//
+	// It exists so callers can tell "this host cannot do that" from "that did
+	// not work", and hide the affordance instead of offering a button that is
+	// guaranteed to fail. Requesting changes on a merge request is the case it
+	// was added for: GitLab exposes approve and unapprove over REST, but the
+	// reviewer "requested changes" state has no stable REST equivalent across
+	// the versions a self-hosted instance may be running.
+	ErrUnsupportedCapability = errors.New("scm: provider does not support this action")
 )
 
 // RepoRef identifies a repository on its host.
@@ -129,11 +139,16 @@ type ChangeRequest struct {
 	BaseSHA     string
 	Draft       bool
 	// CommitsCount, ChangedFiles, Additions and Deletions are best-effort:
-	// providers expose them inconsistently, and zero means "not reported".
-	CommitsCount int
-	ChangedFiles int
-	Additions    int
-	Deletions    int
+	// providers expose them inconsistently. nil means the provider did not
+	// report the number — which is not the same as reporting zero, and must not
+	// render as "0 files changed". GitHub omits all four when listing pull
+	// requests and fills them only on the detail call; GitLab reports none of
+	// them on the merge request itself, so its detail view sums them from the
+	// diffs.
+	CommitsCount *int
+	ChangedFiles *int
+	Additions    *int
+	Deletions    *int
 	WebURL       string
 	CreatedAt    string
 	UpdatedAt    string
@@ -158,6 +173,67 @@ type ChangeRequestFile struct {
 	Deletions int
 	Changes   int
 	Patch     string
+}
+
+// Issue states, normalized across providers. GitLab says `opened`/`closed`;
+// its adapter maps the first onto `open`, matching GitHub and the vocabulary
+// the frontend already speaks for change requests.
+const (
+	IssueStateOpen   = "open"
+	IssueStateClosed = "closed"
+)
+
+// Issue is a bug or task tracked on the repository's host.
+//
+// It is deliberately *not* a ChangeRequest: on GitHub every pull request is
+// also an issue, and conflating them is exactly the bug the adapter guards
+// against — `GET /issues` returns both, and only the `pull_request` field
+// tells them apart.
+//
+// Timestamps stay strings for the same reason they do on ChangeRequest: they
+// are passed through to the API DTOs as provider ISO-8601.
+type Issue struct {
+	Number int64
+	Title  string
+	State  string
+	// AuthorLogin is the provider username (`user.login` on GitHub,
+	// `author.username` on GitLab).
+	AuthorLogin string
+	Labels      []string
+	// CommentsCount is best-effort: zero means none reported.
+	CommentsCount int
+	WebURL        string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+// Contributor is one person credited with commits on a repository.
+//
+// Login and Name are both optional because the two providers report disjoint
+// halves of the identity, and neither can be synthesized from the other:
+// GitHub's contributors endpoint returns a `login` and no display name, while
+// GitLab's returns a `name` and an email and no username. Callers must render
+// whichever is present rather than assuming either.
+//
+// Note what is absent: neither provider reports a contributor's change-request
+// count or last activity from this endpoint. Anything of that kind has to be
+// derived from data we actually fetch — and labelled for what it really is.
+type Contributor struct {
+	Login     string
+	Name      string
+	Email     string
+	AvatarURL string
+	// Commits is the provider's contribution count for the default branch.
+	Commits int
+}
+
+// DisplayName returns the best identity the provider gave us, preferring the
+// human name and falling back to the username.
+func (c Contributor) DisplayName() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return c.Login
 }
 
 // Tree entry types.

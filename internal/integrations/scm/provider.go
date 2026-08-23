@@ -65,6 +65,41 @@ type CloneAuthorizer interface {
 	CloneAuth() (username, password string)
 }
 
+// IssueReader serves read-only issue browsing.
+type IssueReader interface {
+	// ListIssues returns the open issues for a repository.
+	//
+	// Implementations must exclude change requests. GitHub's issues endpoint
+	// returns pull requests alongside real issues, so an adapter that forwards
+	// the response verbatim will double-list every open PR.
+	ListIssues(ctx context.Context, ref RepoRef) ([]Issue, error)
+}
+
+// ContributorReader serves the list of people credited with commits.
+type ContributorReader interface {
+	// ListContributors returns contributors ordered by commit count, most
+	// prolific first. See Contributor for why the identity fields are provider-
+	// dependent.
+	ListContributors(ctx context.Context, ref RepoRef) ([]Contributor, error)
+}
+
+// IssueWriter covers the issue mutations the platform performs on the user's
+// behalf. These act as the *organization's* token, not the signed-in person —
+// see the handler for how attribution is preserved in the payload.
+type IssueWriter interface {
+	CloseIssue(ctx context.Context, ref RepoRef, number int64) error
+}
+
+// ChangeRequestReviewer submits a review verdict on a change request.
+//
+// RequestChanges may return ErrUnsupportedCapability: GitLab has approve and
+// unapprove over REST, but no portable equivalent of GitHub's REQUEST_CHANGES
+// review event. Callers must handle that rather than assume the action lands.
+type ChangeRequestReviewer interface {
+	ApproveChangeRequest(ctx context.Context, ref RepoRef, number int64, body string) error
+	RequestChanges(ctx context.Context, ref RepoRef, number int64, body string) error
+}
+
 // Provider is a source-code host that supports every capability the platform
 // uses. Depend on the narrowest interface that fits; this composition exists
 // for the resolver's return type.
@@ -72,6 +107,10 @@ type Provider interface {
 	CatalogReader
 	ChangeRequestReader
 	ChangeRequestWriter
+	ChangeRequestReviewer
+	IssueReader
+	IssueWriter
+	ContributorReader
 	WebhookRegistrar
 	CloneAuthorizer
 }

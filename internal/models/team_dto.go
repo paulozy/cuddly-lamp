@@ -20,6 +20,7 @@ type TeamResponse struct {
 	Description     string     `json:"description,omitempty"`
 	Source          TeamSource `json:"source"`
 	MemberCount     int        `json:"member_count"`
+	ViewerIsMember  bool       `json:"viewer_is_member"`
 	RepositoryCount int        `json:"repository_count"`
 	CreatedAt       time.Time  `json:"created_at"`
 }
@@ -70,6 +71,7 @@ func TeamToResponse(t *Team) TeamResponse {
 		Source:          t.Source(),
 		MemberCount:     t.MemberCount,
 		RepositoryCount: t.RepositoryCount,
+		ViewerIsMember:  t.ViewerIsMember,
 		CreatedAt:       t.CreatedAt,
 	}
 }

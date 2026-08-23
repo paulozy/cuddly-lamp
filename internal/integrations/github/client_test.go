@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -246,5 +247,100 @@ func TestCreatePullRequest(t *testing.T) {
 	}
 	if pr.Number != 12 || pr.HTMLURL == "" {
 		t.Fatalf("pr = %+v, want number and url", pr)
+	}
+}
+
+// GitHub's issues endpoint returns pull requests alongside real issues. This
+// is the whole reason ListIssues exists rather than a bare `do` call: without
+// the filter, every open PR would be listed twice in the UI — once under Pull
+// requests and once under Issues.
+func TestClient_ListIssues_ExcludesPullRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/issues" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if got := r.URL.Query().Get("state"); got != "open" {
+			t.Errorf("state = %q, want open", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `[
+			{"number": 88, "title": "Sidebar does not collapse", "state": "open",
+			 "user": {"login": "julia.r"}, "comments": 3,
+			 "labels": [{"name": "bug"}, {"name": "ui"}]},
+			{"number": 412, "title": "Extract AppShell", "state": "open",
+			 "user": {"login": "ana.m"}, "pull_request": {"url": "https://api.github.com/pulls/412"}}
+		]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListIssues(context.Background(), "owner", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d issues, want 1 (the pull request must be filtered out)", len(got))
+	}
+	if got[0].Number != 88 {
+		t.Errorf("number = %d, want 88", got[0].Number)
+	}
+	if got[0].Comments != 3 {
+		t.Errorf("comments = %d, want 3", got[0].Comments)
+	}
+	if labels := got[0].LabelNames(); len(labels) != 2 || labels[0] != "bug" || labels[1] != "ui" {
+		t.Errorf("labels = %v, want [bug ui]", labels)
+	}
+}
+
+func TestClient_ListIssues_EmptyIsNotNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `[]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListIssues(context.Background(), "owner", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Error("got nil, want an empty slice — a nil marshals to JSON null, not []")
+	}
+}
+
+func TestClient_ListContributors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/contributors" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `[
+			{"login": "paulozy", "contributions": 210, "avatar_url": "https://x/1"},
+			{"login": "ana-m", "contributions": 132, "avatar_url": "https://x/2"}
+		]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListContributors(context.Background(), "owner", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d contributors, want 2", len(got))
+	}
+	if got[0].Login != "paulozy" || got[0].Contributions != 210 {
+		t.Errorf("first contributor = %+v, want paulozy with 210", got[0])
+	}
+}
+
+func TestClient_ListContributors_Unauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	if _, err := newTestClient(srv).ListContributors(context.Background(), "owner", "repo"); err != ErrUnauthorized {
+		t.Errorf("got %v, want ErrUnauthorized", err)
 	}
 }

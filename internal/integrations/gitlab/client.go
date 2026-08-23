@@ -4,6 +4,7 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -272,13 +273,19 @@ type MergeRequest struct {
 
 // ChangedFileCount parses ChangesCount, returning 0 when GitLab reported
 // nothing or something non-numeric like "1000+".
-func (m *MergeRequest) ChangedFileCount() int {
+// ChangedFileCount parses `changes_count`, which GitLab documents as a string
+// and can send as "1000+" when the diff is too large to count exactly.
+//
+// nil means GitLab reported nothing usable — absent on the list endpoint, or a
+// value that did not parse. That is not the same as a merge request touching no
+// files, and callers must not render it as zero.
+func (m *MergeRequest) ChangedFileCount() *int {
 	digits := strings.TrimRight(strings.TrimSpace(m.ChangesCount), "+")
 	n, err := strconv.Atoi(digits)
 	if err != nil {
-		return 0
+		return nil
 	}
-	return n
+	return &n
 }
 
 func (c *Client) ListMergeRequests(ctx context.Context, path string) ([]MergeRequest, error) {
@@ -289,6 +296,94 @@ func (c *Client) ListMergeRequests(ctx context.Context, path string) ([]MergeReq
 		return nil, err
 	}
 	return mrs, nil
+}
+
+// Issue is GitLab's issue payload. Unlike GitHub, GitLab keeps issues and
+// merge requests on separate endpoints, so nothing needs filtering here.
+type Issue struct {
+	ID     int64    `json:"id"`
+	IID    int64    `json:"iid"`
+	Title  string   `json:"title"`
+	State  string   `json:"state"` // opened, closed
+	Labels []string `json:"labels"`
+	// UserNotesCount counts discussion notes, GitLab's equivalent of comments.
+	UserNotesCount int    `json:"user_notes_count"`
+	WebURL         string `json:"web_url"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+	Author         struct {
+		Username string `json:"username"`
+		Name     string `json:"name"`
+	} `json:"author"`
+}
+
+// Contributor is GitLab's contributor payload. It identifies people by name
+// and email — there is no username here, and no activity timestamp.
+type Contributor struct {
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	Commits   int    `json:"commits"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
+// ListIssues returns the open issues for a project, most recently updated
+// first.
+func (c *Client) ListIssues(ctx context.Context, path string) ([]Issue, error) {
+	var issues []Issue
+	endpoint := fmt.Sprintf("/projects/%s/issues?state=opened&per_page=100&order_by=updated_at",
+		projectPath(path))
+	if _, err := c.do(ctx, http.MethodGet, endpoint, nil, &issues); err != nil {
+		return nil, err
+	}
+	return issues, nil
+}
+
+// CloseIssue closes an issue. GitLab mutates state through `state_event`
+// rather than by assigning the state directly.
+func (c *Client) CloseIssue(ctx context.Context, path string, iid int64) error {
+	body, err := json.Marshal(map[string]string{"state_event": "close"})
+	if err != nil {
+		return fmt.Errorf("marshal close issue: %w", err)
+	}
+	endpoint := fmt.Sprintf("/projects/%s/issues/%d", projectPath(path), iid)
+	_, err = c.do(ctx, http.MethodPut, endpoint, bytes.NewReader(body), nil)
+	return err
+}
+
+// ApproveMergeRequest records an approval.
+//
+// GitLab has no REST counterpart to GitHub's REQUEST_CHANGES review event that
+// is stable across versions, so only the positive verdict is implemented here;
+// the adapter reports the other as an unsupported capability.
+func (c *Client) ApproveMergeRequest(ctx context.Context, path string, iid int64) error {
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/approve", projectPath(path), iid)
+	_, err := c.do(ctx, http.MethodPost, endpoint, nil, nil)
+	return err
+}
+
+// CreateMergeRequestNote posts a discussion note. It is how attribution
+// survives an action taken with the organization's token — see the handler.
+func (c *Client) CreateMergeRequestNote(ctx context.Context, path string, iid int64, note string) error {
+	body, err := json.Marshal(map[string]string{"body": note})
+	if err != nil {
+		return fmt.Errorf("marshal note: %w", err)
+	}
+	endpoint := fmt.Sprintf("/projects/%s/merge_requests/%d/notes", projectPath(path), iid)
+	_, err = c.do(ctx, http.MethodPost, endpoint, bytes.NewReader(body), nil)
+	return err
+}
+
+// ListContributors returns contributors to the default branch, ordered by
+// commit count so the shape matches GitHub's.
+func (c *Client) ListContributors(ctx context.Context, path string) ([]Contributor, error) {
+	var contributors []Contributor
+	endpoint := fmt.Sprintf("/projects/%s/repository/contributors?per_page=100&order_by=commits&sort=desc",
+		projectPath(path))
+	if _, err := c.do(ctx, http.MethodGet, endpoint, nil, &contributors); err != nil {
+		return nil, err
+	}
+	return contributors, nil
 }
 
 func (c *Client) GetMergeRequest(ctx context.Context, path string, iid int64) (*MergeRequest, error) {

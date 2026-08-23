@@ -141,8 +141,13 @@ func TestFake_MergeRequestsMatchWhatTheClientExpects(t *testing.T) {
 		t.Errorf("detail = %+v, want iid 7222 and a base sha from diff_refs", detail)
 	}
 	// Counted from the diff bodies, because GitLab reports no line counts.
-	if detail.Additions != 3 || detail.Deletions != 1 || detail.ChangedFiles != 2 {
-		t.Errorf("additions/deletions/files = %d/%d/%d, want 3/1/2", detail.Additions, detail.Deletions, detail.ChangedFiles)
+	if detail.Additions == nil || detail.Deletions == nil || detail.ChangedFiles == nil {
+		t.Fatalf("additions/deletions/files = %v/%v/%v, want all three counted from the diffs",
+			detail.Additions, detail.Deletions, detail.ChangedFiles)
+	}
+	if *detail.Additions != 3 || *detail.Deletions != 1 || *detail.ChangedFiles != 2 {
+		t.Errorf("additions/deletions/files = %d/%d/%d, want 3/1/2",
+			*detail.Additions, *detail.Deletions, *detail.ChangedFiles)
 	}
 
 	files, err := provider.GetChangeRequestFiles(context.Background(), ref, 7222)

@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,10 @@ type ClientInterface interface {
 	GetBranches(ctx context.Context, owner, repo string) ([]Branch, error)
 	GetCommits(ctx context.Context, owner, repo, branch string, limit int) ([]Commit, error)
 	ListPullRequests(ctx context.Context, owner, repo string) ([]PullRequest, error)
+	ListIssues(ctx context.Context, owner, repo string) ([]Issue, error)
+	ListContributors(ctx context.Context, owner, repo string) ([]Contributor, error)
+	CloseIssue(ctx context.Context, owner, repo string, number int64) error
+	SubmitReview(ctx context.Context, owner, repo string, number int64, event, reviewBody string) error
 	CreateWebhook(ctx context.Context, owner, repo, webhookURL, secret string) (int64, error)
 	DeleteWebhook(ctx context.Context, owner, repo string, webhookID int64) error
 	GetPullRequest(ctx context.Context, owner, repo string, prID int64) (*PullRequest, error)
@@ -76,22 +81,25 @@ type commitUser struct {
 }
 
 type PullRequest struct {
-	ID             int64  `json:"id"`
-	Number         int64  `json:"number"`
-	Title          string `json:"title"`
-	Body           string `json:"body"`
-	State          string `json:"state"` // open, closed
-	User           User   `json:"user"`
-	Head           Branch `json:"head"`
-	Base           Branch `json:"base"`
-	MergedAt       string `json:"merged_at,omitempty"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
-	Draft          bool   `json:"draft"`
-	CommitsCount   int    `json:"commits"`
-	ChangedFiles   int    `json:"changed_files"`
-	AdditionsCount int    `json:"additions"`
-	DeletionsCount int    `json:"deletions"`
+	ID        int64  `json:"id"`
+	Number    int64  `json:"number"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	State     string `json:"state"` // open, closed
+	User      User   `json:"user"`
+	Head      Branch `json:"head"`
+	Base      Branch `json:"base"`
+	MergedAt  string `json:"merged_at,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Draft     bool   `json:"draft"`
+	// Pointers because the *list* endpoint omits these four entirely — only
+	// `GET /pulls/{n}` carries them. Decoding into plain ints turned "GitHub
+	// did not say" into a confident "0 files, +0 −0".
+	CommitsCount   *int   `json:"commits"`
+	ChangedFiles   *int   `json:"changed_files"`
+	AdditionsCount *int   `json:"additions"`
+	DeletionsCount *int   `json:"deletions"`
 	HTMLURL        string `json:"html_url"`
 }
 
@@ -99,6 +107,59 @@ type User struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
 	Name  string `json:"name,omitempty"`
+}
+
+// Label is an issue label. Only the name is consumed; GitHub also sends a
+// color and description that nothing here renders.
+type Label struct {
+	Name string `json:"name"`
+}
+
+// Issue is GitHub's issue payload.
+//
+// PullRequest is the field that makes `GET /issues` usable: GitHub returns
+// pull requests from that endpoint too, and this sub-object is present only on
+// them. It is decoded as a raw pointer because its contents are irrelevant —
+// presence alone is the signal. See Issue.IsPullRequest.
+type Issue struct {
+	ID        int64   `json:"id"`
+	Number    int64   `json:"number"`
+	Title     string  `json:"title"`
+	Body      string  `json:"body"`
+	State     string  `json:"state"` // open, closed
+	User      User    `json:"user"`
+	Labels    []Label `json:"labels"`
+	Comments  int     `json:"comments"`
+	HTMLURL   string  `json:"html_url"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+
+	PullRequest *struct{} `json:"pull_request,omitempty"`
+}
+
+// IsPullRequest reports whether this "issue" is really a pull request.
+func (i Issue) IsPullRequest() bool { return i.PullRequest != nil }
+
+// LabelNames flattens the label objects to their names.
+func (i Issue) LabelNames() []string {
+	names := make([]string, 0, len(i.Labels))
+	for _, l := range i.Labels {
+		if l.Name != "" {
+			names = append(names, l.Name)
+		}
+	}
+	return names
+}
+
+// Contributor is GitHub's contributor payload. Note there is no display name
+// and no activity timestamp — `contributions` is the commit count and that is
+// all this endpoint gives.
+type Contributor struct {
+	ID            int64  `json:"id"`
+	Login         string `json:"login"`
+	AvatarURL     string `json:"avatar_url"`
+	Contributions int    `json:"contributions"`
+	Type          string `json:"type"`
 }
 
 type Client struct {
@@ -186,4 +247,53 @@ func (c *Client) ListPullRequests(ctx context.Context, owner, repo string) ([]Pu
 		return nil, err
 	}
 	return prs, nil
+}
+
+// ListIssues returns the open issues for a repository, with pull requests
+// filtered out — see Issue.PullRequest for why they are in the response at all.
+func (c *Client) ListIssues(ctx context.Context, owner, repo string) ([]Issue, error) {
+	var raw []Issue
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100", owner, repo), nil, &raw); err != nil {
+		return nil, err
+	}
+	issues := make([]Issue, 0, len(raw))
+	for _, issue := range raw {
+		if issue.IsPullRequest() {
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	return issues, nil
+}
+
+// CloseIssue closes an issue. GitHub uses the same endpoint for issues and
+// pull requests, but the caller has already established this is an issue.
+func (c *Client) CloseIssue(ctx context.Context, owner, repo string, number int64) error {
+	body, err := json.Marshal(map[string]string{"state": "closed"})
+	if err != nil {
+		return fmt.Errorf("marshal close issue: %w", err)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number)
+	return c.do(ctx, http.MethodPatch, path, bytes.NewReader(body), nil)
+}
+
+// SubmitReview posts a review verdict on a pull request. Event is GitHub's
+// review event vocabulary: APPROVE or REQUEST_CHANGES.
+func (c *Client) SubmitReview(ctx context.Context, owner, repo string, number int64, event, reviewBody string) error {
+	payload, err := json.Marshal(map[string]string{"event": event, "body": reviewBody})
+	if err != nil {
+		return fmt.Errorf("marshal review: %w", err)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number)
+	return c.do(ctx, http.MethodPost, path, bytes.NewReader(payload), nil)
+}
+
+// ListContributors returns contributors to the default branch, most commits
+// first (GitHub already sorts them that way).
+func (c *Client) ListContributors(ctx context.Context, owner, repo string) ([]Contributor, error) {
+	var contributors []Contributor
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/contributors?per_page=100", owner, repo), nil, &contributors); err != nil {
+		return nil, err
+	}
+	return contributors, nil
 }

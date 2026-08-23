@@ -41,6 +41,8 @@ type Project struct {
 	Languages       map[string]float64
 	Branches        []string
 	Commits         []Commit
+	Issues          []Issue
+	Contributors    []Contributor
 	// TreePages is served one page per element, so pagination is a real
 	// multi-request walk rather than a single response.
 	TreePages [][]TreeEntry
@@ -137,8 +139,11 @@ type Server struct {
 	files     []CommittedFile
 	branches  []CreatedBranch
 	createdMR []CreatedMergeRequest
-	nextIID   int64
-	client    *http.Client
+	// State a test can assert on after driving a write through the platform.
+	closedIssues map[int64]bool
+	approvedMRs  map[int64]bool
+	nextIID      int64
+	client       *http.Client
 }
 
 // New returns a fake requiring the given bearer token. An empty token accepts
@@ -198,6 +203,38 @@ func (s *Server) FireWebhook(event, eventUUID string, payload any) (int, error) 
 	}
 	hook := s.hooks[len(s.hooks)-1]
 	s.mu.Unlock()
+
+	return s.deliver(hook, event, eventUUID, payload)
+}
+
+// HookForRepo returns the webhook registered for one repository.
+//
+// Registration happens inside an asynchronous sync, so "the most recently
+// registered hook" is not reliably the one a given test caused — any other
+// test that created a repository can land its registration in between. Tests
+// that care about a specific repository must address it by id.
+func (s *Server) HookForRepo(repoID string) (Hook, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.hooks) - 1; i >= 0; i-- {
+		if strings.HasSuffix(s.hooks[i].URL, "/"+repoID) {
+			return s.hooks[i], true
+		}
+	}
+	return Hook{}, false
+}
+
+// FireWebhookTo delivers an event to one repository's webhook. Prefer it over
+// FireWebhook in tests — see HookForRepo for why.
+func (s *Server) FireWebhookTo(repoID, event, eventUUID string, payload any) (int, error) {
+	hook, ok := s.HookForRepo(repoID)
+	if !ok {
+		return 0, fmt.Errorf("fakegitlab: no webhook registered for repository %s", repoID)
+	}
+	return s.deliver(hook, event, eventUUID, payload)
+}
+
+func (s *Server) deliver(hook Hook, event, eventUUID string, payload any) (int, error) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -312,8 +349,16 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.serveMergeRequests(w, project)
 	case rest == "merge_requests" && r.Method == http.MethodPost:
 		s.createMergeRequest(w, r, project)
+	case rest == "issues" && r.Method == http.MethodGet:
+		s.serveIssues(w, project)
+	case strings.HasPrefix(rest, "issues/") && r.Method == http.MethodPut:
+		s.updateIssue(w, r, project, strings.TrimPrefix(rest, "issues/"))
+	case rest == "repository/contributors":
+		s.serveContributors(w, project)
 	case rest == "hooks" && r.Method == http.MethodPost:
 		s.createHook(w, r, project)
+	case strings.HasSuffix(rest, "/approve") && strings.HasPrefix(rest, "merge_requests/") && r.Method == http.MethodPost:
+		s.approveMergeRequest(w, project, strings.TrimSuffix(strings.TrimPrefix(rest, "merge_requests/"), "/approve"))
 	case strings.HasPrefix(rest, "merge_requests/"):
 		s.serveMergeRequestDetail(w, project, strings.TrimPrefix(rest, "merge_requests/"))
 	default:
@@ -606,6 +651,135 @@ func (s *Server) createMergeRequest(w http.ResponseWriter, r *http.Request, p *P
 		TargetBranch: payload.TargetBranch,
 		SHA:          "created-sha",
 	}, true))
+}
+
+// ── issues, contributors and the write actions ───────────────────────────────
+
+// Issue is a project issue as gitlab.com reports it. Note `iid` and the
+// `opened` state — both are places the adapter has to translate, and a fake
+// that used GitHub's vocabulary would let a bug through.
+type Issue struct {
+	ID             int
+	IID            int64
+	Title          string
+	State          string
+	Labels         []string
+	UserNotesCount int
+	AuthorUsername string
+}
+
+// Contributor is what /repository/contributors returns: a name and an email,
+// and deliberately no username — the asymmetry the platform has to cope with.
+type Contributor struct {
+	Name    string
+	Email   string
+	Commits int
+}
+
+func (s *Server) serveIssues(w http.ResponseWriter, p *Project) {
+	s.mu.Lock()
+	closed := make(map[int64]bool, len(s.closedIssues))
+	for iid := range s.closedIssues {
+		closed[iid] = true
+	}
+	s.mu.Unlock()
+
+	out := make([]map[string]any, 0, len(p.Issues))
+	for _, issue := range p.Issues {
+		if closed[issue.IID] {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id":               issue.ID,
+			"iid":              issue.IID,
+			"title":            issue.Title,
+			"state":            issue.State,
+			"labels":           issue.Labels,
+			"user_notes_count": issue.UserNotesCount,
+			"web_url":          fmt.Sprintf("https://gitlab.example/-/issues/%d", issue.IID),
+			"created_at":       "2026-08-20T10:00:00Z",
+			"updated_at":       "2026-08-20T10:00:00Z",
+			"author":           map[string]any{"username": issue.AuthorUsername, "name": issue.AuthorUsername},
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// updateIssue implements the `state_event=close` mutation and nothing else —
+// that is the only issue write the platform performs.
+func (s *Server) updateIssue(w http.ResponseWriter, r *http.Request, p *Project, rest string) {
+	iid, err := strconv.ParseInt(strings.Trim(rest, "/"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "bad iid"})
+		return
+	}
+	var payload struct {
+		StateEvent string `json:"state_event"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+	if payload.StateEvent != "close" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "unsupported state_event"})
+		return
+	}
+
+	s.mu.Lock()
+	if s.closedIssues == nil {
+		s.closedIssues = map[int64]bool{}
+	}
+	s.closedIssues[iid] = true
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"iid": iid, "state": "closed"})
+}
+
+func (s *Server) serveContributors(w http.ResponseWriter, p *Project) {
+	out := make([]map[string]any, 0, len(p.Contributors))
+	for _, c := range p.Contributors {
+		out = append(out, map[string]any{
+			"name":    c.Name,
+			"email":   c.Email,
+			"commits": c.Commits,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) approveMergeRequest(w http.ResponseWriter, p *Project, rest string) {
+	iid, err := strconv.ParseInt(strings.Trim(rest, "/"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "bad iid"})
+		return
+	}
+	s.mu.Lock()
+	if s.approvedMRs == nil {
+		s.approvedMRs = map[int64]bool{}
+	}
+	s.approvedMRs[iid] = true
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"iid": iid, "state": "opened"})
+}
+
+// ClosedIssues reports which issues a test caused to be closed.
+func (s *Server) ClosedIssues() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]int64, 0, len(s.closedIssues))
+	for iid := range s.closedIssues {
+		out = append(out, iid)
+	}
+	return out
+}
+
+// ApprovedMergeRequests reports which merge requests a test caused to be approved.
+func (s *Server) ApprovedMergeRequests() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]int64, 0, len(s.approvedMRs))
+	for iid := range s.approvedMRs {
+		out = append(out, iid)
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

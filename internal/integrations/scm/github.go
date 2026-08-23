@@ -139,6 +139,60 @@ func (p *githubProvider) ListChangeRequests(ctx context.Context, ref RepoRef) ([
 	return out, nil
 }
 
+func (p *githubProvider) ListIssues(ctx context.Context, ref RepoRef) ([]Issue, error) {
+	// The client already drops pull requests from the response; see
+	// github.Client.ListIssues.
+	issues, err := p.client.ListIssues(ctx, ref.Namespace, ref.Name)
+	if err != nil {
+		return nil, translateGitHubErr(err)
+	}
+	out := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, Issue{
+			Number:        issue.Number,
+			Title:         issue.Title,
+			State:         issue.State,
+			AuthorLogin:   issue.User.Login,
+			Labels:        issue.LabelNames(),
+			CommentsCount: issue.Comments,
+			WebURL:        issue.HTMLURL,
+			CreatedAt:     issue.CreatedAt,
+			UpdatedAt:     issue.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (p *githubProvider) CloseIssue(ctx context.Context, ref RepoRef, number int64) error {
+	return translateGitHubErr(p.client.CloseIssue(ctx, ref.Namespace, ref.Name, number))
+}
+
+func (p *githubProvider) ApproveChangeRequest(ctx context.Context, ref RepoRef, number int64, body string) error {
+	return translateGitHubErr(p.client.SubmitReview(ctx, ref.Namespace, ref.Name, number, "APPROVE", body))
+}
+
+func (p *githubProvider) RequestChanges(ctx context.Context, ref RepoRef, number int64, body string) error {
+	return translateGitHubErr(p.client.SubmitReview(ctx, ref.Namespace, ref.Name, number, "REQUEST_CHANGES", body))
+}
+
+func (p *githubProvider) ListContributors(ctx context.Context, ref RepoRef) ([]Contributor, error) {
+	contributors, err := p.client.ListContributors(ctx, ref.Namespace, ref.Name)
+	if err != nil {
+		return nil, translateGitHubErr(err)
+	}
+	out := make([]Contributor, 0, len(contributors))
+	for _, c := range contributors {
+		// Name stays empty on purpose: this endpoint returns only a login, and
+		// resolving each one to a display name would cost a request per person.
+		out = append(out, Contributor{
+			Login:     c.Login,
+			AvatarURL: c.AvatarURL,
+			Commits:   c.Contributions,
+		})
+	}
+	return out, nil
+}
+
 func (p *githubProvider) GetChangeRequest(ctx context.Context, ref RepoRef, number int64) (*ChangeRequest, error) {
 	pr, err := p.client.GetPullRequest(ctx, ref.Namespace, ref.Name, number)
 	if err != nil {
