@@ -6,10 +6,19 @@ const (
 	TypeSyncRepo       = "repo:sync"
 	TypeProcessWebhook = "webhook:process"
 	TypeGenerateDocs   = "docs:generate"
+	// TypeDeriveArchitecture reconciles derived architecture for one
+	// organization. It is org-scoped and not repo-scoped because an internal
+	// edge is inherently org-wide: knowing that A depends on B needs the index
+	// of names published by every repository in the organization.
+	TypeDeriveArchitecture = "architecture:derive"
 )
 
 type SyncRepoPayload struct {
 	RepositoryID string `json:"repository_id"`
+}
+
+type DeriveArchitecturePayload struct {
+	OrganizationID string `json:"organization_id"`
 }
 
 type WebhookProcessPayload struct {

@@ -2,7 +2,9 @@ package fakegitlab_test
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/gitlab"
@@ -223,5 +225,78 @@ func TestFake_RecordsWebhookRegistration(t *testing.T) {
 	}
 	if !hooks[0].SSLVerification {
 		t.Error("SSL verification was disabled")
+	}
+}
+
+// ── file contents ────────────────────────────────────────────────────────────
+
+func TestFake_GetFileContentServesRawBytes(t *testing.T) {
+	_, provider := newFake(t)
+
+	got, err := provider.GetFileContent(context.Background(), runnerRef(t), "main", "go.mod")
+	if err != nil {
+		t.Fatalf("GetFileContent() error = %v, want nil", err)
+	}
+	want := "module gitlab.com/gitlab-org/gitlab-runner\n\ngo 1.23\n"
+	if string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// The nested path is the point: GitLab addresses the file as a single path
+// segment with every slash percent-encoded, and the fake rejects a raw slash so
+// a client that forgets fails here instead of quietly hitting another route.
+func TestFake_GetFileContentEncodesNestedPath(t *testing.T) {
+	_, provider := newFake(t)
+
+	got, err := provider.GetFileContent(context.Background(), runnerRef(t), "main", ".gitlab/ci/build.gitlab-ci.yml")
+	if err != nil {
+		t.Fatalf("GetFileContent() error = %v, want nil", err)
+	}
+	if string(got) != "stages:\n  - build\n" {
+		t.Errorf("content = %q, want the build stage yaml", got)
+	}
+}
+
+// Absence must arrive as ErrNotFound and nothing else, because it is the only
+// failure a deriver is allowed to treat as "the file is not there".
+func TestFake_GetFileContentMissingFileIsNotFound(t *testing.T) {
+	_, provider := newFake(t)
+
+	_, err := provider.GetFileContent(context.Background(), runnerRef(t), "main", "package.json")
+	if !errors.Is(err, scm.ErrNotFound) {
+		t.Errorf("GetFileContent() error = %v, want scm.ErrNotFound", err)
+	}
+}
+
+// The ref has to reach the wire. A client that dropped it would silently read
+// the default branch and report it as the tag's content.
+func TestFake_GetFileContentHonoursNonDefaultRef(t *testing.T) {
+	_, provider := newFake(t)
+
+	got, err := provider.GetFileContent(context.Background(), runnerRef(t), "0-6-stable", "go.mod")
+	if err != nil {
+		t.Fatalf("GetFileContent() error = %v, want nil", err)
+	}
+	if !strings.Contains(string(got), "go 1.19") {
+		t.Errorf("content = %q, want the 0-6-stable go directive", got)
+	}
+}
+
+func TestFake_GetFileContentRejectsBadToken(t *testing.T) {
+	fake := fakegitlab.Default(token)
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+
+	provider, err := scm.For(models.RepositoryTypeGitLab, scm.Credentials{
+		GitLabToken:   "glpat-wrong",
+		GitLabBaseURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+
+	if _, err := provider.GetFileContent(context.Background(), runnerRef(t), "main", "go.mod"); !errors.Is(err, scm.ErrUnauthorized) {
+		t.Errorf("GetFileContent() error = %v, want scm.ErrUnauthorized", err)
 	}
 }

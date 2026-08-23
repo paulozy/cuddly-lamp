@@ -53,6 +53,11 @@ type Project struct {
 	MergeRequests []MergeRequest
 	// Diffs are keyed by merge request iid.
 	Diffs map[int64][]Diff
+	// Files is the content the raw file endpoint serves, keyed by repository
+	// path, for any ref. FilesByRef wins when it has an entry for the ref
+	// asked about, which is what lets a test prove the ref reaches the wire.
+	Files      map[string]string
+	FilesByRef map[string]map[string]string
 }
 
 type Commit struct {
@@ -343,6 +348,9 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.serveCommits(w, project)
 	case rest == "repository/tree":
 		s.serveTree(w, r, project)
+	case strings.HasPrefix(rest, "repository/files/") && strings.HasSuffix(rest, "/raw") && r.Method == http.MethodGet:
+		s.serveRawFile(w, r, project,
+			strings.TrimSuffix(strings.TrimPrefix(rest, "repository/files/"), "/raw"))
 	case strings.HasPrefix(rest, "repository/files/"):
 		s.serveFile(w, r, project, strings.TrimPrefix(rest, "repository/files/"))
 	case rest == "merge_requests" && r.Method == http.MethodGet:
@@ -564,6 +572,41 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request, p *Project
 	writeJSON(w, http.StatusCreated, map[string]any{"name": name})
 }
 
+// serveRawFile serves file contents the way gitlab.com does: the body is the
+// file, not a JSON envelope, and a path that does not exist is a 404 with
+// GitLab's own message.
+//
+// The escaped path arrives with every slash still percent-encoded, because that
+// is how the endpoint addresses a nested file — unescaping it here is what
+// proves the client encoded it correctly rather than sending raw slashes and
+// hitting a different route.
+func (s *Server) serveRawFile(w http.ResponseWriter, r *http.Request, p *Project, escapedPath string) {
+	filePath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "bad file path"})
+		return
+	}
+	if strings.Contains(escapedPath, "/") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"message": "file_path must be a single URL-encoded segment",
+		})
+		return
+	}
+
+	ref := r.URL.Query().Get("ref")
+	if byRef, ok := p.FilesByRef[ref]; ok {
+		if content, ok := byRef[filePath]; ok {
+			writeRaw(w, content)
+			return
+		}
+	}
+	if content, ok := p.Files[filePath]; ok {
+		writeRaw(w, content)
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"message": "404 File Not Found"})
+}
+
 // serveFile answers the existence probe with 404 until the file has been
 // written, which is what makes the client choose POST for a create and PUT for
 // an update.
@@ -780,6 +823,12 @@ func (s *Server) ApprovedMergeRequests() []int64 {
 		out = append(out, iid)
 	}
 	return out
+}
+
+func writeRaw(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

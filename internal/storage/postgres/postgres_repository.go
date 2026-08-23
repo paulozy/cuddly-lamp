@@ -677,6 +677,471 @@ func (pr *PostgresRepository) ListRepositoryRelationships(ctx context.Context, f
 	return relationships, nil
 }
 
+// ============ Derived Architecture Operations ============
+
+// UpsertRepositoryFact writes one extractor's output for one repository,
+// keyed by (repository_id, fact_kind) as migration 032 declares.
+func (pr *PostgresRepository) UpsertRepositoryFact(ctx context.Context, fact *models.RepositoryFact) error {
+	if fact.OrganizationID == "" || fact.RepositoryID == "" || !models.IsValidRepositoryFactKind(fact.FactKind) {
+		return errors.New("invalid repository fact data")
+	}
+	if len(fact.Payload) == 0 {
+		fact.Payload = []byte("{}")
+	}
+	now := time.Now().UTC()
+	if fact.ExtractedAt.IsZero() {
+		fact.ExtractedAt = now
+	}
+	if err := pr.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "repository_id"}, {Name: "fact_kind"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"organization_id", "payload", "tree_sha", "complete",
+				"extractor_version", "extracted_at", "updated_at",
+			}),
+		}).
+		Create(fact).Error; err != nil {
+		return fmt.Errorf("upsert repository fact: %w", err)
+	}
+	return nil
+}
+
+func (pr *PostgresRepository) GetRepositoryFact(ctx context.Context, repositoryID string, kind models.RepositoryFactKind) (*models.RepositoryFact, error) {
+	var fact models.RepositoryFact
+	if err := pr.db.WithContext(ctx).
+		First(&fact, "repository_id = ? AND fact_kind = ?", repositoryID, kind).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get repository fact: %w", err)
+	}
+	return &fact, nil
+}
+
+func (pr *PostgresRepository) ListRepositoryFacts(ctx context.Context, organizationID string, kind models.RepositoryFactKind) ([]models.RepositoryFact, error) {
+	var facts []models.RepositoryFact
+	if err := pr.db.WithContext(ctx).
+		Where("organization_id = ? AND fact_kind = ?", organizationID, kind).
+		Order("repository_id ASC").
+		Find(&facts).Error; err != nil {
+		return nil, fmt.Errorf("list repository facts: %w", err)
+	}
+	return facts, nil
+}
+
+// UpsertDerivedRelationship writes a derived edge idempotently.
+//
+// It is a lookup-then-write rather than a bare ON CONFLICT for one reason: the
+// unique index is partial on `deleted_at IS NULL`, so a live row can collide
+// with an identical soft-deleted twin, and the right answer there is to *revive*
+// the twin, not insert a second row. Reviving keeps the id stable, which keeps
+// every deep link to the edge — and anything attached to it — alive. A new row
+// would silently destroy both.
+func (pr *PostgresRepository) UpsertDerivedRelationship(ctx context.Context, rel *models.RepositoryRelationship) error {
+	if !rel.IsValid() {
+		return errors.New("invalid repository relationship data")
+	}
+	if !rel.IsDerived() {
+		return errors.New("derived relationship requires a derivation key")
+	}
+	if rel.Metadata == nil {
+		rel.Metadata = map[string]interface{}{}
+	}
+	now := time.Now().UTC()
+	if rel.LastSeenAt == nil {
+		rel.LastSeenAt = &now
+	}
+
+	return pr.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing models.RepositoryRelationship
+		err := tx.
+			Where(`organization_id = ? AND source_repository_id = ? AND target_repository_id = ?
+			       AND kind = ? AND derivation_key = ? AND derivation_fingerprint = ?`,
+				rel.OrganizationID, rel.SourceRepositoryID, rel.TargetRepositoryID,
+				rel.Kind, rel.DerivationKey, rel.DerivationFingerprint).
+			// A live row wins over a soft-deleted twin; among twins, the newest.
+			Order("deleted_at IS NOT NULL ASC, created_at DESC").
+			First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// created_by_user_id is a uuid column and nobody created this row, so
+			// it has to be omitted rather than sent as the Go zero value: GORM
+			// would write '' and Postgres rejects that as a uuid. Same
+			// NULL-is-not-empty-string trap the derivation columns avoid by
+			// being pointers.
+			insert := tx
+			if rel.CreatedByUserID == "" {
+				insert = tx.Omit("created_by_user_id")
+			}
+			if createErr := insert.Create(rel).Error; createErr != nil {
+				return fmt.Errorf("insert derived relationship: %w", createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("look up derived relationship: %w", err)
+		}
+
+		updates := map[string]interface{}{
+			"label":        rel.Label,
+			"description":  rel.Description,
+			"source":       rel.Source,
+			"confidence":   rel.Confidence,
+			"metadata":     rel.Metadata,
+			"last_seen_at": rel.LastSeenAt,
+			"updated_at":   now,
+			"deleted_at":   nil,
+		}
+		if updateErr := tx.Model(&models.RepositoryRelationship{}).
+			Where("id = ?", existing.ID).
+			Updates(updates).Error; updateErr != nil {
+			return fmt.Errorf("revive derived relationship: %w", updateErr)
+		}
+		rel.ID = existing.ID
+		rel.CreatedAt = existing.CreatedAt
+		rel.DeletedAt = nil
+		return nil
+	})
+}
+
+// SweepDerivedRelationships retires the rows this run did not re-observe.
+//
+// The `derivation_key = ?` predicate is the whole safety story: a human row
+// carries NULL there and can never match, so no amount of deriver confusion can
+// delete a declaration.
+func (pr *PostgresRepository) SweepDerivedRelationships(ctx context.Context, derivationKey string, runStartedAt time.Time) (int64, error) {
+	if derivationKey == "" {
+		return 0, errors.New("sweep requires a derivation key")
+	}
+	now := time.Now().UTC()
+	result := pr.db.WithContext(ctx).
+		Model(&models.RepositoryRelationship{}).
+		Where("derivation_key = ? AND last_seen_at < ? AND deleted_at IS NULL", derivationKey, runStartedAt.UTC()).
+		Updates(map[string]interface{}{"deleted_at": now, "updated_at": now})
+	if result.Error != nil {
+		return 0, fmt.Errorf("sweep derived relationships: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+func (pr *PostgresRepository) ListSuppressions(ctx context.Context, organizationID, derivationKey string) ([]models.DerivationSuppression, error) {
+	var suppressions []models.DerivationSuppression
+	query := pr.db.WithContext(ctx).Where("organization_id = ?", organizationID)
+	if derivationKey != "" {
+		query = query.Where("derivation_key = ?", derivationKey)
+	}
+	if err := query.Find(&suppressions).Error; err != nil {
+		return nil, fmt.Errorf("list derivation suppressions: %w", err)
+	}
+	return suppressions, nil
+}
+
+func (pr *PostgresRepository) CreateSuppression(ctx context.Context, suppression *models.DerivationSuppression) error {
+	if suppression.OrganizationID == "" || suppression.DerivationKey == "" || suppression.DerivationFingerprint == "" {
+		return errors.New("invalid derivation suppression data")
+	}
+	if err := pr.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "organization_id"}, {Name: "derivation_key"}, {Name: "derivation_fingerprint"},
+			},
+			DoNothing: true,
+		}).
+		Create(suppression).Error; err != nil {
+		return fmt.Errorf("create derivation suppression: %w", err)
+	}
+	return nil
+}
+
+// ============ API Discovery Operations ============
+
+// UpsertDerivedAPI inserts a discovered API, or revives and refreshes the row
+// already at that spec path.
+//
+// Same lookup-then-write shape as UpsertDerivedRelationship, and for the same
+// reason: the unique index is partial on `deleted_at IS NULL`, so a live row can
+// collide with an identical soft-deleted twin, and reviving keeps the id stable.
+//
+// Note what the update does *not* touch: spec_path. That is the identity, so a
+// spec that moved is a different row — a new API plus a sweep of the old one,
+// which is exactly what the catalog should say.
+func (pr *PostgresRepository) UpsertDerivedAPI(ctx context.Context, api *models.API) error {
+	if !api.IsValid() {
+		return errors.New("invalid api data")
+	}
+	if !api.IsDerived() {
+		return errors.New("derived api requires a derivation key")
+	}
+	if api.Metadata == nil {
+		api.Metadata = map[string]interface{}{}
+	}
+	now := time.Now().UTC()
+	if api.LastSeenAt == nil {
+		api.LastSeenAt = &now
+	}
+
+	return pr.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing models.API
+		err := tx.
+			Where("repository_id = ? AND spec_path = ?", api.RepositoryID, api.SpecPath).
+			Order("deleted_at IS NOT NULL ASC, created_at DESC").
+			First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if createErr := tx.Create(api).Error; createErr != nil {
+				return fmt.Errorf("insert derived api: %w", createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("look up derived api: %w", err)
+		}
+
+		updates := map[string]interface{}{
+			"kind":                   api.Kind,
+			"title":                  api.Title,
+			"version":                api.Version,
+			"operation_count":        api.OperationCount,
+			"derivation_key":         api.DerivationKey,
+			"derivation_fingerprint": api.DerivationFingerprint,
+			"metadata":               api.Metadata,
+			"last_seen_at":           api.LastSeenAt,
+			"updated_at":             now,
+			"deleted_at":             nil,
+		}
+		if updateErr := tx.Model(&models.API{}).
+			Where("id = ?", existing.ID).
+			Updates(updates).Error; updateErr != nil {
+			return fmt.Errorf("revive derived api: %w", updateErr)
+		}
+		api.ID = existing.ID
+		api.CreatedAt = existing.CreatedAt
+		api.DeletedAt = nil
+		return nil
+	})
+}
+
+func (pr *PostgresRepository) SweepDerivedAPIs(ctx context.Context, repositoryID, derivationKey string, runStartedAt time.Time) (int64, error) {
+	if repositoryID == "" || derivationKey == "" {
+		return 0, errors.New("sweep requires a repository and a derivation key")
+	}
+	now := time.Now().UTC()
+	result := pr.db.WithContext(ctx).
+		Model(&models.API{}).
+		Where("repository_id = ? AND derivation_key = ? AND last_seen_at < ? AND deleted_at IS NULL",
+			repositoryID, derivationKey, runStartedAt.UTC()).
+		Updates(map[string]interface{}{"deleted_at": now, "updated_at": now})
+	if result.Error != nil {
+		return 0, fmt.Errorf("sweep derived apis: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+func (pr *PostgresRepository) ListAPIs(ctx context.Context, organizationID string) ([]models.API, error) {
+	var apis []models.API
+	if err := pr.db.WithContext(ctx).
+		Where("organization_id = ? AND deleted_at IS NULL", organizationID).
+		Order("repository_id ASC, spec_path ASC").
+		Find(&apis).Error; err != nil {
+		return nil, fmt.Errorf("list apis: %w", err)
+	}
+	return apis, nil
+}
+
+// ============ Resource Discovery Operations ============
+
+// UpsertDerivedResource inserts a resource or finds the one that already carries
+// its locator, and writes the id back onto the argument.
+//
+// The lookup is by *identity*, not by derivation key, and that is the whole point
+// of the shared case: two repositories that independently name
+// `postgres://db.prod.internal:5432/orders` must converge on one row. The scoped
+// case keys on the repository as well, so two repositories each running a local
+// Postgres stay two rows — see migration 035 for why that is the desired answer
+// rather than a limitation.
+func (pr *PostgresRepository) UpsertDerivedResource(ctx context.Context, resource *models.Resource) error {
+	if !resource.IsValid() {
+		return errors.New("invalid resource data")
+	}
+	if !resource.IsDerived() {
+		return errors.New("derived resource requires a derivation key")
+	}
+	if resource.Metadata == nil {
+		resource.Metadata = map[string]interface{}{}
+	}
+	now := time.Now().UTC()
+	if resource.LastSeenAt == nil {
+		resource.LastSeenAt = &now
+	}
+
+	return pr.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("organization_id = ? AND engine = ?", resource.OrganizationID, resource.Engine)
+		if resource.IsScoped() {
+			query = query.Where("scoped_repository_id = ? AND COALESCE(display_name, '') = ?",
+				*resource.ScopedRepositoryID, resource.DisplayName)
+		} else {
+			// COALESCE mirrors the unique index: Postgres treats NULLs as distinct
+			// in a unique index, so a NULL port would defeat the unification the
+			// index exists to provide.
+			query = query.Where(`scoped_repository_id IS NULL AND host = ?
+			                     AND COALESCE(port, -1) = ? AND COALESCE(namespace, '') = ?`,
+				resource.Host, coalescePort(resource.Port), resource.Namespace)
+		}
+
+		var existing models.Resource
+		err := query.Order("deleted_at IS NOT NULL ASC, created_at DESC").First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if createErr := tx.Create(resource).Error; createErr != nil {
+				return fmt.Errorf("insert derived resource: %w", createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("look up derived resource: %w", err)
+		}
+
+		updates := map[string]interface{}{
+			"display_name": resource.DisplayName,
+			"metadata":     resource.Metadata,
+			"last_seen_at": resource.LastSeenAt,
+			"updated_at":   now,
+			"deleted_at":   nil,
+		}
+		if updateErr := tx.Model(&models.Resource{}).
+			Where("id = ?", existing.ID).
+			Updates(updates).Error; updateErr != nil {
+			return fmt.Errorf("revive derived resource: %w", updateErr)
+		}
+		resource.ID = existing.ID
+		resource.CreatedAt = existing.CreatedAt
+		resource.DeletedAt = nil
+		return nil
+	})
+}
+
+func coalescePort(port *int) int {
+	if port == nil {
+		return -1
+	}
+	return *port
+}
+
+// UpsertDerivedRepositoryResource records one repository's claim to use a
+// resource.
+func (pr *PostgresRepository) UpsertDerivedRepositoryResource(ctx context.Context, link *models.RepositoryResource) error {
+	if !link.IsValid() {
+		return errors.New("invalid repository resource data")
+	}
+	if !link.IsDerived() {
+		return errors.New("derived repository resource requires a derivation key")
+	}
+	if link.Metadata == nil {
+		link.Metadata = map[string]interface{}{}
+	}
+	now := time.Now().UTC()
+	if link.LastSeenAt == nil {
+		link.LastSeenAt = &now
+	}
+
+	return pr.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing models.RepositoryResource
+		err := tx.
+			Where(`repository_id = ? AND resource_id = ?
+			       AND derivation_key = ? AND derivation_fingerprint = ?`,
+				link.RepositoryID, link.ResourceID, link.DerivationKey, link.DerivationFingerprint).
+			Order("deleted_at IS NOT NULL ASC, created_at DESC").
+			First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if createErr := tx.Create(link).Error; createErr != nil {
+				return fmt.Errorf("insert repository resource: %w", createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("look up repository resource: %w", err)
+		}
+
+		updates := map[string]interface{}{
+			"confidence":   link.Confidence,
+			"metadata":     link.Metadata,
+			"last_seen_at": link.LastSeenAt,
+			"updated_at":   now,
+			"deleted_at":   nil,
+		}
+		if updateErr := tx.Model(&models.RepositoryResource{}).
+			Where("id = ?", existing.ID).
+			Updates(updates).Error; updateErr != nil {
+			return fmt.Errorf("revive repository resource: %w", updateErr)
+		}
+		link.ID = existing.ID
+		link.CreatedAt = existing.CreatedAt
+		link.DeletedAt = nil
+		return nil
+	})
+}
+
+func (pr *PostgresRepository) SweepDerivedRepositoryResources(ctx context.Context, repositoryID, derivationKey string, runStartedAt time.Time) (int64, error) {
+	if repositoryID == "" || derivationKey == "" {
+		return 0, errors.New("sweep requires a repository and a derivation key")
+	}
+	now := time.Now().UTC()
+	result := pr.db.WithContext(ctx).
+		Model(&models.RepositoryResource{}).
+		Where("repository_id = ? AND derivation_key = ? AND last_seen_at < ? AND deleted_at IS NULL",
+			repositoryID, derivationKey, runStartedAt.UTC()).
+		Updates(map[string]interface{}{"deleted_at": now, "updated_at": now})
+	if result.Error != nil {
+		return 0, fmt.Errorf("sweep repository resources: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// RetireOrphanResources soft-deletes derived resources nothing references.
+//
+// It runs after every repository's join has been reconciled, because a shared
+// resource is only orphaned once the *last* repository stops naming it — deciding
+// that from inside one repository's sweep is impossible. Human-created rows are
+// excluded by `derivation_key IS NOT NULL`, the same structural guarantee the
+// relationship sweep relies on.
+func (pr *PostgresRepository) RetireOrphanResources(ctx context.Context, organizationID string) (int64, error) {
+	if organizationID == "" {
+		return 0, errors.New("retire requires an organization id")
+	}
+	now := time.Now().UTC()
+	result := pr.db.WithContext(ctx).
+		Model(&models.Resource{}).
+		Where(`organization_id = ? AND derivation_key IS NOT NULL AND deleted_at IS NULL
+		       AND NOT EXISTS (
+		           SELECT 1 FROM repository_resources rr
+		            WHERE rr.resource_id = resources.id AND rr.deleted_at IS NULL
+		       )`, organizationID).
+		Updates(map[string]interface{}{"deleted_at": now, "updated_at": now})
+	if result.Error != nil {
+		return 0, fmt.Errorf("retire orphan resources: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+func (pr *PostgresRepository) ListResources(ctx context.Context, organizationID string) ([]models.Resource, error) {
+	var resources []models.Resource
+	if err := pr.db.WithContext(ctx).
+		Where("organization_id = ? AND deleted_at IS NULL", organizationID).
+		Order("engine ASC, display_name ASC").
+		Find(&resources).Error; err != nil {
+		return nil, fmt.Errorf("list resources: %w", err)
+	}
+	return resources, nil
+}
+
+func (pr *PostgresRepository) ListRepositoryResources(ctx context.Context, organizationID string) ([]models.RepositoryResource, error) {
+	var links []models.RepositoryResource
+	if err := pr.db.WithContext(ctx).
+		Where("organization_id = ? AND deleted_at IS NULL", organizationID).
+		Order("repository_id ASC").
+		Find(&links).Error; err != nil {
+		return nil, fmt.Errorf("list repository resources: %w", err)
+	}
+	return links, nil
+}
+
 // ============ Webhook Operations ============
 
 func (pr *PostgresRepository) GetWebhook(ctx context.Context, id string) (*models.Webhook, error) {

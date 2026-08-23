@@ -143,6 +143,14 @@ var vendoredSegments = map[string]bool{
 	".yarn": true, "site-packages": true, ".venv": true, "venv": true, "env": true,
 }
 
+// IsVendored reports whether path sits inside a vendored dependency tree.
+//
+// Exported because the architecture derivers need the same list. One auditable
+// list, derived from github-linguist's `vendor.yml`, is the filter that kills a
+// whole class of false positive — `node_modules/lodash/package.json` is not a
+// manifest of this repository. Two copies of the list diverge within a year.
+func IsVendored(path string) bool { return isVendored(path) }
+
 func isVendored(path string) bool {
 	segments := strings.Split(path, "/")
 	for i, seg := range segments {

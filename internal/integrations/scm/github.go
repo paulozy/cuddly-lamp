@@ -181,6 +181,19 @@ func (p *githubProvider) GetTree(ctx context.Context, ref RepoRef, gitRef string
 	return &RepoTree{SHA: tree.SHA, Truncated: tree.Truncated, Entries: entries}, nil
 }
 
+// GetFileContent reads one file at gitRef, capped at MaxFileBytes.
+//
+// The cap is enforced here rather than left to the caller because GitHub will
+// serve up to 100 MB in raw mode, and no manifest this platform parses is worth
+// more than 256 KB of it.
+func (p *githubProvider) GetFileContent(ctx context.Context, ref RepoRef, gitRef, path string) ([]byte, error) {
+	content, err := p.client.GetFileContent(ctx, ref.Namespace, ref.Name, gitRef, path, MaxFileBytes)
+	if err != nil {
+		return nil, translateGitHubErr(err)
+	}
+	return content, nil
+}
+
 func (p *githubProvider) ListChangeRequests(ctx context.Context, ref RepoRef) ([]ChangeRequest, error) {
 	prs, err := p.client.ListPullRequests(ctx, ref.Namespace, ref.Name)
 	if err != nil {

@@ -9,6 +9,12 @@ const (
 	// HugePath serves an endless tree, so the client hits its page ceiling and
 	// reports the listing as truncated.
 	HugePath = "gitlab-org/huge-monorepo"
+	// CheckoutPath and SharedPath are the pair architecture derivation needs:
+	// checkout's go.mod requires the module shared's go.mod publishes, so the
+	// package index has exactly one internal edge to find. Nothing else in the
+	// two trees matches a manifest, which keeps the assertion unambiguous.
+	CheckoutPath = "e2e-org/checkout"
+	SharedPath   = "e2e-org/shared"
 )
 
 func intPtr(v int) *int { return &v }
@@ -56,6 +62,16 @@ func RunnerProject() *Project {
 		Contributors: []Contributor{
 			{Name: "Vishal Tak", Email: "vishal@example.com", Commits: 240},
 			{Name: "Dev", Email: "dev@example.com", Commits: 58},
+		},
+		// File contents the raw endpoint serves. `.gitlab/ci/build.gitlab-ci.yml`
+		// is here because it is nested: reading it proves the client encoded the
+		// slashes into a single path segment instead of sending them raw.
+		Files: map[string]string{
+			"go.mod":                         "module gitlab.com/gitlab-org/gitlab-runner\n\ngo 1.23\n",
+			".gitlab/ci/build.gitlab-ci.yml": "stages:\n  - build\n",
+		},
+		FilesByRef: map[string]map[string]string{
+			"0-6-stable": {"go.mod": "module gitlab.com/gitlab-org/gitlab-runner\n\ngo 1.19\n"},
 		},
 		TreePages: [][]TreeEntry{
 			{
@@ -154,5 +170,69 @@ func HugeProject() *Project {
 
 // Default returns the fixture set the end-to-end suite runs against.
 func Default(token string) *Server {
-	return New(token, RunnerProject(), HugeProject())
+	return New(token, RunnerProject(), HugeProject(), CheckoutProject(), SharedProject())
+}
+
+// CheckoutProject declares a dependency on the module SharedProject publishes.
+// Its `go.mod` is the only manifest in the tree, so the derived edge can only
+// have come from it.
+func CheckoutProject() *Project {
+	return &Project{
+		ID:              700001,
+		Path:            CheckoutPath,
+		Description:     "checkout service",
+		DefaultBranch:   "main",
+		Visibility:      "private",
+		OpenIssuesCount: intPtr(0),
+		Languages:       map[string]float64{"Go": 100},
+		Branches:        []string{"main"},
+		Commits:         []Commit{{ID: "checkout-sha", Message: "init", AuthorName: "Dev"}},
+		TreePages: [][]TreeEntry{{
+			{Path: "go.mod", Type: "blob"},
+			{Path: "main.go", Type: "blob"},
+			{Path: "openapi.yaml", Type: "blob"},
+			{Path: "docker-compose.yml", Type: "blob"},
+			{Path: "k8s", Type: "tree"},
+			{Path: "k8s/deployment.yaml", Type: "blob"},
+		}},
+		Files: map[string]string{
+			"go.mod": "module gitlab.com/e2e-org/checkout\n\ngo 1.25\n\nrequire gitlab.com/e2e-org/shared v1.2.0\n",
+			// A real entry document: the root `openapi` field plus a REQUIRED Info
+			// Object is what makes the sniff decisive.
+			"openapi.yaml": "openapi: 3.0.3\ninfo:\n  title: Checkout API\n  version: 1.4.0\npaths:\n  /checkout:\n    post: {}\n  /checkout/{id}:\n    get: {}\n",
+			// A compose engine: proves the engine, says nothing about the instance,
+			// so the resource must come out scoped to this repository.
+			"docker-compose.yml": "services:\n  api:\n    build: .\n    depends_on:\n      - db\n  db:\n    image: postgres:16\n",
+			// The consumed host is a Service name SharedProject declares, which is
+			// the only reason the consumption edge is allowed to exist.
+			"k8s/deployment.yaml": "kind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n        - name: api\n          env:\n            - name: SHARED_API_URL\n              value: http://shared-api:8080\n",
+		},
+	}
+}
+
+// SharedProject publishes the module CheckoutProject requires.
+func SharedProject() *Project {
+	return &Project{
+		ID:              700002,
+		Path:            SharedPath,
+		Description:     "shared library",
+		DefaultBranch:   "main",
+		Visibility:      "private",
+		OpenIssuesCount: intPtr(0),
+		Languages:       map[string]float64{"Go": 100},
+		Branches:        []string{"main"},
+		Commits:         []Commit{{ID: "shared-sha", Message: "init", AuthorName: "Dev"}},
+		TreePages: [][]TreeEntry{{
+			{Path: "go.mod", Type: "blob"},
+			{Path: "shared.go", Type: "blob"},
+			{Path: "k8s", Type: "tree"},
+			{Path: "k8s/service.yaml", Type: "blob"},
+		}},
+		Files: map[string]string{
+			"go.mod": "module gitlab.com/e2e-org/shared\n\ngo 1.25\n",
+			// The Service declaration checkout's env value matches. In-cluster DNS is
+			// a naming contract, so this is what turns the match into evidence.
+			"k8s/service.yaml": "apiVersion: v1\nkind: Service\nmetadata:\n  name: shared-api\nspec:\n  ports:\n    - port: 8080\n",
+		},
+	}
 }

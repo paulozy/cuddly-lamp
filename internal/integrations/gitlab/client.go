@@ -116,6 +116,68 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, v 
 	return resp.Header, nil
 }
 
+// doRaw issues a GET whose body is not JSON and returns at most limit bytes.
+//
+// The raw file endpoint answers with the file itself, so `do` would fail
+// decoding it. Status handling mirrors `do` so callers switch on the same
+// sentinels either way.
+func (c *Client) doRaw(ctx context.Context, path string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, ErrUnauthorized
+	case http.StatusTooManyRequests:
+		return nil, ErrRateLimited
+	case http.StatusNotFound:
+		return nil, ErrNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, newAPIError(resp.StatusCode, raw)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	return body, nil
+}
+
+// filePathSegment encodes a repository file path for use as the `:file_path`
+// segment of the files endpoint.
+//
+// url.PathEscape leaves `/` alone — correct for a path, wrong here: GitLab
+// addresses the file by a *single* segment with every slash percent-encoded,
+// which is what makes `internal/config/app.yaml` addressable at all.
+// https://docs.gitlab.com/api/repository_files/
+func filePathSegment(path string) string {
+	return strings.ReplaceAll(url.PathEscape(strings.TrimPrefix(path, "/")), "/", "%2F")
+}
+
+// GetRawFile returns a repository file's bytes at ref, reading at most limit
+// bytes.
+func (c *Client) GetRawFile(ctx context.Context, path, ref, filePath string, limit int64) ([]byte, error) {
+	endpoint := fmt.Sprintf("/projects/%s/repository/files/%s/raw",
+		projectPath(path), filePathSegment(filePath))
+	if ref != "" {
+		endpoint += "?ref=" + url.QueryEscape(ref)
+	}
+	return c.doRaw(ctx, endpoint, limit)
+}
+
 // Project is a GitLab project, the equivalent of a GitHub repository.
 type Project struct {
 	ID                int      `json:"id"`

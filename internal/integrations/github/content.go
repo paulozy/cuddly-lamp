@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 type gitRefResponse struct {
@@ -74,4 +75,29 @@ func (c *Client) getFileSHA(ctx context.Context, owner, repo, branch, path strin
 		return "", err
 	}
 	return resp.SHA, nil
+}
+
+// GetFileContent returns a file's bytes at ref, reading at most limit bytes.
+//
+// `application/vnd.github.raw+json` makes the contents endpoint answer with the
+// file itself instead of a base64 envelope, which is what keeps this a single
+// request with no decoding step. The endpoint serves files up to 1 MB in every
+// mode and up to 100 MB in raw mode, so the caller's limit is the binding one.
+// https://docs.github.com/en/rest/repos/contents
+func (c *Client) GetFileContent(ctx context.Context, owner, repo, ref, path string, limit int64) ([]byte, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, escapeContentPath(path))
+	if ref != "" {
+		apiPath += "?ref=" + url.QueryEscape(ref)
+	}
+	return c.doRaw(ctx, apiPath, "application/vnd.github.raw+json", limit)
+}
+
+// escapeContentPath percent-encodes each path segment while keeping the
+// separators, because the contents endpoint addresses the file by path.
+func escapeContentPath(path string) string {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
 }
