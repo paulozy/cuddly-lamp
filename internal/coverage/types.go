@@ -20,6 +20,19 @@ const (
 	StatusFailed        Status = "failed"
 )
 
+// Header names the ingest endpoint reads.
+//
+// They live here rather than in the HTTP handler because two things need them: the
+// handler that parses them, and the setup endpoint that tells a CI which headers
+// to send. A second copy in the handler would be free to drift from the contract
+// it describes, and a snippet that names a header the endpoint does not read fails
+// on every run with a 400.
+const (
+	HeaderFormat    = "X-Coverage-Format"
+	HeaderCommitSHA = "X-Commit-SHA"
+	HeaderBranch    = "X-Coverage-Branch"
+)
+
 // MaxReportFileBytes caps the size of a single coverage report ingested by
 // the API. Larger reports are rejected by the upload handler with HTTP 413.
 const MaxReportFileBytes = 5 * 1024 * 1024

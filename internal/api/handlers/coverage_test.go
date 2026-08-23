@@ -14,6 +14,7 @@ import (
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 // Minimal mock that satisfies just the storage.Repository methods exercised
@@ -24,12 +25,23 @@ type fakeStore struct {
 	tokens     map[string]*models.CoverageUploadToken // by hash
 	tokensByID map[string]*models.CoverageUploadToken
 	uploads    []*models.CoverageUpload
+	repos      map[string]*models.Repository
+	orgConfig  *models.OrganizationConfig
+}
+
+func (f *fakeStore) GetRepository(ctx context.Context, id string) (*models.Repository, error) {
+	return f.repos[id], nil
+}
+
+func (f *fakeStore) GetOrganizationConfig(ctx context.Context, orgID string) (*models.OrganizationConfig, error) {
+	return f.orgConfig, nil
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		tokens:     map[string]*models.CoverageUploadToken{},
 		tokensByID: map[string]*models.CoverageUploadToken{},
+		repos:      map[string]*models.Repository{},
 	}
 }
 
@@ -102,7 +114,9 @@ func init() {
 
 func newTestRouter(store *fakeStore) (*gin.Engine, *services.CoverageService) {
 	svc := services.NewCoverageService(store)
-	h := NewCoverageHandler(svc)
+	// A reachable base URL, so the setup route under test renders a real ingest
+	// URL rather than the unreachable branch.
+	h := NewCoverageHandler(svc, "https://idp.example.com")
 	r := gin.New()
 	r.POST("/repositories/:id/coverage", h.IngestCoverage)
 	r.POST("/repositories/:id/coverage/tokens", func(c *gin.Context) {
@@ -110,6 +124,13 @@ func newTestRouter(store *fakeStore) (*gin.Engine, *services.CoverageService) {
 		h.CreateCoverageToken(c)
 	})
 	r.GET("/repositories/:id/coverage/tokens", h.ListCoverageTokens)
+	r.GET("/repositories/:id/coverage/setup", func(c *gin.Context) {
+		// The handler reads the org from the *request* context, which is where the
+		// auth middleware puts it — c.Set would be invisible to it.
+		ctx := context.WithValue(c.Request.Context(), utils.ContextKeyOrganization, "org-1")
+		c.Request = c.Request.WithContext(ctx)
+		h.GetCoverageSetup(c)
+	})
 	r.DELETE("/repositories/:id/coverage/tokens/:tokenID", h.RevokeCoverageToken)
 	return r, svc
 }

@@ -188,3 +188,56 @@ func TestDetectTests_EvidenceIsStableAcrossRuns(t *testing.T) {
 		}
 	}
 }
+
+// ── CI system from a stored evidence path ────────────────────────────────────
+
+// The stored metadata keeps only the evidence path, not the rule id DetectCI
+// computed, so reading the system back off the path is what lets an
+// already-synced repository get a correct answer with no re-sync.
+func TestCISystemForPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: ".github/workflows/ci.yml", want: "ci.github_actions"},
+		{path: ".github/workflows/nested/release.yaml", want: "ci.github_actions"},
+		{path: ".gitlab-ci.yml", want: "ci.gitlab"},
+		{path: ".gitlab-ci.yaml", want: "ci.gitlab"},
+		{path: ".circleci/config.yml", want: "ci.circleci"},
+		{path: "Jenkinsfile", want: "ci.jenkins"},
+		{path: ".travis.yml", want: "ci.travis"},
+		{path: ".buildkite/pipeline.yml", want: "ci.buildkite"},
+		{path: "azure-pipelines.yml", want: "ci.azure"},
+		// Not a CI config: the caller must get "" and say "unknown", never guess.
+		{path: "README.md", want: ""},
+		{path: "", want: ""},
+		{path: "src/config.yml", want: ""},
+		// Root-anchored, the same rule DetectCI relies on: a vendored dependency's
+		// CI config is not this repository's CI.
+		{path: "node_modules/some-pkg/.travis.yml", want: ""},
+		{path: "vendor/other/.gitlab-ci.yml", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := CISystemForPath(tt.path); got != tt.want {
+				t.Errorf("CISystemForPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+// The two must never disagree about what a given config file is, which is why
+// CISystemForPath reuses DetectCI's own tables rather than a second list.
+func TestCISystemForPath_AgreesWithDetectCI(t *testing.T) {
+	for _, path := range []string{
+		".github/workflows/ci.yml",
+		".gitlab-ci.yml",
+		".circleci/config.yml",
+		"Jenkinsfile",
+	} {
+		detection := DetectCI([]string{path}, false)
+		if got := CISystemForPath(path); got != detection.RuleID {
+			t.Errorf("CISystemForPath(%q) = %q, but DetectCI says %q", path, got, detection.RuleID)
+		}
+	}
+}

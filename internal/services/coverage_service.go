@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/paulozy/idp-with-ai-backend/internal/coverage"
+	"github.com/paulozy/idp-with-ai-backend/internal/detect"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	"github.com/paulozy/idp-with-ai-backend/internal/utils"
@@ -251,4 +252,121 @@ func isPlausibleSHA(s string) bool {
 		}
 	}
 	return true
+}
+
+// ── CI setup instructions ────────────────────────────────────────────────────
+
+// coverageSecretEnvName is the one value that genuinely has to be a CI secret.
+//
+// The other two inputs the upload needs are a public URL and a repository UUID.
+// Neither is sensitive, so neither belongs in `secrets.*` — and treating all three
+// as secrets is what turned a one-step setup into a three-step one that nobody
+// finished. Naming this constant here keeps the API and the client from disagreeing
+// about which is which.
+const coverageSecretEnvName = "IDP_COVERAGE_TOKEN"
+
+// ingestPathFormat is the upload route, kept next to the thing that serves it so
+// a generated snippet cannot drift from the real path.
+const ingestPathFormat = "/api/v1/repositories/%s/coverage"
+
+// BuildSetup gathers everything a person needs to wire a repository's CI to the
+// coverage endpoint.
+//
+// platformBaseURL is the deployment-wide fallback (`WEBHOOK_BASE_URL`); an
+// organization may override it. That precedence mirrors how provider credentials
+// already resolve in providerForRepository — the organization's own value wins,
+// the platform's is the default.
+func (s *CoverageService) BuildSetup(ctx context.Context, repoID, organizationID, platformBaseURL string) (*models.CoverageSetupResponse, error) {
+	repo, err := s.repo.GetRepository(ctx, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("get repository: %w", err)
+	}
+	if repo == nil {
+		return nil, ErrRepositoryNotFound
+	}
+	if repo.OrganizationID != organizationID {
+		return nil, ErrForbidden
+	}
+
+	baseURL := s.resolveIngestBaseURL(ctx, organizationID, platformBaseURL)
+
+	suggestion := coverage.SuggestFromLanguages(repo.Metadata.Languages)
+	formats := make([]string, 0, len(coverage.Formats()))
+	for _, format := range coverage.Formats() {
+		formats = append(formats, string(format))
+	}
+
+	setup := &models.CoverageSetupResponse{
+		BaseURL:      baseURL,
+		RepositoryID: repo.ID,
+		// A CI runner and a provider webhook have the same reachability
+		// requirement, so the same judgement applies: empty or loopback means the
+		// caller must not be handed a snippet that cannot possibly work.
+		Reachable:     !WebhookRegistrationUnavailable(baseURL),
+		Provider:      repo.Type,
+		CISystem:      detect.CISystemForPath(repo.Metadata.CIEvidence),
+		CIConfigPath:  repo.Metadata.CIEvidence,
+		HasCI:         repo.Metadata.HasCI,
+		DefaultBranch: repo.Metadata.DefaultBranch,
+		Suggestion: models.CoverageSuggestion{
+			Language:    suggestion.Language,
+			Format:      string(suggestion.Format),
+			ReportPath:  suggestion.ReportPath,
+			TestCommand: suggestion.TestCommand,
+		},
+		Formats:       formats,
+		SecretEnvName: coverageSecretEnvName,
+		Headers: models.CoverageSetupHeaders{
+			Format: coverage.HeaderFormat,
+			Commit: coverage.HeaderCommitSHA,
+			Branch: coverage.HeaderBranch,
+		},
+	}
+	if setup.Reachable {
+		setup.IngestURL = strings.TrimSuffix(baseURL, "/") + fmt.Sprintf(ingestPathFormat, repo.ID)
+	}
+
+	// A token nobody has ever used means the CI is not wired up. Surfacing it is
+	// the feedback loop that did not exist: the dogfooding workflow's own guard
+	// skips the upload silently when a secret is missing, so a botched setup was
+	// invisible from both ends.
+	tokens, err := s.ListUploadTokens(ctx, repo.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list coverage tokens: %w", err)
+	}
+	now := time.Now().UTC()
+	for _, token := range tokens {
+		if token == nil || !token.IsActive(now) {
+			continue
+		}
+		setup.HasActiveToken = true
+		if token.LastUsedAt != nil && (setup.LastUploadAt == nil || token.LastUsedAt.After(*setup.LastUploadAt)) {
+			setup.LastUploadAt = token.LastUsedAt
+		}
+	}
+
+	return setup, nil
+}
+
+// resolveIngestBaseURL prefers the organization's own public URL over the
+// platform default.
+//
+// OrganizationConfig.WebhookBaseURL has been persisted since migration 008 and
+// never read by anything; this is its first reader. A failure to load the config
+// is not fatal — falling back to the platform URL is strictly better than
+// refusing to render the panel.
+func (s *CoverageService) resolveIngestBaseURL(ctx context.Context, organizationID, platformBaseURL string) string {
+	if organizationID == "" {
+		return platformBaseURL
+	}
+	cfg, err := s.repo.GetOrganizationConfig(ctx, organizationID)
+	if err != nil {
+		utils.Warn("coverage: could not read organization config for the ingest URL",
+			"organization_id", organizationID, "error", err)
+		return platformBaseURL
+	}
+	if cfg != nil && strings.TrimSpace(cfg.WebhookBaseURL) != "" {
+		return strings.TrimSpace(cfg.WebhookBaseURL)
+	}
+	return platformBaseURL
 }

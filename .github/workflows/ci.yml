@@ -15,8 +15,12 @@ jobs:
     # Job-level env so the upload step's `if:` can read them. Step-level env
     # is not available during `if:` evaluation (it is set right before run).
     env:
-      IDP_BASE_URL: ${{ secrets.IDP_BASE_URL }}
-      IDP_REPOSITORY_ID: ${{ secrets.IDP_REPOSITORY_ID }}
+      # Only the token is a secret. The base URL is public and the repository id is
+      # a UUID, so both are repository *variables* — which is also the pattern the
+      # settings panel now tells users to follow. Treating all three as secrets is
+      # what made this a three-step setup nobody finished.
+      IDP_BASE_URL: ${{ vars.IDP_BASE_URL }}
+      IDP_REPOSITORY_ID: ${{ vars.IDP_REPOSITORY_ID }}
       IDP_COVERAGE_TOKEN: ${{ secrets.IDP_COVERAGE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +37,25 @@ jobs:
       - name: Test with coverage
         run: go test ./... -coverprofile=coverage.out -covermode=atomic
 
+      # Say out loud when the upload is skipped. The guard below is still right —
+      # a missing token must not fail a merge — but on its own it made an
+      # unconfigured repository indistinguishable from one with no coverage, on
+      # both ends. That silence is why the coverage feature shipped and stayed off:
+      # nobody could tell it was never wired up.
+      - name: Explain a skipped coverage upload
+        if: ${{ env.IDP_BASE_URL == '' || env.IDP_REPOSITORY_ID == '' || env.IDP_COVERAGE_TOKEN == '' }}
+        run: |
+          echo "::notice::Coverage upload skipped — the IDP is not configured for this repository."
+          echo "Missing:"
+          [ -z "$IDP_BASE_URL" ]       && echo "  - variable IDP_BASE_URL (the IDP's public URL)"
+          [ -z "$IDP_REPOSITORY_ID" ]  && echo "  - variable IDP_REPOSITORY_ID"
+          [ -z "$IDP_COVERAGE_TOKEN" ] && echo "  - secret IDP_COVERAGE_TOKEN"
+          echo "Settings > repository > 'Como configurar o CI' has the values."
+          exit 0
+
       # Upload to the IDP backend's own coverage endpoint. Soft-fail on
       # purpose: this is dogfooding, and a missing/expired token, network
-      # blip, or undeployed backend must never block a merge. The step is
-      # also skipped entirely until the three secrets are configured —
-      # this keeps the workflow valid before the cloud deploy is wired.
+      # blip, or undeployed backend must never block a merge.
       - name: Upload coverage to IDP (best-effort)
         if: ${{ env.IDP_BASE_URL != '' && env.IDP_REPOSITORY_ID != '' && env.IDP_COVERAGE_TOKEN != '' }}
         continue-on-error: true
