@@ -54,10 +54,18 @@ func (pr *PostgresRepository) GetLatestDocGenerationForRepo(ctx context.Context,
 	return &doc, nil
 }
 
+// ListDocGenerationsForRepo returns the head of each supersession chain, the
+// same way ListOrgDocGenerations does.
+//
+// It did not, and the mismatch was a bug: UpdateDocContent inserts a new row
+// and marks the previous one superseded, with the comment "so the listing
+// endpoint hides it" — true for org docs, false here. Editing a repository
+// document left both versions in the list as if they were separate documents.
+// Older versions are still reachable individually via GET /docs/:id.
 func (pr *PostgresRepository) ListDocGenerationsForRepo(ctx context.Context, repoID string) ([]models.DocGeneration, error) {
 	var docs []models.DocGeneration
 	if err := pr.db.WithContext(ctx).
-		Where("repository_id = ?", repoID).
+		Where("repository_id = ? AND superseded_by_id IS NULL", repoID).
 		Order("created_at DESC").
 		Find(&docs).Error; err != nil {
 		return nil, fmt.Errorf("list doc generations: %w", err)

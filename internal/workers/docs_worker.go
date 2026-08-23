@@ -15,6 +15,7 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/hibiken/asynq"
 	"github.com/paulozy/idp-with-ai-backend/internal/ai"
+	"github.com/paulozy/idp-with-ai-backend/internal/docs"
 	anthropicclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/anthropic"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
 	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
@@ -329,19 +330,13 @@ func readSmallTextFile(root, rel string, maxBytes int) (string, bool) {
 	return strings.TrimSpace(string(data)), true
 }
 
+// docPath reports the repository file a document of this type is committed to.
+//
+// The mapping lives in the docs registry rather than here, because the modal
+// that offers the type promises the path to the user — two copies of it would
+// be two chances to lie.
 func docPath(docType string) (string, bool) {
-	switch ai.DocumentationType(docType) {
-	case ai.DocumentationTypeADR:
-		return "docs/adr/README.md", true
-	case ai.DocumentationTypeArchitecture:
-		return "docs/ARCHITECTURE.md", true
-	case ai.DocumentationTypeServiceDoc:
-		return "docs/SERVICE.md", true
-	case ai.DocumentationTypeGuidelines:
-		return "CONTRIBUTING.md", true
-	default:
-		return "", false
-	}
+	return docs.PathForType(docType)
 }
 
 func sortedLanguageNames(languages map[string]int) []string {

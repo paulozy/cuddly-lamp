@@ -245,16 +245,35 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	claims, _ := utils.GetClaimsFromContext(c)
 
+	org := &models.OrganizationInfo{
+		ID:   claims.OrganizationID,
+		Slug: claims.OrganizationSlug,
+		Role: claims.OrganizationRole,
+	}
+
+	// The organization's display name is not on the token — the claims carry
+	// id, slug and role — so it is read here rather than added to the JWT.
+	// Putting it on the token would grow every request and, worse, would only
+	// reach sessions that logged in again; this works for the ones already
+	// open. The frontend showed a hardcoded "Organização" for want of it.
+	//
+	// A failed lookup is not worth failing the request over: the client falls
+	// back to a generic label, which is exactly the old behaviour.
+	if claims.OrganizationSlug != "" {
+		if found, err := h.authService.GetOrganizationBySlug(c.Request.Context(), claims.OrganizationSlug); err != nil {
+			utils.Warn("auth handler: could not resolve the organization name",
+				"slug", claims.OrganizationSlug, "error", err)
+		} else if found != nil {
+			org.Name = found.Name
+		}
+	}
+
 	c.JSON(http.StatusOK, models.UserInfo{
-		ID:       userID,
-		Email:    claims.Email,
-		FullName: claims.FullName,
-		Role:     claims.Role,
-		Organization: &models.OrganizationInfo{
-			ID:   claims.OrganizationID,
-			Slug: claims.OrganizationSlug,
-			Role: claims.OrganizationRole,
-		},
+		ID:           userID,
+		Email:        claims.Email,
+		FullName:     claims.FullName,
+		Role:         claims.Role,
+		Organization: org,
 	})
 }
 
