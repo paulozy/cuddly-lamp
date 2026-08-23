@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/paulozy/idp-with-ai-backend/internal/derive"
 	githubclient "github.com/paulozy/idp-with-ai-backend/internal/integrations/github"
 	"github.com/paulozy/idp-with-ai-backend/internal/integrations/scm"
+	"github.com/paulozy/idp-with-ai-backend/internal/jobs/tasks"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/storage"
 	rediscache "github.com/paulozy/idp-with-ai-backend/internal/storage/redis"
@@ -24,6 +26,11 @@ type mockGitHubClient struct {
 	treeErr      error
 	languages    map[string]int
 	languagesErr error
+	// files is the content GetFileContent serves, keyed by path; an absent path
+	// is ErrNotFound, which is what a real host answers.
+	files map[string]string
+	// fileRequests records every path asked for, in order.
+	fileRequests []string
 }
 
 func (m *mockGitHubClient) GetRepository(_ context.Context, _, _ string) (*githubclient.RepoInfo, error) {
@@ -60,6 +67,20 @@ func (m *mockGitHubClient) SubmitReview(_ context.Context, _, _ string, _ int64,
 
 func (m *mockGitHubClient) GetRepositoryTree(_ context.Context, _, _, _ string) (*githubclient.RepoTree, error) {
 	return m.tree, m.treeErr
+}
+
+// Sync itself reads no file contents; the architecture extractor does, and it
+// records what it was asked for so a test can prove the shortlist is short.
+func (m *mockGitHubClient) GetFileContent(_ context.Context, _, _, _, path string, _ int64) ([]byte, error) {
+	m.fileRequests = append(m.fileRequests, path)
+	if m.files == nil {
+		return nil, githubclient.ErrNotFound
+	}
+	content, ok := m.files[path]
+	if !ok {
+		return nil, githubclient.ErrNotFound
+	}
+	return []byte(content), nil
 }
 
 func (m *mockGitHubClient) GetLanguages(_ context.Context, _, _ string) (map[string]int, error) {
@@ -120,6 +141,10 @@ func (s *stubProvider) CurrentUser(_ context.Context) (*scm.Identity, error) {
 
 func (s *stubProvider) GetChangeRequestReviews(_ context.Context, _ scm.RepoRef, _ int64) (*scm.ReviewState, error) {
 	return nil, nil
+}
+
+func (s *stubProvider) GetFileContent(_ context.Context, _ scm.RepoRef, _, _ string) ([]byte, error) {
+	return nil, scm.ErrNotFound
 }
 
 func (s *stubProvider) GetRepository(_ context.Context, ref scm.RepoRef) (*scm.RepoInfo, error) {
@@ -215,6 +240,13 @@ func (m *mockSyncRepoStore) UpdateRepository(_ context.Context, repo *models.Rep
 	}
 	m.repos[repo.ID] = repo
 	return nil
+}
+
+// An organization with no config row falls back to the platform token, which is
+// what a fresh tenant looks like. Sync only asks when the repository has an
+// organization, so tests that set one need this.
+func (m *mockSyncRepoStore) GetOrganizationConfig(_ context.Context, _ string) (*models.OrganizationConfig, error) {
+	return nil, nil
 }
 
 func (m *mockSyncRepoStore) GetWebhookConfigByRepoID(_ context.Context, _ string) (*models.WebhookConfig, error) {
@@ -626,5 +658,84 @@ func TestSyncService_SyncRepository_DropsTheCachedResponseOnEveryOutcome(t *test
 					store.repos["repo-1"].SyncStatus)
 			}
 		})
+	}
+}
+
+// ── architecture extraction rides along, and never fails the sync ────────────
+
+// failingFactStore is a sync store whose fact writes always fail. It exists to
+// prove the one thing that matters about attaching extraction to sync: a
+// repository we cannot inspect must still report `synced`. Reporting `error`
+// would fail the scorecard's sync.healthy check as collateral damage — the exact
+// mistake the CI/test detection path was written to avoid.
+type failingFactStore struct {
+	*mockSyncRepoStore
+	factErr error
+}
+
+func (s *failingFactStore) GetRepositoryFact(_ context.Context, _ string, _ models.RepositoryFactKind) (*models.RepositoryFact, error) {
+	return nil, s.factErr
+}
+
+func (s *failingFactStore) UpsertRepositoryFact(_ context.Context, _ *models.RepositoryFact) error {
+	return s.factErr
+}
+
+func TestSyncService_ArchitectureExtractionFailureDoesNotFailTheSync(t *testing.T) {
+	base := newMockSyncRepoStore()
+	seedRepo(base, "repo-1", "https://github.com/owner/repo")
+	base.repos["repo-1"].OrganizationID = "org-1"
+	store := &failingFactStore{mockSyncRepoStore: base, factErr: errors.New("db down")}
+
+	gh := &mockGitHubClient{
+		repoInfo: &githubclient.RepoInfo{ID: 42, DefaultBranch: "main"},
+		tree:     blobTree(false, "go.mod"),
+	}
+
+	svc := newSyncService(base, gh)
+	svc.repo = store
+	architecture := NewArchitectureService(store, newFakeEnqueuer())
+	architecture.extractors = []Extractor{&stubExtractor{
+		kind:    models.FactKindPackages,
+		outcome: derive.CompleteOutcome(),
+	}}
+	svc.WithArchitecture(architecture)
+
+	if err := svc.SyncRepository(context.Background(), "repo-1"); err != nil {
+		t.Fatalf("SyncRepository() error = %v, want nil", err)
+	}
+	if got := base.repos["repo-1"].SyncStatus; got != "synced" {
+		t.Errorf("SyncStatus = %q, want %q", got, "synced")
+	}
+}
+
+// A sync that changed facts queues exactly one reconciliation for the
+// organization, so the org-wide pass runs once per batch and not once per repo.
+func TestSyncService_ChangedFactsEnqueueOneDerivation(t *testing.T) {
+	store := newMockSyncRepoStore()
+	seedRepo(store, "repo-1", "https://github.com/owner/repo")
+	store.repos["repo-1"].OrganizationID = "org-1"
+
+	gh := &mockGitHubClient{
+		repoInfo: &githubclient.RepoInfo{ID: 42, DefaultBranch: "main"},
+		tree:     blobTree(false, "go.mod"),
+	}
+
+	factStore := newArchitectureStore()
+	svc := newSyncService(store, gh)
+	architecture := NewArchitectureService(factStore, newFakeEnqueuer())
+	architecture.extractors = []Extractor{&stubExtractor{
+		kind:    models.FactKindPackages,
+		outcome: derive.CompleteOutcome(),
+	}}
+	enqueuer := newFakeEnqueuer()
+	architecture.enqueuer = enqueuer
+	svc.WithArchitecture(architecture)
+
+	if err := svc.SyncRepository(context.Background(), "repo-1"); err != nil {
+		t.Fatalf("SyncRepository() error = %v, want nil", err)
+	}
+	if len(enqueuer.enqueued) != 1 || enqueuer.enqueued[0] != tasks.TypeDeriveArchitecture {
+		t.Errorf("enqueued = %v, want one %q", enqueuer.enqueued, tasks.TypeDeriveArchitecture)
 	}
 }

@@ -32,6 +32,9 @@ var (
 
 type SyncService struct {
 	repo storage.Repository
+	// architecture extracts derivation facts from the tree this sync already
+	// read. Optional: a deployment without it syncs exactly as before.
+	architecture *ArchitectureService
 	// resolve builds the provider client for a repository's host. Injectable
 	// so tests can supply a stub without reaching the network.
 	resolve        scm.ResolverFunc
@@ -51,6 +54,16 @@ func NewSyncService(repo storage.Repository, creds scm.Credentials, cache redisc
 		cache:          cache,
 		webhookBaseURL: webhookBaseURL,
 	}
+}
+
+// WithArchitecture attaches fact extraction to this sync service.
+//
+// It is a separate call rather than a constructor parameter because extraction
+// is additive: every existing caller of NewSyncService keeps working unchanged,
+// and a deployment that cannot reconcile still syncs.
+func (s *SyncService) WithArchitecture(svc *ArchitectureService) *SyncService {
+	s.architecture = svc
+	return s
 }
 
 func (s *SyncService) SyncRepository(ctx context.Context, repoID string) error {
@@ -154,10 +167,14 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, clien
 	// sync.healthy check as collateral damage.
 	repo.Metadata.HasCI, repo.Metadata.CIEvidence = nil, ""
 	repo.Metadata.HasTests, repo.Metadata.TestEvidence = nil, ""
+	// The tree is read once. Detection and architecture extraction both consume
+	// it, so adding the second costs no extra listing.
+	var syncedTree *scm.RepoTree
 	if tree, treeErr := client.GetTree(ctx, ref, defaultBranch); treeErr != nil {
 		utils.Warn("sync: repository tree unavailable, CI/test signals left undetermined",
 			"repo_id", repo.ID, "error", treeErr)
 	} else if tree != nil {
+		syncedTree = tree
 		paths := tree.BlobPaths()
 		applyDetection(repo, detect.DetectCI(paths, tree.Truncated), detect.DetectTests(paths, languages, tree.Truncated))
 	}
@@ -180,6 +197,17 @@ func (s *SyncService) doSync(ctx context.Context, repo *models.Repository, clien
 
 	if err := s.persist(ctx, repo); err != nil {
 		return fmt.Errorf("update repository: %w", err)
+	}
+
+	// Architecture extraction runs after the repository row is safely persisted,
+	// so nothing it does can affect the sync's recorded status. It reports
+	// failure by leaving the fact incomplete, never by returning an error — a
+	// repository we cannot fully inspect must not fail sync.healthy as
+	// collateral damage.
+	if s.architecture != nil && syncedTree != nil {
+		if s.architecture.ExtractFacts(ctx, repo, client, ref, defaultBranch, syncedTree) {
+			s.architecture.EnqueueDerivation(ctx, repo.OrganizationID)
+		}
 	}
 
 	if s.webhookBaseURL != "" && !isLocalURL(s.webhookBaseURL) {
