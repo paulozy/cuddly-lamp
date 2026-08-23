@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/paulozy/idp-with-ai-backend/internal/models"
 	"github.com/paulozy/idp-with-ai-backend/internal/services"
+	"github.com/paulozy/idp-with-ai-backend/internal/utils"
 )
 
 // TeamHandler serves the organization's teams. Reads are open to any member so
@@ -32,7 +33,7 @@ func (h *TeamHandler) ListTeams(c *gin.Context) {
 	if !ok {
 		return
 	}
-	teams, err := h.teams.ListTeams(c.Request.Context(), orgID)
+	teams, err := h.teams.ListTeams(c.Request.Context(), orgID, actorFromContext(c).UserID)
 	if err != nil {
 		internalError(c, "failed to list teams")
 		return
@@ -283,6 +284,11 @@ func handleTeamError(c *gin.Context, err error) bool {
 			ErrorDescription: "repository not found",
 		})
 	default:
+		// Log the cause before collapsing it into a generic 500. Without this
+		// the only signal a failing team operation gives is "team operation
+		// failed", which says nothing about what actually broke.
+		utils.Error("team: unexpected failure",
+			"path", c.FullPath(), "method", c.Request.Method, "error", err)
 		internalError(c, "team operation failed")
 	}
 	return true
