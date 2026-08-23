@@ -118,34 +118,71 @@ func (s *RepositoryService) GetRepository(ctx context.Context, id, organizationI
 // the repo view is opened/refreshed repeatedly.
 const resyncThrottle = 60 * time.Second
 
+// SyncTriggerOutcome says what actually happened to a sync request.
+//
+// It replaces a bare bool because "false" covered three completely different
+// situations — the throttle window, a sync already running, and no queue at all —
+// and the caller could not tell them apart. All three used to answer 202
+// "skipped", so a person clicking the button got the same silence whether they
+// were 5 seconds early or the worker did not exist.
+type SyncTriggerOutcome string
+
+const (
+	// SyncTriggerQueued means a worker will pick this up.
+	SyncTriggerQueued SyncTriggerOutcome = "queued"
+	// SyncTriggerAlreadySyncing means one is running right now.
+	SyncTriggerAlreadySyncing SyncTriggerOutcome = "already_syncing"
+	// SyncTriggerThrottled means one finished within resyncThrottle.
+	SyncTriggerThrottled SyncTriggerOutcome = "throttled"
+	// SyncTriggerQueueUnavailable means there is no queue behind the request, so
+	// nothing will ever run it. This is an outage, not a refusal — the caller
+	// must not be told to wait.
+	SyncTriggerQueueUnavailable SyncTriggerOutcome = "queue_unavailable"
+)
+
+// RetryAfter is how long the caller should wait before trying again, and zero
+// when trying again is pointless or immediately fine.
+func (o SyncTriggerOutcome) RetryAfter(lastSyncedAt time.Time) time.Duration {
+	if o != SyncTriggerThrottled || lastSyncedAt.IsZero() {
+		return 0
+	}
+	remaining := resyncThrottle - time.Since(lastSyncedAt)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // TriggerSync enqueues a metadata re-sync for a repository (refreshing PR/issue
-// counts, stars, branches, etc.). It is throttled: skipped when a sync is
-// already running or one ran within resyncThrottle. Returns true when a sync
-// was actually enqueued.
-func (s *RepositoryService) TriggerSync(ctx context.Context, id, organizationID string) (bool, error) {
+// counts, stars, branches, etc.) and reports what happened. It is throttled:
+// declined when a sync is already running or one ran within resyncThrottle.
+func (s *RepositoryService) TriggerSync(ctx context.Context, id, organizationID string) (SyncTriggerOutcome, time.Duration, error) {
 	repo, err := s.repo.GetRepository(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("get repository: %w", err)
+		return "", 0, fmt.Errorf("get repository: %w", err)
 	}
 	if repo == nil {
-		return false, ErrRepositoryNotFound
+		return "", 0, ErrRepositoryNotFound
 	}
 	if repo.OrganizationID != organizationID {
-		return false, ErrForbidden
+		return "", 0, ErrForbidden
 	}
-	if s.enqueuer == nil {
-		return false, nil
+	// No queue means no worker, so reporting anything but unavailable would send
+	// the caller off to poll a status that can never change.
+	if s.enqueuer == nil || !s.enqueuer.Available() {
+		return SyncTriggerQueueUnavailable, 0, nil
 	}
 	if repo.SyncStatus == "syncing" {
-		return false, nil
+		return SyncTriggerAlreadySyncing, 0, nil
 	}
 	if !repo.LastSyncedAt.IsZero() && time.Since(repo.LastSyncedAt) < resyncThrottle {
-		return false, nil
+		outcome := SyncTriggerThrottled
+		return outcome, outcome.RetryAfter(repo.LastSyncedAt), nil
 	}
 	if err := s.enqueuer.Enqueue(ctx, tasks.TypeSyncRepo, tasks.SyncRepoPayload{RepositoryID: repo.ID}); err != nil {
-		return false, fmt.Errorf("enqueue sync: %w", err)
+		return "", 0, fmt.Errorf("enqueue sync: %w", err)
 	}
-	return true, nil
+	return SyncTriggerQueued, 0, nil
 }
 
 // RepositoryListOptions are the knobs the list endpoint exposes.

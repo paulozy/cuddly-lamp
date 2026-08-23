@@ -135,7 +135,13 @@ type enqueuedTask struct {
 
 type mockEnqueuer struct {
 	tasks []enqueuedTask
+	// unavailable models the no-op enqueuer, which is the case that used to be
+	// invisible to callers: it returns nil so a deployment without Redis still
+	// serves HTTP, and that made a dropped job look exactly like an accepted one.
+	unavailable bool
 }
+
+func (m *mockEnqueuer) Available() bool { return !m.unavailable }
 
 func (m *mockEnqueuer) Enqueue(_ context.Context, taskType string, payload any, _ ...asynq.Option) error {
 	m.tasks = append(m.tasks, enqueuedTask{taskType: taskType, payload: payload})
@@ -182,36 +188,70 @@ func TestRepositoryService_TriggerSync(t *testing.T) {
 		eq := &mockEnqueuer{}
 		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
 
-		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		outcome, retryAfter, err := svc.TriggerSync(context.Background(), "r1", orgID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !enqueued || syncTaskCount(eq) != 1 {
-			t.Fatalf("expected one sync enqueued, got enqueued=%v count=%d", enqueued, syncTaskCount(eq))
+		if outcome != SyncTriggerQueued || syncTaskCount(eq) != 1 {
+			t.Fatalf("outcome = %q count = %d, want queued and one task", outcome, syncTaskCount(eq))
+		}
+		if retryAfter != 0 {
+			t.Errorf("retryAfter = %v, want 0 for a queued sync", retryAfter)
 		}
 	})
 
-	t.Run("skips when a sync ran recently", func(t *testing.T) {
+	// Each declined case used to answer the same "skipped", so a person clicking
+	// the button got identical silence whether they were 5 seconds early or the
+	// worker did not exist. The outcome is what makes them distinguishable.
+	t.Run("reports the throttle window with a retry hint", func(t *testing.T) {
 		store := newMockRepoStore()
 		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now()}
 		eq := &mockEnqueuer{}
 		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
 
-		enqueued, err := svc.TriggerSync(context.Background(), "r1", orgID)
-		if err != nil || enqueued || syncTaskCount(eq) != 0 {
-			t.Fatalf("expected skip, got enqueued=%v count=%d err=%v", enqueued, syncTaskCount(eq), err)
+		outcome, retryAfter, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != SyncTriggerThrottled || syncTaskCount(eq) != 0 {
+			t.Fatalf("outcome = %q count = %d, want throttled and no task", outcome, syncTaskCount(eq))
+		}
+		// The hint is the whole point: "again in 55s" beats a button that looks broken.
+		if retryAfter <= 0 || retryAfter > resyncThrottle {
+			t.Errorf("retryAfter = %v, want a positive value within the throttle window", retryAfter)
 		}
 	})
 
-	t.Run("skips when a sync is already running", func(t *testing.T) {
+	t.Run("reports a sync that is already running", func(t *testing.T) {
 		store := newMockRepoStore()
 		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "syncing", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
 		eq := &mockEnqueuer{}
 		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
 
-		enqueued, _ := svc.TriggerSync(context.Background(), "r1", orgID)
-		if enqueued || syncTaskCount(eq) != 0 {
-			t.Fatalf("expected skip while syncing, got enqueued=%v", enqueued)
+		outcome, _, _ := svc.TriggerSync(context.Background(), "r1", orgID)
+		if outcome != SyncTriggerAlreadySyncing || syncTaskCount(eq) != 0 {
+			t.Fatalf("outcome = %q, want already_syncing with no new task", outcome)
+		}
+	})
+
+	// The bug this exists for: with no Redis the no-op enqueuer returns nil, so the
+	// old code reported "queued" for a job nobody would ever run and sent the
+	// caller off to wait forever.
+	t.Run("reports an unavailable queue instead of claiming it queued", func(t *testing.T) {
+		store := newMockRepoStore()
+		store.repos["r1"] = &models.Repository{ID: "r1", OrganizationID: orgID, SyncStatus: "synced", LastSyncedAt: time.Now().Add(-2 * time.Hour)}
+		eq := &mockEnqueuer{unavailable: true}
+		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
+
+		outcome, _, err := svc.TriggerSync(context.Background(), "r1", orgID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != SyncTriggerQueueUnavailable {
+			t.Errorf("outcome = %q, want queue_unavailable", outcome)
+		}
+		if syncTaskCount(eq) != 0 {
+			t.Errorf("tasks = %d, want none enqueued against a dead queue", syncTaskCount(eq))
 		}
 	})
 
@@ -221,7 +261,7 @@ func TestRepositoryService_TriggerSync(t *testing.T) {
 		eq := &mockEnqueuer{}
 		svc := newRepoServiceWithEnqueuer(store, &mockCache{}, eq)
 
-		if _, err := svc.TriggerSync(context.Background(), "r1", orgID); err != ErrForbidden {
+		if _, _, err := svc.TriggerSync(context.Background(), "r1", orgID); err != ErrForbidden {
 			t.Fatalf("expected ErrForbidden, got %v", err)
 		}
 	})

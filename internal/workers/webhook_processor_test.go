@@ -16,6 +16,11 @@ type recordingEnqueuer struct {
 	enqueued []string
 }
 
+// A fake stands in for a live queue, so Available is true — the false case is
+// what the no-op implementation exists to model, and a test that wants it says so
+// explicitly.
+func (e *recordingEnqueuer) Available() bool { return true }
+
 func (e *recordingEnqueuer) Enqueue(ctx context.Context, taskType string, payload any, opts ...asynq.Option) error {
 	e.enqueued = append(e.enqueued, taskType)
 	return nil

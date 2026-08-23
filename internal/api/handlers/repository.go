@@ -132,17 +132,29 @@ func (h *RepositoryHandler) SyncRepository(c *gin.Context) {
 		return
 	}
 
-	enqueued, err := h.repoService.TriggerSync(c.Request.Context(), id, orgID)
+	outcome, retryAfter, err := h.repoService.TriggerSync(c.Request.Context(), id, orgID)
 	if err != nil {
 		repoErrToJSON(c, err)
 		return
 	}
 
-	status := "skipped"
-	if enqueued {
-		status = "queued"
+	// No queue is an outage, not a refusal, and it gets 503 for the same reason a
+	// provider outage does: nothing about the request was wrong, and answering 202
+	// would tell the caller to wait for a job that will never run. That silence is
+	// what makes "I clicked sync and nothing happened" impossible to diagnose.
+	if outcome == services.SyncTriggerQueueUnavailable {
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:            "queue_unavailable",
+			ErrorDescription: "background jobs are unavailable, so the sync was not scheduled — check that Redis is reachable",
+		})
+		return
 	}
-	c.JSON(http.StatusAccepted, models.JobResponse{Status: status, Type: "repo:sync", Target: id})
+
+	resp := models.JobResponse{Status: string(outcome), Type: "repo:sync", Target: id}
+	if seconds := int(retryAfter.Seconds()); seconds > 0 {
+		resp.RetryAfterSeconds = seconds
+	}
+	c.JSON(http.StatusAccepted, resp)
 }
 
 // ListRepositories lists all repositories for the authenticated user.

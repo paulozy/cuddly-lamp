@@ -94,4 +94,3 @@ func (w *WebhookProcessor) processEvent(ctx context.Context, webhook *models.Web
 	}
 	return nil
 }
-
